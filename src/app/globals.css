@@ -1,26 +1,317 @@
 @import "tailwindcss";
 
+/* Ledger paper palette. Light is the default; dark follows the OS unless
+   data-theme forces one. Semantic colours are lightened one step in dark. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --paper: #edf0f2;
+  --sheet: #ffffff;
+  --ink: #10233a;
+  --ink-soft: #5b6b7c;
+  --rule: rgb(91 107 124 / 0.24);
+  --rule-strong: rgb(91 107 124 / 0.5);
+  --settled: #0e7c5b;
+  --settled-soft: rgb(14 124 91 / 0.1);
+  --attention: #9a5b00;
+  --attention-soft: rgb(154 91 0 / 0.1);
+  --blocked: #a8261d;
+  --blocked-soft: rgb(168 38 29 / 0.1);
+  --paypal: #0070e0;
+  --paypal-soft: rgb(0 112 224 / 0.1);
+  --stellar: #7d00ff;
+  --stellar-soft: rgb(125 0 255 / 0.1);
+  --focus: #0070e0;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --paper: #0f1923;
+    --sheet: #15222e;
+    --ink: #e6ecf2;
+    --ink-soft: #93a3b4;
+    --rule: rgb(147 163 180 / 0.24);
+    --rule-strong: rgb(147 163 180 / 0.5);
+    --settled: #2fa37f;
+    --settled-soft: rgb(47 163 127 / 0.14);
+    --attention: #c98a2a;
+    --attention-soft: rgb(201 138 42 / 0.14);
+    --blocked: #d4574c;
+    --blocked-soft: rgb(212 87 76 / 0.14);
+    --paypal: #4d9bf0;
+    --paypal-soft: rgb(77 155 240 / 0.14);
+    --stellar: #a765ff;
+    --stellar-soft: rgb(167 101 255 / 0.14);
+    --focus: #4d9bf0;
+    color-scheme: dark;
   }
 }
 
+:root[data-theme="dark"] {
+  --paper: #0f1923;
+  --sheet: #15222e;
+  --ink: #e6ecf2;
+  --ink-soft: #93a3b4;
+  --rule: rgb(147 163 180 / 0.24);
+  --rule-strong: rgb(147 163 180 / 0.5);
+  --settled: #2fa37f;
+  --settled-soft: rgb(47 163 127 / 0.14);
+  --attention: #c98a2a;
+  --attention-soft: rgb(201 138 42 / 0.14);
+  --blocked: #d4574c;
+  --blocked-soft: rgb(212 87 76 / 0.14);
+  --paypal: #4d9bf0;
+  --paypal-soft: rgb(77 155 240 / 0.14);
+  --stellar: #a765ff;
+  --stellar-soft: rgb(167 101 255 / 0.14);
+  --focus: #4d9bf0;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sheet: var(--sheet);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-settled: var(--settled);
+  --color-settled-soft: var(--settled-soft);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --color-blocked: var(--blocked);
+  --color-blocked-soft: var(--blocked-soft);
+  --color-paypal: var(--paypal);
+  --color-paypal-soft: var(--paypal-soft);
+  --color-stellar: var(--stellar);
+  --color-stellar-soft: var(--stellar-soft);
+  --color-focus: var(--focus);
+  --font-sans: var(--font-archivo), system-ui, sans-serif;
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 18px;
+  --text-lg--line-height: 24px;
+  --text-xl: 22px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 34px;
+  --text-3xl: 36px;
+  --text-3xl--line-height: 42px;
+  --text-4xl: 48px;
+  --text-4xl--line-height: 54px;
+}
+
+html {
+  background: var(--paper);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-archivo), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-stretch: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Width is the hierarchy device. */
+.wide {
+  font-stretch: 112%;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+.dense {
+  font-stretch: 88%;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16px;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Hairlines separate panels; no shadows anywhere. */
+.panel {
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+.hairline {
+  border-color: var(--rule);
+}
+
+/* Focus is always visible. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+button,
+a,
+input,
+select,
+textarea,
+summary {
+  outline: none;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  border: 1px solid var(--rule-strong);
+  background: var(--sheet);
+  color: var(--ink);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn:hover {
+  border-color: var(--ink-soft);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--ink);
+  color: var(--sheet);
+  border-color: var(--ink);
+}
+.btn-primary:hover {
+  border-color: var(--ink);
+  opacity: 0.9;
+}
+.btn-danger {
+  color: var(--blocked);
+  border-color: var(--blocked);
+}
+.btn-danger:hover {
+  background: var(--blocked-soft);
+  border-color: var(--blocked);
+}
+.btn-settled {
+  background: var(--settled);
+  color: #fff;
+  border-color: var(--settled);
+}
+.btn-settled:hover {
+  border-color: var(--settled);
+  opacity: 0.92;
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* Form fields */
+.field {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid var(--rule-strong);
+  background: var(--sheet);
+  color: var(--ink);
+  font-size: 14px;
+}
+textarea.field {
+  height: auto;
+  padding: 8px 10px;
+  line-height: 20px;
+}
+.field::placeholder {
+  color: var(--ink-soft);
+  opacity: 0.8;
+}
+label.lbl {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
+
+/* Tables */
+table.ledger {
+  width: 100%;
+  border-collapse: collapse;
+}
+table.ledger th {
+  text-align: left;
+  font-stretch: 88%;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-soft);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+table.ledger td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+table.ledger tr:last-child td {
+  border-bottom: none;
+}
+table.ledger tbody tr.row-link:hover {
+  background: color-mix(in srgb, var(--paper) 60%, var(--sheet));
+}
+table.ledger th.r,
+table.ledger td.r {
+  text-align: right;
+}
+
+/* The due line marker's only motion. */
+.dl-marker {
+  transition: left 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dl-marker {
+    transition: none;
+  }
+}
+
+/* Links in body copy */
+.link {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 3px;
+}
+.link:hover {
+  text-decoration-color: var(--ink);
+}
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
 }

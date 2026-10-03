@@ -1,103 +1,124 @@
-import Image from "next/image";
+import Link from "next/link";
+import { getOverview, listObligations } from "@/lib/queries";
+import { formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise } from "@/lib/format";
+import { BookLine } from "@/components/BookLine";
+import { NeedsYouList } from "@/components/ObligationList";
+import { ResetDemoButton } from "@/components/ResetDemoButton";
+import { EmptyState, Panel, RelativeTime } from "@/components/ui";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default function OverviewPage() {
+  const o = getOverview();
+  const all = listObligations({ limit: 1000 });
+  const base = o.business?.baseCurrency ?? "USD";
+  const rails = o.money.byRail;
+  const maxGross = Math.max(rails.paypal.grossMinor, rails.stellar.grossMinor, 1);
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Dueline"}</h1>
+          <p className="mt-1 text-ink-soft">
+            {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "obligation")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+            {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
+          </p>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        <ResetDemoButton />
+      </header>
+
+      <BookLine rows={all} />
+
+      <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
+        <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
+        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={pluralise(o.counts.open, "open obligation")} />
+        <Figure label="Paid, last 30 days" value={formatMoneySymbol(o.money.paid30dMinor, base)} note={pluralise(o.counts.settled30d, "settlement")} tone="settled" />
+        <Figure label="Fees, last 30 days" value={formatMoneySymbol(o.money.fees30dMinor, base)} note={o.money.paid30dMinor ? `${((o.money.fees30dMinor / o.money.paid30dMinor) * 100).toFixed(1)}% of paid` : "no payments yet"} />
+        <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpayments and duplicates</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
+      </dl>
+
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <Panel title="Needs you" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
+          {o.needsAction.length ? <NeedsYouList rows={o.needsAction} /> : <div className="px-4 py-8 text-center text-ink-soft">Nothing waiting. New requests appear here when the agent reads them.</div>}
+        </Panel>
+
+        <div className="space-y-6">
+          <Panel title="Rail split, last 30 days">
+            {o.money.paid30dMinor === 0 ? (
+              <p className="text-ink-soft">No settlements in the last 30 days.</p>
+            ) : (
+              <div className="space-y-4">
+                <RailBar rail="PayPal" colour="var(--paypal)" soft="var(--paypal-soft)" gross={rails.paypal.grossMinor} fee={rails.paypal.feeMinor} count={rails.paypal.count} max={maxGross} currency={base} />
+                <RailBar rail="Stellar" colour="var(--stellar)" soft="var(--stellar-soft)" gross={rails.stellar.grossMinor} fee={rails.stellar.feeMinor} count={rails.stellar.count} max={maxGross} currency={base} />
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Recent activity" aside={<Link href="/audit" className="link">Full audit log</Link>} padded={false}>
+            {o.recent.length ? (
+              <ul className="divide-y hairline">
+                {o.recent.map((a) => (
+                  <li key={a.id} className="flex items-baseline justify-between gap-3 px-4 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate">
+                        <span className="text-ink-soft">{humaniseActor(a.actor)}</span> <span>{humaniseAction(a.action).toLowerCase()}</span>
+                      </p>
+                      {a.obligationId ? (
+                        <Link href={`/obligations/${a.obligationId}`} className="num text-xs text-ink-soft hover:text-ink">
+                          {a.vendorName ?? "Unknown vendor"}
+                          {a.sourceRef ? `, ${a.sourceRef}` : ""}
+                        </Link>
+                      ) : null}
+                    </div>
+                    <RelativeTime iso={a.createdAt} className="shrink-0 text-xs text-ink-soft" />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="px-4 py-6 text-center text-ink-soft">No activity yet.</div>
+            )}
+          </Panel>
+        </div>
+      </div>
+
+      {!o.business ? (
+        <div className="mt-6">
+          <EmptyState title="No business configured" body="Run the demo seed, or reset the demo above, to load Ridgeline Expeditions and its vendor roster." />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function Figure({ label, value, note, tone }: { label: string; value: string; note?: React.ReactNode; tone?: "attention" | "settled" | "blocked" }) {
+  const colour = tone === "attention" ? "text-attention" : tone === "settled" ? "text-settled" : tone === "blocked" ? "text-blocked" : "";
+  return (
+    <div className="px-1 lg:px-5 lg:first:pl-1">
+      <dt className="dense text-ink-soft">{label}</dt>
+      <dd className={`wide num mt-1 text-2xl ${colour}`}>{value}</dd>
+      {note ? <dd className="mt-0.5 text-xs text-ink-soft">{note}</dd> : null}
+    </div>
+  );
+}
+
+function RailBar({ rail, colour, soft, gross, fee, count, max, currency }: { rail: string; colour: string; soft: string; gross: number; fee: number; count: number; max: number; currency: string }) {
+  const pct = Math.max(2, Math.round((gross / max) * 100));
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="dense" style={{ color: colour }}>
+          {rail}
+        </span>
+        <span className="num">{formatMoney(gross, currency)}</span>
+      </div>
+      <div className="mt-1 h-2 w-full rounded-sm" style={{ background: soft }} role="img" aria-label={`${rail}: ${formatMoney(gross, currency)} gross across ${pluralise(count, "payment")}`}>
+        <div className="h-2 rounded-sm" style={{ width: `${gross ? pct : 0}%`, background: colour }} />
+      </div>
+      <p className="num mt-1 text-xs text-ink-soft">
+        {pluralise(count, "payment")}, fees {formatMoney(fee, currency)}
+        {gross ? ` (${((fee / gross) * 100).toFixed(1)}%)` : ""}
+      </p>
     </div>
   );
 }
