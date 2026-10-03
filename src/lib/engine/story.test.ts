@@ -116,3 +116,17 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     expect(db.select().from(accountingSyncs).where(eq(accountingSyncs.status, "pending")).all()).toHaveLength(0);
   });
 });
+
+describe("accounting cash-out", () => {
+  it("counts PayPal fee on top and the Stellar fee inside the amount", async () => {
+    const { buildAccountingRecord } = await import("../accounting/record");
+    const db2 = openTestDb();
+    await seedDemo(db2, { history: false });
+    const rows = db2.select().from(obligations).all();
+    const pay = rows.find((r) => r.sourceRef === "JOB-HG4D-0921")!;
+    await executeObligation(db2, pay.id, { actor: "user:daniel" });
+    await confirmSettlement(db2, pay.id, "test");
+    const rec = buildAccountingRecord(db2, pay.id)!;
+    expect(Number(rec.payload.netPaid)).toBeCloseTo(Number(rec.payload.grossAmount) + Number(rec.payload.feeAmount), 2);
+  });
+});

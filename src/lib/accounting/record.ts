@@ -19,7 +19,7 @@ export interface AccountingPayload {
   grossCurrency: string;
   feeAmount: string;
   feeCurrency: string;
-  netPaid: string; // gross + fee in gross currency
+  netPaid: string; // cash out in gross currency: gross + fee for PayPal, gross for Stellar (fee is inside it)
   recipientReceived: string | null;
   recipientCurrency: string | null;
   fxRate: string | null;
@@ -50,7 +50,8 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       grossCurrency: st.grossCurrency,
       feeAmount: major(st.feeMinor),
       feeCurrency: st.grossCurrency,
-      netPaid: major(st.grossMinor + st.feeMinor),
+      // Cash out of the bank account: PayPal charges its fee on top; the Stellar anchor path takes its fee out of the amount.
+      netPaid: major(st.rail === "paypal" ? st.grossMinor + st.feeMinor : st.grossMinor),
       recipientReceived: st.receivedMinor != null ? major(st.receivedMinor) : null,
       recipientCurrency: st.receivedCurrency,
       fxRate: st.fxRate,

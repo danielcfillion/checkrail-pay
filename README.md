@@ -22,7 +22,7 @@ Dueline puts five fixed stations between "someone says we owe this" and "it is i
 
 ## Honest status
 
-Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 125 tests and a deterministic replay. The PayPal Payouts adapter, the Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call: the build environment had no network egress. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
+Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 130 tests and a deterministic replay. The PayPal Payouts adapter, the Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call: the build environment had no network egress. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
 
 ## The demo story
 
@@ -156,7 +156,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
     npm run lint
     npm run build
 
-125 tests in 10 files pass as of this commit. The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+130 tests in 10 files pass as of this commit. The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
 
 ## Project layout
 

@@ -16,7 +16,7 @@ Round and award details should be checked against https://communityfund.stellar.
 
 **Category.** Payments and financial access (B2B cross-border payables).
 
-**Stage.** Working MVP in mock mode with 125 tests and a deterministic demo. Live PayPal sandbox and Stellar testnet adapters are written against the real SDKs and have had a line-by-line safety review, but had not made a live call when this draft was written. [Before submitting: run one real Stellar testnet PYUSD payment from the dashboard and link its explorer transaction here. SEP-31 and the PYUSD to USDC path payment are the funded work.]
+**Stage.** Working MVP in mock mode with 130 tests and a deterministic demo. Live PayPal sandbox and Stellar testnet adapters are written against the real SDKs and have had a line-by-line safety review, but had not made a live call when this draft was written. [Before submitting: run one real Stellar testnet PYUSD payment from the dashboard and link its explorer transaction here. SEP-31 and the PYUSD to USDC path payment are the funded work.]
 
 **Team.** Solo founder with an operations background running a tour business in Northern Vietnam. [Add a second named contributor with Stellar anchor experience here if one is secured; see the human action queue.] Prior SCF-funded engineering experience through a separate team (Logistech Global) is relevant background, not this project's team.
 
@@ -66,7 +66,7 @@ Every external dependency has a mock mode; the demo replays deterministically of
 
 ### What is built (MVP state)
 
-Done and tested (125 tests, deterministic replay in README):
+Done and tested (130 tests, deterministic replay in README):
 - Full obligation lifecycle, policy engine, routing rule, state machine, audit log.
 - Four-obligation demo: amount mismatch blocked, duplicate blocked, PayPal auto-pay, Stellar approve-then-pay with explorer link.
 - Operator dashboard: overview, inbox, obligation detail with rule checklist and route comparison, vendors, ledger, exceptions, accounting export, audit, settings, presenter page.
