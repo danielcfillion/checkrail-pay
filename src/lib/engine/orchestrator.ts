@@ -1,11 +1,13 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
-import type { AiInterpretation, ApprovalPolicy, EvidenceItem, ObligationState, PolicyOutcome, Rail, SourceType, VendorPayoutProfile } from "../domain/types";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
+import { DEFAULT_POLICY, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
-import { idempotencyKey, newId, now } from "../domain/ids";
+import { hashPayoutDetails, idempotencyKey, newId, now } from "../domain/ids";
+import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
+import { isLiveRails } from "../config";
 import { runObligationAgent } from "../ai/agent";
 import { getRails } from "../rails";
 import { buildAccountingRecord } from "../accounting/record";
@@ -26,6 +28,8 @@ export interface IngestInput {
   sourceRef?: string | null;
   rawInput: string;
   evidence?: Array<Omit<EvidenceItem, "id">>;
+  /** Who supplied the evidence. Defaults to "system" (an integration). Operator-supplied evidence is flagged by policy. */
+  evidenceSource?: "system" | "operator";
   actor?: string;
 }
 
@@ -47,7 +51,7 @@ export async function ingestObligation(db: Db, input: IngestInput): Promise<stri
     .run();
   audit(db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
   for (const e of input.evidence ?? []) {
-    db.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, createdAt: ts }).run();
+    db.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: input.evidenceSource ?? "system", createdAt: ts }).run();
   }
   if ((input.evidence ?? []).length > 0) {
     audit(db, { obligationId: id, actor: input.actor ?? "system", action: "evidence.attached", detail: { count: input.evidence!.length, labels: input.evidence!.map((e) => e.label) } });
@@ -67,6 +71,12 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   // 1. AI interpretation
   const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, businessName: biz.name, baseCurrency: biz.baseCurrency });
   const ai = run.interpretation;
+  // Approvals were given for specific numbers. If re-interpretation changes who is paid, how much or what for, they no longer count.
+  const approved = db.select().from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
+  if (approved.length > 0 && (ob.vendorId !== (ai.vendorId ?? ob.vendorId) || ob.amountMinor !== ai.amountMinor || ob.currency !== ai.currency || ob.sourceRef !== (ai.sourceRef ?? ob.sourceRef))) {
+    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
+    audit(db, { obligationId, actor: "system", action: "approvals.superseded", detail: { reason: "re-interpretation changed vendor, amount, currency or reference", count: approved.length } });
+  }
   db.update(obligations)
     .set({
       vendorId: ai.vendorId ?? ob.vendorId,
@@ -87,7 +97,7 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
     obligationId,
     actor: run.engine === "claude" ? `ai:${run.model}` : "ai:rules",
     action: "ai.interpreted",
-    detail: { vendorId: ai.vendorId, amountMinor: ai.amountMinor, currency: ai.currency, sourceRef: ai.sourceRef, confidence: ai.confidence, flags: ai.flags, missing: ai.missing, toolCalls: run.toolCalls.map((t) => t.name) },
+    detail: { vendorId: ai.vendorId, amountMinor: ai.amountMinor, currency: ai.currency, sourceRef: ai.sourceRef, confidence: ai.confidence, flags: ai.flags, missing: ai.missing, engine: run.engine, model: run.model, toolCalls: run.toolCalls.map((t) => ({ name: t.name, input: JSON.stringify(t.input ?? {}).slice(0, 200), resultPreview: String(t.resultPreview ?? "").slice(0, 200) })) },
   });
 
   // 2. Policy
@@ -117,22 +127,36 @@ function moveTo(db: Db, obligationId: string, target: ObligationState, outcome: 
     transition(db, obligationId, "verified", "policy", "policy.verified", { rulesPassed: outcome.rules.filter((r) => r.passed).map((r) => r.ruleId) });
   }
   transition(db, obligationId, target, "policy", `policy.${outcome.decision}`, { reasons: outcome.reasons });
+  if (target === "approved") {
+    // Snapshot where the money is going at the moment it is authorised. Execution refuses if it changed.
+    const ob = mustGet(db, obligationId);
+    const v = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : null;
+    db.update(obligations).set({ payoutHash: v ? payoutHashOf(v) : null }).where(eq(obligations.id, obligationId)).run();
+  }
+}
+
+/** Hash of the fields that decide where a payment lands. Same parts as the seed uses for vendors.detailsHash. */
+function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null }): string {
+  return hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]);
 }
 
 export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const ob = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
-  const policy = JSON.parse(biz.policyJson) as ApprovalPolicy;
+  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
   const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : null;
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, state: obligations.state })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, state: obligations.state, updatedAt: obligations.updatedAt })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
     : [];
-  const approvalsCount = db.select().from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().length;
+  // Distinct people, not rows: one person approving twice is still one approval.
+  const approvalsCount = new Set(db.select({ actor: approvals.actor }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().map((a) => a.actor)).size;
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const vendorRecentMinor = prior.filter((p) => ["approved", "execution_pending", "sent", "settled"].includes(p.state) && p.updatedAt >= since).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
@@ -143,8 +167,9 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     ai,
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
-    priorSourceRefs: prior.map((p) => ({ ...p, state: p.state as ObligationState })),
+    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState })),
     approvalsCount,
+    vendorRecentMinor,
   });
   db.update(obligations)
     .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
@@ -186,6 +211,16 @@ function targetState(outcome: PolicyOutcome, current: ObligationState): Obligati
 export function approveObligation(db: Db, obligationId: string, actor: string, note?: string): PolicyOutcome {
   const ob = mustGet(db, obligationId);
   if (!["awaiting_approval", "verified", "blocked"].includes(ob.state)) throw new Error(`Cannot approve an obligation in state ${ob.state}`);
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
+  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
+  // Separation of duties: whoever ingested the request cannot also approve it.
+  if (policy.requireSeparateApprover ?? isLiveRails()) {
+    const created = db.select({ actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
+    if (created && created.actor === actor) throw new Error("The person who ingested an obligation cannot approve it; ask a second person");
+  }
+  // One approval per person per version of the obligation.
+  const already = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"), eq(approvals.actor, actor))).get();
+  if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
   db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, createdAt: now() }).run();
   audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null } });
   // Approval does not bypass policy: a blocked obligation stays blocked until the input is fixed.
@@ -199,10 +234,53 @@ export function rejectObligation(db: Db, obligationId: string, actor: string, no
   transition(db, obligationId, "cancelled", actor, "approval.rejected", { note: note ?? null });
 }
 
+export interface AmendPatch {
+  amountMinor?: number;
+  currency?: string;
+  sourceRef?: string;
+  vendorId?: string;
+}
+
+/**
+ * Validate an amend patch at runtime. Server actions receive whatever the client
+ * sends, so the TypeScript type is not a defence: unknown keys are rejected rather
+ * than ignored, because the patch is written straight to the obligation row.
+ */
+export function validateAmendPatch(db: Db, businessId: string, patch: unknown): AmendPatch {
+  if (typeof patch !== "object" || patch === null || Array.isArray(patch)) throw new Error("Amendment must be an object");
+  const allowed = ["amountMinor", "currency", "sourceRef", "vendorId"];
+  const keys = Object.keys(patch);
+  const extra = keys.filter((k) => !allowed.includes(k));
+  if (extra.length > 0) throw new Error(`Amendment may not change: ${extra.join(", ")}`);
+  const p = patch as Record<string, unknown>;
+  const out: AmendPatch = {};
+  if (p.amountMinor !== undefined) {
+    if (!isValidAmountMinor(p.amountMinor)) throw new Error("amountMinor must be a positive whole number of cents within the allowed range");
+    out.amountMinor = p.amountMinor;
+  }
+  if (p.currency !== undefined) {
+    if (typeof p.currency !== "string" || !SUPPORTED_CURRENCIES.includes(p.currency)) throw new Error(`currency must be one of: ${SUPPORTED_CURRENCIES.join(", ")}`);
+    out.currency = p.currency;
+  }
+  if (p.sourceRef !== undefined) {
+    if (!isValidSourceRef(p.sourceRef)) throw new Error("sourceRef must be 1 to 64 characters: letters, digits and . _ / # : -");
+    out.sourceRef = p.sourceRef.toUpperCase();
+  }
+  if (p.vendorId !== undefined) {
+    if (typeof p.vendorId !== "string") throw new Error("vendorId must be a string");
+    const v = db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.id, p.vendorId), eq(vendors.businessId, businessId))).get();
+    if (!v) throw new Error("vendorId is not a vendor of this business");
+    out.vendorId = p.vendorId;
+  }
+  if (Object.keys(out).length === 0) throw new Error("Amendment is empty");
+  return out;
+}
+
 /** Correct an obligation's amount or reference after human review, then re-run the pipeline from policy. */
-export async function amendObligation(db: Db, obligationId: string, actor: string, patch: { amountMinor?: number; currency?: string; sourceRef?: string; vendorId?: string }, note?: string): Promise<void> {
+export async function amendObligation(db: Db, obligationId: string, actor: string, rawPatch: AmendPatch, note?: string): Promise<void> {
   const ob = mustGet(db, obligationId);
   if (!["blocked", "needs_evidence", "awaiting_approval", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
+  const patch = validateAmendPatch(db, ob.businessId, rawPatch);
   // The human's values are now authoritative; drop agent flags about the field that was corrected.
   // Approvals given before the correction were for different numbers; they no longer count.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
@@ -224,9 +302,20 @@ export interface ExecuteOptions {
   rail?: Rail;
 }
 
+/** Attempt statuses that mean money may have moved, or may still move. Only "failed" is safe to pay again after. */
+const OPEN_ATTEMPT = ["pending", "unknown", "submitted", "confirmed"];
+
 /**
  * Execute an approved obligation. Re-runs policy first: if anything changed
  * since approval (a duplicate appeared, details changed) it refuses.
+ *
+ * Double-pay protection, in layers:
+ *  - The state check, the attempt insert and the move to execution_pending happen in one
+ *    immediate transaction, and the move is a compare-and-swap, so two callers cannot both start.
+ *  - If any earlier attempt is not definitively failed, this refuses: that payment must be
+ *    reconciled (see retryAmbiguousExecution), never paid again under a new key.
+ *  - An ambiguous rail outcome (timeout, 5xx, exception) leaves the obligation in
+ *    execution_pending with an "unknown" attempt instead of failing it.
  */
 export async function executeObligation(db: Db, obligationId: string, opts: ExecuteOptions): Promise<{ attemptId: string; status: string }> {
   const ob = mustGet(db, obligationId);
@@ -239,31 +328,91 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     throw new Error(`Execution refused by policy: ${outcome.reasons.join("; ")}`);
   }
 
+  const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : undefined;
+  if (!vendorRow) throw new Error("Obligation has no vendor");
+  refuseIfPayoutChanged(db, ob, vendorRow);
+
   const rail = opts.rail ?? (ob.selectedRail as Rail | null);
   if (!rail) throw new Error("No route available for this obligation");
+  if (rail !== "paypal" && rail !== "stellar") throw new Error(`Unknown rail ${String(rail)}`);
   const quote = db.select().from(routeQuotes).where(and(eq(routeQuotes.obligationId, obligationId), eq(routeQuotes.rail, rail))).get();
   if (!quote?.available) throw new Error(`${rail} is not an available route for this obligation`);
-  if (opts.rail && opts.rail !== ob.selectedRail) {
-    db.update(obligations).set({ selectedRail: opts.rail, routeReason: `Operator override by ${opts.actor}`, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
-    audit(db, { obligationId, actor: opts.actor, action: "route.overridden", detail: { from: ob.selectedRail, to: opts.rail } });
-  }
 
-  const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId!)).get()!;
   const vendor = toProfile(vendorRow);
-  const attemptNo = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all().length + 1;
-  const key = idempotencyKey(obligationId, attemptNo);
-  const attemptId = newId("pay");
-  const rails = getRails();
-  const adapter = rails[rail];
-  const memo = `${ob.sourceRef ?? obligationId} ${key.slice(0, 8)}`.slice(0, 28);
-  const ts = now();
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
+  const adapter = getRails()[rail];
+  const refPart = safeRefForMemo(ob.sourceRef ?? obligationId).slice(0, 19); // memo is `ref + space + 8 key chars`, 28 max
 
-  db.insert(paymentAttempts).values({ id: attemptId, obligationId, rail, idempotencyKey: key, status: "pending", mode: adapter.mode, requestJson: JSON.stringify({ amountMinor: ob.amountMinor, currency: ob.currency, memo, vendorId: vendor.id }), createdAt: ts, updatedAt: ts }).run();
-  transition(db, obligationId, "execution_pending", opts.actor, "execution.started", { attemptId, rail, mode: adapter.mode, idempotencyKey: key });
+  // Start: state check + attempt row + CAS transition, atomically.
+  const started = db.transaction(
+    (tx) => {
+      const cur = tx.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, obligationId)).get();
+      if (cur?.state !== "approved") throw new Error(`Obligation must be approved before execution (state: ${cur?.state})`);
+      const attempts = tx.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all();
+      const open = attempts.filter((a) => OPEN_ATTEMPT.includes(a.status));
+      if (open.length > 0) {
+        throw new Error(`Obligation already has a payment attempt that is not definitively failed (${open.map((a) => `${a.id}:${a.status}`).join(", ")}); reconcile it instead of paying again`);
+      }
+      // Every remaining attempt definitively failed (nothing moved), so a fresh key cannot double-pay.
+      const key = idempotencyKey(obligationId, attempts.length + 1);
+      const attemptId = newId("pay");
+      const ts = now();
+      const fullMemo = `${refPart} ${key.slice(0, 8)}`.slice(0, 28);
+      tx.insert(paymentAttempts).values({ id: attemptId, obligationId, rail, idempotencyKey: key, status: "pending", mode: adapter.mode, requestJson: JSON.stringify({ amountMinor: ob.amountMinor, currency: ob.currency, memo: fullMemo, vendorId: vendor.id }), createdAt: ts, updatedAt: ts }).run();
+      if (opts.rail && opts.rail !== ob.selectedRail) {
+        tx.update(obligations).set({ selectedRail: opts.rail, routeReason: `Operator override by ${opts.actor}`, updatedAt: ts }).where(eq(obligations.id, obligationId)).run();
+        audit(tx as unknown as Db, { obligationId, actor: opts.actor, action: "route.overridden", detail: { from: ob.selectedRail, to: opts.rail } });
+      }
+      transition(tx as unknown as Db, obligationId, "execution_pending", opts.actor, "execution.started", { attemptId, rail, mode: adapter.mode, idempotencyKey: key });
+      return { attemptId, key, memo: fullMemo };
+    },
+    { behavior: "immediate" }
+  );
 
-  const result = await adapter.execute({ obligationId, idempotencyKey: key, vendor, amountMinor: ob.amountMinor!, currency: ob.currency!, memo });
+  const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: ob.amountMinor!, currency: ob.currency!, memo: started.memo, businessCountry: biz.country });
+  return finishAttempt(db, obligationId, started.attemptId, rail, adapter.mode, result);
+}
+
+/** Refuse (and pull the obligation back to blocked) if the payout destination differs from what was verified and approved. */
+function refuseIfPayoutChanged(db: Db, ob: typeof obligations.$inferSelect, vendorRow: typeof vendors.$inferSelect): void {
+  const current = payoutHashOf(vendorRow);
+  const reasons: string[] = [];
+  if (current !== vendorRow.detailsHash) reasons.push("Vendor payout details were edited without re-verification");
+  if (!ob.payoutHash) reasons.push("No payout destination was recorded when this obligation was approved; approve it again");
+  else if (ob.payoutHash !== current) reasons.push("Vendor payout details changed after this obligation was approved");
+  if (reasons.length === 0) return;
+  // Approvals were for a different destination; they no longer count.
+  db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, ob.id), eq(approvals.decision, "approved"))).run();
+  transition(db, ob.id, "blocked", "policy", "execution.refused", { reasons });
+  throw new Error(`Execution refused: ${reasons.join("; ")}`);
+}
+
+const SECRET_KEY = /secret|token|authorization|password|private|api[-_]?key/i;
+/** Defence in depth: never persist anything that looks like a credential, whatever a provider echoes back. */
+function redact(value: unknown, depth = 0): unknown {
+  if (depth > 8 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, SECRET_KEY.test(k) ? "[redacted]" : redact(v, depth + 1)]));
+}
+
+/** Call the rail. A thrown exception is an unknown outcome, never a failure. */
+async function callRail(db: Db, adapter: { execute(req: import("../domain/types").ExecutionRequest): Promise<ExecutionResult> }, attemptId: string, req: Omit<import("../domain/types").ExecutionRequest, "beforeSubmit">): Promise<ExecutionResult> {
+  try {
+    return await adapter.execute({
+      ...req,
+      beforeSubmit: (info) => {
+        db.update(paymentAttempts).set({ externalId: info.externalId, externalStatus: "prepared", updatedAt: now() }).where(eq(paymentAttempts.id, attemptId)).run();
+      },
+    });
+  } catch (e) {
+    return { status: "unknown", externalId: null, externalStatus: null, feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: null, errorMessage: `Rail threw before reporting an outcome: ${(e as Error).message}` };
+  }
+}
+
+function finishAttempt(db: Db, obligationId: string, attemptId: string, rail: Rail, mode: string, result: ExecutionResult): { attemptId: string; status: string } {
+  const prev = db.select().from(paymentAttempts).where(eq(paymentAttempts.id, attemptId)).get();
   db.update(paymentAttempts)
-    .set({ status: result.status === "failed" ? "failed" : result.status, externalId: result.externalId, externalStatus: result.externalStatus, responseJson: JSON.stringify(result.raw ?? null), errorMessage: result.errorMessage ?? null, updatedAt: now() })
+    .set({ status: result.status, externalId: result.externalId ?? prev?.externalId ?? null, externalStatus: result.externalStatus ?? prev?.externalStatus ?? null, responseJson: JSON.stringify(redact(result.raw ?? null)), errorMessage: result.errorMessage ?? null, updatedAt: now() })
     .where(eq(paymentAttempts.id, attemptId))
     .run();
 
@@ -271,50 +420,124 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     transition(db, obligationId, "failed", `rail:${rail}`, "execution.failed", { attemptId, error: result.errorMessage });
     return { attemptId, status: "failed" };
   }
+  if (result.status === "unknown") {
+    // Stay in execution_pending. The obligation cannot be re-approved or re-executed until a human or
+    // retryAmbiguousExecution() resolves this attempt.
+    audit(db, { obligationId, actor: `rail:${rail}`, action: "execution.unknown", detail: { attemptId, error: result.errorMessage, externalId: result.externalId ?? prev?.externalId ?? null, mode } });
+    return { attemptId, status: "unknown" };
+  }
   transition(db, obligationId, "sent", `rail:${rail}`, "execution.submitted", { attemptId, externalId: result.externalId, externalStatus: result.externalStatus, explorerUrl: result.explorerUrl ?? null });
   if (result.status === "confirmed") {
-    recordSettlement(db, obligationId, attemptId, rail, result.externalId!, result.feeMinor, result.receivedMinor, result.receivedCurrency, result.fxRate, result.explorerUrl ?? null);
+    recordSettlement(db, obligationId, attemptId, rail, result.externalId!, result.feeMinor, result.receivedMinor, result.receivedCurrency, result.fxRate, result.explorerUrl ?? null, result.note ?? null);
   }
   return { attemptId, status: result.status };
+}
+
+/**
+ * Resolve an attempt whose outcome was unknown (obligation is in execution_pending).
+ * First asks the rail about any provider-side id already recorded (Stellar tx hash).
+ * Otherwise replays the SAME request with the SAME idempotency key, which PayPal answers
+ * with the original batch and the Stellar adapter answers by finding the earlier payment.
+ * Never mints a new key. Refuses if the vendor's payout details changed in the meantime.
+ */
+export async function retryAmbiguousExecution(db: Db, obligationId: string, opts: { actor: string }): Promise<{ attemptId: string; status: string }> {
+  const ob = mustGet(db, obligationId);
+  if (ob.state !== "execution_pending") throw new Error(`Obligation is not awaiting reconciliation (state: ${ob.state})`);
+  const attempt = db.select().from(paymentAttempts).where(and(eq(paymentAttempts.obligationId, obligationId))).orderBy(desc(paymentAttempts.createdAt)).all().find((a) => a.status === "unknown" || a.status === "pending");
+  if (!attempt) throw new Error("No unresolved payment attempt found");
+  const rail = attempt.rail as Rail;
+  const adapter = getRails()[rail];
+  const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId!)).get();
+  if (!vendorRow) throw new Error("Obligation has no vendor");
+  if (!ob.payoutHash || ob.payoutHash !== payoutHashOf(vendorRow)) throw new Error("Vendor payout details changed since approval; resolve this attempt by hand in the provider dashboard");
+  audit(db, { obligationId, actor: opts.actor, action: "execution.reconcile", detail: { attemptId: attempt.id, rail, key: attempt.idempotencyKey } });
+
+  if (attempt.externalId) {
+    const st = await adapter.getStatus(attempt.externalId);
+    if (st.status === "confirmed") {
+      db.update(paymentAttempts).set({ status: "submitted", externalStatus: st.externalStatus, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
+      transition(db, obligationId, "sent", `rail:${rail}`, "execution.resolved", { attemptId: attempt.id, externalId: attempt.externalId });
+      settleFromRail(db, ob, attempt.id, rail, attempt.externalId, adapter.mode, st);
+      return { attemptId: attempt.id, status: "confirmed" };
+    }
+  }
+  const req = JSON.parse(attempt.requestJson ?? "{}") as { memo?: string };
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
+  const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: ob.amountMinor!, currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country });
+  return finishAttempt(db, obligationId, attempt.id, rail, adapter.mode, result);
 }
 
 /** Poll the rail for the latest attempt and settle or fail accordingly. Webhooks call the same function. */
 export async function confirmSettlement(db: Db, obligationId: string, source = "poll"): Promise<ObligationState> {
   const ob = mustGet(db, obligationId);
-  if (ob.state !== "sent") return ob.state as ObligationState;
   const attempt = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).orderBy(desc(paymentAttempts.createdAt)).get();
+  // Normally the obligation is "sent". An unknown attempt that already has a provider id (Stellar hash) can also be resolved from execution_pending.
+  const resolvingUnknown = ob.state === "execution_pending" && !!attempt && (attempt.status === "unknown" || attempt.status === "pending") && !!attempt.externalId;
+  if (ob.state !== "sent" && !resolvingUnknown) return ob.state as ObligationState;
   if (!attempt?.externalId) return ob.state as ObligationState;
   const rail = attempt.rail as Rail;
-  const status = await getRails()[rail].getStatus(attempt.externalId);
+  const adapter = getRails()[rail];
+  const status = await adapter.getStatus(attempt.externalId);
   db.update(paymentAttempts).set({ externalStatus: status.externalStatus, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
   audit(db, { obligationId, actor: `rail:${rail}`, action: `settlement.checked:${source}`, detail: { status: status.status, externalStatus: status.externalStatus } });
   if (status.status === "confirmed") {
-    const q = db.select().from(routeQuotes).where(and(eq(routeQuotes.obligationId, obligationId), eq(routeQuotes.rail, rail))).get();
-    recordSettlement(db, obligationId, attempt.id, rail, attempt.externalId, q?.feeMinor ?? 0, q?.receiveAmountMinor ?? null, q?.receiveCurrency ?? null, q?.fxRate ?? null, status.explorerUrl ?? null);
+    if (resolvingUnknown) {
+      db.update(paymentAttempts).set({ status: "submitted", updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
+      transition(db, obligationId, "sent", `rail:${rail}`, "execution.resolved", { attemptId: attempt.id, externalId: attempt.externalId });
+    }
+    settleFromRail(db, ob, attempt.id, rail, attempt.externalId, adapter.mode, status);
     return "settled";
   }
   if (status.status === "failed") {
+    // The provider says the money is not with the recipient (failed, returned, blocked): a retry is now safe.
+    db.update(paymentAttempts).set({ status: "failed", errorMessage: status.externalStatus, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
     transition(db, obligationId, "failed", `rail:${rail}`, "settlement.failed", { externalStatus: status.externalStatus });
     return "failed";
   }
-  return "sent";
+  if (status.status === "exception") {
+    // Needs a human, and the money may still land (an unclaimed PayPal payout can be claimed). Not a failure: never retry.
+    if (attempt.externalStatus !== status.externalStatus) {
+      audit(db, { obligationId, actor: `rail:${rail}`, action: "settlement.exception", detail: { externalStatus: status.externalStatus, message: status.message } });
+    }
+    return ob.state as ObligationState;
+  }
+  return ob.state as ObligationState;
 }
 
-function recordSettlement(db: Db, obligationId: string, attemptId: string, rail: Rail, externalId: string, feeMinor: number, receivedMinor: number | null, receivedCurrency: string | null, fxRate: string | null, explorerUrl: string | null): void {
-  const ob = mustGet(db, obligationId);
-  const ts = now();
-  const existing = db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).get();
-  if (!existing) {
-    db.insert(settlements).values({ id: newId("stl"), obligationId, attemptId, rail, grossMinor: ob.amountMinor!, grossCurrency: ob.currency!, feeMinor, receivedMinor, receivedCurrency, fxRate, externalId, explorerUrl, settledAt: ts }).run();
+/** Settlement figures for the poll/reconcile paths. Live Stellar records what was sent; everything else uses the route quote, labelled as modelled outside mock mode. */
+function settleFromRail(db: Db, ob: typeof obligations.$inferSelect, attemptId: string, rail: Rail, externalId: string, mode: string, status: SettlementStatus): void {
+  const q = db.select().from(routeQuotes).where(and(eq(routeQuotes.obligationId, ob.id), eq(routeQuotes.rail, rail))).get();
+  if (mode !== "mock" && rail === "stellar") {
+    recordSettlement(db, ob.id, attemptId, rail, externalId, 0, ob.amountMinor, "PYUSD", "1", status.explorerUrl ?? null, "PYUSD sent on Stellar. Any recipient-currency (PHP) delivery through the anchor is modelled, not executed. Network fee not recorded on this path.");
+    return;
   }
-  db.update(paymentAttempts).set({ status: "confirmed", updatedAt: ts }).where(eq(paymentAttempts.id, attemptId)).run();
-  transition(db, obligationId, "settled", `rail:${rail}`, "settlement.confirmed", { externalId, feeMinor, receivedMinor, receivedCurrency, explorerUrl });
-  queueAccounting(db, obligationId);
+  const note = mode === "mock" ? null : "Fee and recipient figures are modelled from the published fee schedule, not reported by the provider.";
+  recordSettlement(db, ob.id, attemptId, rail, externalId, q?.feeMinor ?? 0, q?.receiveAmountMinor ?? null, q?.receiveCurrency ?? null, q?.fxRate ?? null, status.explorerUrl ?? null, note);
+}
+
+function recordSettlement(db: Db, obligationId: string, attemptId: string, rail: Rail, externalId: string, feeMinor: number, receivedMinor: number | null, receivedCurrency: string | null, fxRate: string | null, explorerUrl: string | null, note: string | null = null): void {
+  // One transaction: the settlement row, the attempt status, the state change and the accounting
+  // record all happen together or not at all.
+  db.transaction(() => {
+    const ob = mustGet(db, obligationId);
+    const ts = now();
+    const existing = db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).get();
+    if (!existing) {
+      db.insert(settlements).values({ id: newId("stl"), obligationId, attemptId, rail, grossMinor: ob.amountMinor!, grossCurrency: ob.currency!, feeMinor, receivedMinor, receivedCurrency, fxRate, externalId, explorerUrl, note, settledAt: ts }).run();
+    }
+    db.update(paymentAttempts).set({ status: "confirmed", updatedAt: ts }).where(eq(paymentAttempts.id, attemptId)).run();
+    transition(db, obligationId, "settled", `rail:${rail}`, "settlement.confirmed", { externalId, feeMinor, receivedMinor, receivedCurrency, explorerUrl });
+    queueAccounting(db, obligationId);
+  });
 }
 
 function queueAccounting(db: Db, obligationId: string): void {
   const record = buildAccountingRecord(db, obligationId);
-  if (!record) return;
+  if (!record) {
+    // The money has moved, so the settlement must stand. Make the gap loud instead of silent.
+    audit(db, { obligationId, actor: "system", action: "accounting.missing", detail: { reason: "no accounting record could be built for a settled obligation" } });
+    return;
+  }
   const ts = now();
   db.insert(accountingSyncs).values({ id: newId("acc"), obligationId, destination: record.destination, status: "pending", payloadJson: JSON.stringify(record.payload), createdAt: ts, updatedAt: ts }).run();
   audit(db, { obligationId, actor: "system", action: "accounting.queued", detail: { destination: record.destination, reference: record.payload.reference } });
@@ -334,7 +557,7 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
     .from(evidenceTable)
     .where(eq(evidenceTable.obligationId, obligationId))
     .all()
-    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt }));
+    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : ("system" as const) }));
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {

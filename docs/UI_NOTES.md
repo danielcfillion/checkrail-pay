@@ -28,7 +28,7 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 - Production server on 3100 after `npm run db:seed`: every route returns 200 with real strings (Phuong Transport, USD 960.00, Ridgeline). `/api/accounting/export` returns the CSV. Unknown ids return the custom 404.
 - Empty database (`DATABASE_PATH` pointed at a fresh file): every route returns 200 and shows an empty state; no server errors.
 - Interaction flows run in headless Chromium: approve Ana, pay with Stellar (marker caught mid-travel at paid, then settled with explorer link), correct Phuong to USD 800 (re-enters at awaiting approval), create the mismatched Linh example (lands blocked). No page errors or console errors.
-- Screenshots in `docs/screenshots/`: `overview.png`, `blocked.png`, `stellar.png`, `demo.png`, plus `overview-mobile.png` (390px) and `blocked-dark.png` (data-theme override). Playwright's chromium download is blocked by the proxy, so these were taken with `@sparticuz/chromium` + `puppeteer-core` from a scratch directory (not added to the project).
+- Screenshots in `docs/screenshots/`: `overview`, `blocked-mismatch`, `blocked-duplicate`, `awaiting-stellar` (each also as `-dark`), `demo.png`, and `overview-mobile.png` (390px). Regenerated 2026-10-03 from the hardened build.
 
 ## Could not verify
 

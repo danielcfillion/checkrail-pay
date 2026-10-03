@@ -1,9 +1,11 @@
 import type { RouteQuote, VendorPayoutProfile } from "../domain/types";
 import { getCorridor, corridorKey } from "./corridors";
+import { SUPPORTED_CURRENCIES, applyRateMicro, bpsCeil, effectiveRateMicro, isValidAmountMinor, microToDecimal, pctToBps } from "../domain/money";
 
 /**
  * Pure quote arithmetic shared by mock and live adapters.
- * All money in integer minor units. Rates as JS numbers, rounded at the end.
+ * All money in integer minor units. Fees are basis-point integer maths rounded up;
+ * recipient amounts are rate-multiplied in BigInt and rounded to the nearest minor unit.
  */
 
 export function quotePayPal(vendor: VendorPayoutProfile, amountMinor: number, currency: string, businessCountry: string): RouteQuote {
@@ -18,24 +20,30 @@ export function quotePayPal(vendor: VendorPayoutProfile, amountMinor: number, cu
   if (!c || !c.paypal.available) {
     return { ...base, available: false, unavailableReason: c?.paypal.unavailableReason ?? `No PayPal corridor configured for ${key}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c?.recipientCurrency ?? currency, etaSeconds: 0, provider: "PayPal", explanation: "" };
   }
+  if (!isValidAmountMinor(amountMinor) || !SUPPORTED_CURRENCIES.includes(currency)) {
+    return { ...base, available: false, unavailableReason: `Cannot quote ${currency} ${amountMinor}: amount must be a positive whole number of cents in ${SUPPORTED_CURRENCIES.join("/")}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.paypal.provider, explanation: "" };
+  }
   if (!vendor.paypalEmail) {
     return { ...base, available: false, unavailableReason: `${vendor.name} has no PayPal account on file`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.paypal.provider, explanation: "" };
   }
   const p = c.paypal;
-  const senderFeeUsd = Math.min(p.feeCapUsd, p.feeFlatUsd + (amountMinor / 100) * (p.feePct / 100));
-  const feeMinor = Math.round(senderFeeUsd * 100);
-  const effectiveRate = c.midRate * (1 - p.fxSpreadPct / 100);
-  let receiveMinor = Math.round(amountMinor * effectiveRate);
+  // Fee: flat plus a percentage (rounded up), capped. All integer cents.
+  const feeMinor = Math.min(Math.round(p.feeCapUsd * 100), Math.round(p.feeFlatUsd * 100) + bpsCeil(amountMinor, pctToBps(p.feePct)));
+  const rateMicro = effectiveRateMicro(c.midRate, pctToBps(p.fxSpreadPct));
+  let receiveMinor = applyRateMicro(amountMinor, rateMicro);
   if (p.withdrawalFeeLocal > 0 && receiveMinor < p.withdrawalFeeLocalThreshold) receiveMinor -= p.withdrawalFeeLocal;
+  if (receiveMinor <= 0) {
+    return { ...base, available: false, unavailableReason: `Amount is too small: the recipient would receive nothing after fees`, feeMinor, fxRate: microToDecimal(rateMicro), receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: p.etaSeconds, provider: p.provider, explanation: "" };
+  }
   const explanation =
     c.recipientCurrency === currency
       ? `Sender fee ${usd(feeMinor)}; recipient receives the full amount in PayPal balance.`
-      : `Sender fee ${usd(feeMinor)} (${p.feePct}% capped at $${p.feeCapUsd}). Recipient converts at ${effectiveRate.toFixed(4)} (${p.fxSpreadPct}% below mid ${c.midRate.toFixed(4)})${p.withdrawalFeeLocal > 0 ? `, bank withdrawal fee applies under ${c.recipientCurrency} ${(p.withdrawalFeeLocalThreshold / 100).toLocaleString()}` : ""}.`;
+      : `Sender fee ${usd(feeMinor)} (${p.feePct}% capped at $${p.feeCapUsd}). Recipient converts at ${(Number(rateMicro) / 1_000_000).toFixed(4)} (${p.fxSpreadPct}% below mid ${c.midRate.toFixed(4)})${p.withdrawalFeeLocal > 0 ? `, bank withdrawal fee applies under ${c.recipientCurrency} ${(p.withdrawalFeeLocalThreshold / 100).toLocaleString()}` : ""}.`;
   return {
     ...base,
     available: true,
     feeMinor,
-    fxRate: effectiveRate.toFixed(6),
+    fxRate: microToDecimal(rateMicro),
     receiveAmountMinor: receiveMinor,
     receiveCurrency: c.recipientCurrency,
     etaSeconds: p.etaSeconds,
@@ -56,6 +64,9 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
   if (!c || !c.stellar.available) {
     return { ...base, available: false, unavailableReason: c?.stellar.unavailableReason ?? `No Stellar anchor configured for ${key}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c?.recipientCurrency ?? currency, etaSeconds: 0, provider: "Stellar", explanation: "" };
   }
+  if (!isValidAmountMinor(amountMinor) || !SUPPORTED_CURRENCIES.includes(currency)) {
+    return { ...base, available: false, unavailableReason: `Cannot quote ${currency} ${amountMinor}: amount must be a positive whole number of cents in ${SUPPORTED_CURRENCIES.join("/")}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.stellar.provider, explanation: "" };
+  }
   const s = c.stellar;
   const needsAnchor = c.recipientCurrency !== "USD";
   if (needsAnchor && !vendor.bankCountry) {
@@ -64,30 +75,33 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
   if (!needsAnchor && !vendor.stellarAccount) {
     return { ...base, available: false, unavailableReason: `${vendor.name} has no Stellar wallet on file`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
   }
-  const amountUsd = amountMinor / 100;
-  if (s.anchorMaxUsd && amountUsd > s.anchorMaxUsd) {
+  if (s.anchorMaxUsd && amountMinor > s.anchorMaxUsd * 100) {
     return { ...base, available: false, unavailableReason: `Above anchor limit of $${s.anchorMaxUsd} per transfer (${s.anchor})`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
   }
-  const swapCost = amountUsd * (s.swapToUsdcPct / 100);
-  const anchorFee = s.anchorFeeFixedUsd + amountUsd * (s.anchorFeePct / 100);
-  const totalFeeUsd = s.networkFeeUsd + swapCost + anchorFee;
-  const feeMinor = Math.round(totalFeeUsd * 100);
-  const netUsd = amountUsd - totalFeeUsd;
-  const effectiveRate = c.midRate * (1 - s.fxSpreadPct / 100);
-  const receiveMinor = Math.round(netUsd * 100 * effectiveRate);
+  // Fees in integer cents, rounded up. The network fee is a fraction of a cent and rounds to zero.
+  const swapCost = bpsCeil(amountMinor, pctToBps(s.swapToUsdcPct));
+  const anchorFee = Math.round(s.anchorFeeFixedUsd * 100) + bpsCeil(amountMinor, pctToBps(s.anchorFeePct));
+  const feeMinor = Math.round(s.networkFeeUsd * 100) + swapCost + anchorFee;
+  const netMinor = amountMinor - feeMinor;
+  const rateMicro = effectiveRateMicro(c.midRate, pctToBps(s.fxSpreadPct));
+  const receiveMinor = netMinor > 0 ? applyRateMicro(netMinor, rateMicro) : 0;
+  if (receiveMinor <= 0) {
+    return { ...base, available: false, unavailableReason: `Amount is too small: fees of ${usd(feeMinor)} leave nothing for the recipient`, feeMinor, fxRate: microToDecimal(rateMicro), receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: s.etaSeconds, provider: s.provider, explanation: "" };
+  }
   const explanation = needsAnchor
-    ? `PYUSD on Stellar, swapped to USDC (${s.swapToUsdcPct}%), off-ramped by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid). Network fee under one cent. Recipient sees a ${c.recipientCurrency} bank deposit.`
+    ? `PYUSD on Stellar, swapped to USDC (${s.swapToUsdcPct}%), off-ramped by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid). Network fee under one cent. Recipient sees a ${c.recipientCurrency} bank deposit. The swap, off-ramp and ${c.recipientCurrency} figures are modelled estimates: Dueline sends PYUSD on Stellar and does not execute the anchor leg yet.`
     : `PYUSD on Stellar delivered to the recipient's wallet. Network fee under one cent; no FX.`;
   return {
     ...base,
     available: true,
     feeMinor,
-    fxRate: effectiveRate.toFixed(6),
+    fxRate: microToDecimal(rateMicro),
     receiveAmountMinor: receiveMinor,
     receiveCurrency: c.recipientCurrency,
     etaSeconds: s.etaSeconds,
     provider: s.provider,
     explanation,
+    modelled: needsAnchor,
   };
 }
 

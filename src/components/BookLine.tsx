@@ -19,6 +19,20 @@ export function BookLine({ rows }: { rows: ObligationRow[] }) {
     else byStation[p.station].push(r);
   }
 
+  const count = (st: string) => open.filter((r) => r.state === st).length;
+  const parts: string[] = [];
+  const blockedN = open.filter((r) => positionFor(r.state).brokenAt !== null).length;
+  const awaiting = count("awaiting_approval");
+  const ready = count("approved") + count("execution_pending");
+  const inFlight = count("sent");
+  const evid = count("needs_evidence") + count("drafted");
+  if (evid) parts.push(`${evid} waiting on evidence`);
+  if (awaiting) parts.push(`${awaiting} awaiting approval`);
+  if (blockedN) parts.push(`${blockedN} blocked at verification`);
+  if (ready) parts.push(`${ready} ready to pay`);
+  if (inFlight) parts.push(`${inFlight} in flight`);
+  const summary = `${parts.length ? parts.join(", ") + ". " : "Nothing open. "}${settledRecent.length} reconciled. Each mark is one obligation; hover for the vendor and amount.`;
+
   const toneFor = (state: string) => positionFor(state).tone;
   const colour: Record<string, string> = { neutral: "var(--ink)", attention: "var(--attention)", settled: "var(--settled)", blocked: "var(--blocked)", muted: "var(--ink-soft)" };
 
@@ -59,6 +73,20 @@ export function BookLine({ rows }: { rows: ObligationRow[] }) {
                     aria-label={`${r.vendorName ?? "Unknown vendor"} ${r.sourceRef ?? ""} ${formatMoney(r.amountMinor, r.currency)}, ${stateLabel(r.state)}`}
                   />
                 ))}
+                {broken.map((r) => (
+                  <Link
+                    key={r.id}
+                    href={`/obligations/${r.id}`}
+                    title={`${r.vendorName ?? "Unknown vendor"}, ${r.sourceRef ?? "no reference"}, ${formatMoney(r.amountMinor, r.currency)}, blocked`}
+                    className="flex h-[18px] w-[18px] items-center justify-center rounded-full"
+                    style={{ background: "var(--sheet)", border: "1.5px solid var(--blocked)", color: "var(--blocked)" }}
+                    aria-label={`${r.vendorName ?? "Unknown vendor"} ${r.sourceRef ?? ""} ${formatMoney(r.amountMinor, r.currency)}, blocked`}
+                  >
+                    <svg width="8" height="8" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden>
+                      <path d="M2 2l6 6M8 2l-6 6" />
+                    </svg>
+                  </Link>
+                ))}
                 {items.length > 14 ? <span className="dense text-ink-soft">+{items.length - 14}</span> : null}
               </div>
               {/* station label */}
@@ -81,9 +109,7 @@ export function BookLine({ rows }: { rows: ObligationRow[] }) {
           );
         })}
       </div>
-      <p className="mt-1 text-xs text-ink-soft">
-        <span className="num">{open.length - settledRecent.length}</span> open, <span className="num">{settledRecent.length}</span> settled. Each mark is one obligation; hover for the vendor and amount.
-      </p>
+      <p className="mt-1 text-sm text-ink-soft">{summary}</p>
     </div>
   );
 }

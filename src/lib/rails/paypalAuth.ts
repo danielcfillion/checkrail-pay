@@ -6,6 +6,7 @@ export async function fetchPayPalAccessToken(clientId: string, clientSecret: str
     method: "POST",
     headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
     body: "grant_type=client_credentials",
+    signal: AbortSignal.timeout(10_000),
   });
   if (!r.ok) throw new Error(`PayPal auth failed: HTTP ${r.status}`);
   const j = (await r.json()) as { access_token: string; expires_in: number };

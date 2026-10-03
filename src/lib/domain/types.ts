@@ -33,7 +33,7 @@ export const TRANSITIONS: Record<ObligationState, readonly ObligationState[]> = 
   needs_evidence: ["verified", "blocked", "cancelled"],
   verified: ["awaiting_approval", "approved", "blocked", "cancelled"],
   awaiting_approval: ["approved", "blocked", "cancelled"],
-  approved: ["execution_pending", "blocked", "cancelled"],
+  approved: ["execution_pending", "needs_evidence", "awaiting_approval", "blocked", "cancelled"], // policy can pull an approved obligation back before money moves
   blocked: ["verified", "awaiting_approval", "cancelled"], // after human review, re-enter the flow
   execution_pending: ["sent", "failed"],
   sent: ["settled", "failed", "disputed"],
@@ -66,6 +66,13 @@ export interface ApprovalPolicy {
   minAiConfidence: number;
   /** Corridors (sender country -> recipient country) the business has enabled. */
   allowedCorridors: string[]; // e.g. ["US->US", "US->PH", "US->VN"]
+  /** Rolling 24h total per vendor (committed obligations plus this one) above which a human must approve. 0 disables. */
+  vendorDailyCapMinor?: number;
+  /**
+   * The person who ingested an obligation may not approve it. When unset this is enforced
+   * only with RAIL_MODE=live, so the single-operator demo keeps working.
+   */
+  requireSeparateApprover?: boolean;
 }
 
 export const DEFAULT_POLICY: ApprovalPolicy = {
@@ -76,6 +83,7 @@ export const DEFAULT_POLICY: ApprovalPolicy = {
   blockOnRecipientChange: true,
   minAiConfidence: 75,
   allowedCorridors: ["US->US", "US->PH", "US->VN", "US->CA", "US->GB"],
+  vendorDailyCapMinor: 100_000, // $1,000 per vendor per rolling 24h
 };
 
 export interface Money {
@@ -105,6 +113,8 @@ export interface EvidenceItem {
   currency: string | null;
   reference: string | null;
   excerpt: string | null;
+  /** Who supplied this record. Operator-supplied evidence is untrusted; system evidence comes from an integration. Unset means system. */
+  provenance?: "system" | "operator";
 }
 
 /** Output of the AI obligation agent. The agent has no spending authority; it only produces this. */
@@ -137,7 +147,10 @@ export interface PolicyInput {
   baseCurrency: string;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
   priorSourceRefs: Array<{ obligationId: string; sourceRef: string | null; amountMinor: number | null; state: ObligationState }>;
+  /** Number of DISTINCT people who approved. */
   approvalsCount: number;
+  /** Total of this vendor's other committed obligations in the last 24h, in minor units. */
+  vendorRecentMinor?: number;
 }
 
 export interface PolicyRuleResult {
@@ -167,6 +180,8 @@ export interface RouteQuote {
   corridor: string;
   provider: string;
   explanation: string;
+  /** True when part of the quote (swap, anchor off-ramp, recipient-currency delivery) is an estimate Dueline does not execute. */
+  modelled?: boolean;
 }
 
 export interface ExecutionRequest {
@@ -176,10 +191,23 @@ export interface ExecutionRequest {
   amountMinor: number;
   currency: string;
   memo: string; // short reference that appears on the payment
+  /** Sender country for corridor figures. Defaults to US. */
+  businessCountry?: string;
+  /**
+   * Called with the provider-side id (Stellar tx hash) after the request is built and
+   * before it is sent, so the engine can persist it. If the send then has an unknown
+   * outcome the payment can still be found by that id.
+   */
+  beforeSubmit?: (info: { externalId: string }) => void;
 }
 
 export interface ExecutionResult {
-  status: "submitted" | "confirmed" | "failed";
+  /**
+   * submitted/confirmed: the provider accepted it.
+   * failed: the provider definitively rejected it, nothing moved, a retry is safe.
+   * unknown: ambiguous (timeout, 5xx, lost response). Money may have moved; never retry with a new key.
+   */
+  status: "submitted" | "confirmed" | "failed" | "unknown";
   externalId: string | null;
   externalStatus: string | null;
   explorerUrl?: string | null;
@@ -189,10 +217,14 @@ export interface ExecutionResult {
   fxRate: string | null;
   raw: unknown;
   errorMessage?: string;
+  /** Free-text caveat stored on the settlement (for example that a figure is modelled). */
+  note?: string | null;
 }
 
 export interface SettlementStatus {
-  status: "pending" | "confirmed" | "failed";
+  /** exception: the provider needs a human (for example an unclaimed PayPal payout). Funds may still be claimed, so this is not a failure. */
+  status: "pending" | "confirmed" | "failed" | "exception";
+  message?: string;
   externalStatus: string | null;
   explorerUrl?: string | null;
   raw: unknown;

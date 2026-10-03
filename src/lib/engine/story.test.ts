@@ -52,7 +52,7 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     expect(st.feeMinor).toBe(360); // 2% of $180
   });
 
-  it("B: requires approval above threshold, prefers Stellar, settles with an explorer link", async () => {
+  it("B: requires approval above threshold, prefers Stellar, settles (mock rail has no explorer link)", async () => {
     const ob = get(story.stellar);
     expect(ob.state).toBe("awaiting_approval");
     expect(ob.selectedRail).toBe("stellar");
@@ -64,7 +64,7 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     expect(r.status).toBe("confirmed");
     expect(get(ob.id).state).toBe("settled");
     const st = db.select().from(settlements).where(eq(settlements.obligationId, ob.id)).get()!;
-    expect(st.explorerUrl).toMatch(/stellar\.expert/);
+    expect(st.explorerUrl).toBeNull(); // mock hashes are not on chain, so no explorer link
     expect(st.receivedCurrency).toBe("PHP");
   });
 

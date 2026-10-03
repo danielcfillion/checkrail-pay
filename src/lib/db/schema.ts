@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * Dueline data model.
@@ -64,6 +64,8 @@ export const obligations = sqliteTable(
     routeReason: text("route_reason"),
     // outcome
     blockedReason: text("blocked_reason"),
+    // hash of the vendor's payout details at the moment the obligation was approved; execution refuses if they changed since
+    payoutHash: text("payout_hash"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -80,6 +82,7 @@ export const evidence = sqliteTable("evidence", {
   currency: text("currency"),
   reference: text("reference"),
   excerpt: text("excerpt"), // short text excerpt shown in the UI
+  provenance: text("provenance"), // system | operator (null = system)
   createdAt: text("created_at").notNull(),
 });
 
@@ -144,6 +147,7 @@ export const settlements = sqliteTable("settlements", {
   fxRate: text("fx_rate"),
   externalId: text("external_id"),
   explorerUrl: text("explorer_url"),
+  note: text("note"), // caveats, for example that a figure is modelled rather than reported by the provider
   settledAt: text("settled_at").notNull(),
 });
 
@@ -158,15 +162,19 @@ export const accountingSyncs = sqliteTable("accounting_syncs", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const events = sqliteTable("events", {
-  id: text("id").primaryKey(),
-  source: text("source").notNull(), // paypal_webhook | stellar_stream | poll | system
-  externalEventId: text("external_event_id"),
-  type: text("type").notNull(),
-  payloadJson: text("payload_json").notNull(),
-  processedAt: text("processed_at"),
-  createdAt: text("created_at").notNull(),
-});
+export const events = sqliteTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    source: text("source").notNull(), // paypal_webhook | stellar_stream | poll | system
+    externalEventId: text("external_event_id"),
+    type: text("type").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    processedAt: text("processed_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("events_external_event_id_unique").on(t.externalEventId)]
+);
 
 export const auditEntries = sqliteTable(
   "audit_entries",
@@ -181,5 +189,5 @@ export const auditEntries = sqliteTable(
     detailJson: text("detail_json"), // evidence used, policy rule ids, route reason, etc.
     createdAt: text("created_at").notNull(),
   },
-  (t) => [index("audit_obligation").on(t.obligationId)]
+  (t) => [index("audit_obligation").on(t.obligationId), uniqueIndex("audit_seq_unique").on(t.seq)]
 );

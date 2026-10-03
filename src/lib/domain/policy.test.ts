@@ -112,4 +112,47 @@ describe("evaluatePolicy", () => {
   it("unknown vendor blocks", () => {
     expect(evaluatePolicy(DEFAULT_POLICY, base({ vendor: null })).decision).toBe("block");
   });
+
+  it("blocks a currency other than the business base currency (M4)", () => {
+    const out = evaluatePolicy(DEFAULT_POLICY, base({
+      obligation: { id: "o1", amountMinor: 18_000, currency: "PHP", sourceRef: "JOB-0921", vendorId: "v1" },
+      evidence: [],
+    }));
+    expect(out.decision).toBe("block");
+    expect(out.reasons.join(" ")).toMatch(/Currency PHP is not supported/);
+  });
+
+  it("blocks amounts that are not a safe in-range integer", () => {
+    for (const amountMinor of [18_000.5, 1e21, 2_000_000_000, -1, Number.NaN]) {
+      const out = evaluatePolicy(DEFAULT_POLICY, base({ obligation: { id: "o1", amountMinor, currency: "USD", sourceRef: "JOB-0921", vendorId: "v1" }, evidence: [] }));
+      expect(out.decision).toBe("block");
+    }
+  });
+
+  it("forces approval when a vendor's 24h total passes the cap, and approval clears it (H7)", () => {
+    const over = base({ vendorRecentMinor: 90_000 });
+    const out = evaluatePolicy(DEFAULT_POLICY, over);
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons.join(" ")).toMatch(/daily cap/);
+    expect(evaluatePolicy(DEFAULT_POLICY, { ...over, approvalsCount: 1 }).decision).toBe("auto_execute");
+    // Exactly at the cap is fine; a cap of 0 disables the rule.
+    expect(evaluatePolicy(DEFAULT_POLICY, base({ vendorRecentMinor: 82_000 })).decision).toBe("auto_execute");
+    expect(evaluatePolicy({ ...DEFAULT_POLICY, vendorDailyCapMinor: 0 }, over).decision).toBe("auto_execute");
+  });
+
+  it("an older policy without the cap field falls back to no cap rather than crashing", () => {
+    const { vendorDailyCapMinor: _omit, ...legacy } = DEFAULT_POLICY;
+    void _omit;
+    expect(evaluatePolicy(legacy, base({ vendorRecentMinor: 900_000 })).decision).toBe("auto_execute");
+  });
+
+  it("warns on operator-supplied evidence and needs one approval to acknowledge it (H7)", () => {
+    const ev = [{ ...base().evidence[0], provenance: "operator" as const }];
+    const out = evaluatePolicy(DEFAULT_POLICY, base({ evidence: ev }));
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons.join(" ")).toMatch(/Evidence supplied by operator, not system/);
+    expect(evaluatePolicy(DEFAULT_POLICY, base({ evidence: ev, approvalsCount: 1 })).decision).toBe("auto_execute");
+    const sys = [{ ...base().evidence[0], provenance: "system" as const }];
+    expect(evaluatePolicy(DEFAULT_POLICY, base({ evidence: sys })).decision).toBe("auto_execute");
+  });
 });

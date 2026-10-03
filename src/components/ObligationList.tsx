@@ -4,8 +4,10 @@ import { DueLine } from "./DueLine";
 import { Money, RailTag, RelativeTime, StatePill } from "./ui";
 
 /** One-line reason for a row in a "needs you" list. */
+const tidy = (s: string) => s.replace(/obligation obl_[a-z0-9]+ \((\w+)\)/i, "an earlier obligation ($1)");
+
 export function reasonFor(r: ObligationRow): string {
-  if (r.blockedReason) return r.blockedReason;
+  if (r.blockedReason) return tidy(r.blockedReason);
   const reasons = safeParse(r.policyReasonsJson);
   if (r.state === "approved") return r.routeReason ? `Ready to pay. ${r.routeReason}` : "Ready to pay.";
   if (reasons.length) return reasons[0];
@@ -55,7 +57,7 @@ export function NeedsYouList({ rows }: { rows: ObligationRow[] }) {
                 <span className="font-medium">{r.vendorName ?? "Unknown vendor"}</span>
                 <span className="num text-ink-soft">{r.sourceRef ?? "no reference"}</span>
               </div>
-              <p className="mt-0.5 truncate text-ink-soft" title={reasonFor(r)}>
+              <p className="mt-0.5 line-clamp-2 text-ink-soft" title={reasonFor(r)}>
                 {reasonFor(r)}
               </p>
             </div>

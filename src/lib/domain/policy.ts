@@ -1,3 +1,4 @@
+import { isValidAmountMinor } from "./money";
 import type {
   ApprovalPolicy,
   PolicyInput,
@@ -31,12 +32,21 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   );
 
   // R2: amount and currency present
-  const hasAmount = obligation.amountMinor != null && obligation.amountMinor > 0 && !!obligation.currency;
+  const hasAmount = isValidAmountMinor(obligation.amountMinor) && !!obligation.currency;
   rules.push(
     hasAmount
       ? pass("amount_present", "Amount and currency are present")
       : block("amount_present", "Amount or currency is missing")
   );
+
+  // R2b: only the business's base currency can be paid. Thresholds, rails and quotes all assume it.
+  if (hasAmount) {
+    rules.push(
+      obligation.currency === input.baseCurrency
+        ? pass("currency_supported", `Currency ${obligation.currency} is the business base currency`)
+        : block("currency_supported", `Currency ${obligation.currency} is not supported; payments are made in ${input.baseCurrency} only`)
+    );
+  }
 
   // R3: evidence required
   if (policy.requireEvidence) {
@@ -45,6 +55,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
         ? pass("evidence_present", `${evidence.length} supporting record${evidence.length === 1 ? "" : "s"} attached`)
         : hold("evidence_present", "No supporting evidence attached")
     );
+  }
+
+  // R3b: evidence typed in by an operator is not independent proof of anything
+  if (evidence.some((e) => e.provenance === "operator")) {
+    rules.push(warn("evidence_provenance", "Evidence supplied by operator, not system; check it against the source documents"));
   }
 
   // R4: amount matches evidence within tolerance
@@ -143,6 +158,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   }
   if (policy.dualApprovalThresholdMinor > 0 && amount > policy.dualApprovalThresholdMinor && input.approvalsCount < 2) {
     return { decision: "require_approval", reasons: [`Amount exceeds dual-approval threshold ${fmt(policy.dualApprovalThresholdMinor, input.baseCurrency)}; ${2 - input.approvalsCount} more approval(s) needed`], rules };
+  }
+  // Velocity cap: this vendor's committed payments in the last 24h plus this one.
+  const cap = policy.vendorDailyCapMinor ?? 0;
+  const recent = input.vendorRecentMinor ?? 0;
+  if (cap > 0 && recent + amount > cap && input.approvalsCount < 1) {
+    return { decision: "require_approval", reasons: [`Payments to this vendor in the last 24h would total ${fmt(recent + amount, input.baseCurrency)}, above the ${fmt(cap, input.baseCurrency)} daily cap`], rules };
   }
   if (amount > policy.autoExecuteThresholdMinor && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons: [`Amount exceeds auto-execute threshold ${fmt(policy.autoExecuteThresholdMinor, input.baseCurrency)}`], rules };

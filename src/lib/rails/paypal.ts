@@ -1,5 +1,6 @@
 import type { ExecutionRequest, ExecutionResult, PaymentRail, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
 import { config } from "../config";
+import { SUPPORTED_CURRENCIES, isValidAmountMinor, minorToDecimal } from "../domain/money";
 import { quotePayPal } from "./quoteModel";
 import { fetchPayPalAccessToken } from "./paypalAuth";
 
@@ -8,12 +9,31 @@ import { fetchPayPalAccessToken } from "./paypalAuth";
  *
  * Money path. Review every change here by hand.
  *
- * Execution uses the Payouts API: one batch per obligation, with the
- * obligation's idempotency key as both `sender_batch_id` and the
- * `PayPal-Request-Id` header, so a retried request cannot pay twice.
+ * Execution uses the Payouts API: one batch per payment attempt, with the
+ * attempt's idempotency key as both `sender_batch_id` and the
+ * `PayPal-Request-Id` header. The engine reuses the same key when it replays an
+ * attempt whose outcome was unknown, so PayPal returns the original batch
+ * instead of creating a second one.
+ *
+ * Outcomes are classified, never guessed:
+ *   - failed:  PayPal answered with a 4xx and a body. Nothing moved; a retry is safe.
+ *   - unknown: timeout, network error, 5xx or an unreadable answer. Money may have
+ *              moved. The engine keeps the obligation out of "failed" so nobody
+ *              can re-send it under a new key.
+ *
  * The adapter never decides whether to pay. It receives an already
  * authorised ExecutionRequest and reports what PayPal said.
  */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/** PayPal item statuses that mean the money is not (or no longer) with the recipient. */
+const FAILED_ITEM = new Set(["FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED", "DENIED", "CANCELED"]);
+/** Statuses that need a human. The payout can still be claimed (UNCLAIMED) or released (ONHOLD), so they are not failures and must not be retried. */
+const ATTENTION_ITEM: Record<string, string> = {
+  UNCLAIMED: "Payout is UNCLAIMED: the recipient has no PayPal account for this email, or has not accepted it. PayPal returns unclaimed payouts after 30 days. Confirm the email with the vendor; do not pay again.",
+  ONHOLD: "Payout is ON HOLD at PayPal (compliance or recipient review). Check the PayPal dashboard; do not pay again.",
+};
+
 export class PayPalRail implements PaymentRail {
   readonly rail = "paypal" as const;
   readonly mode: "sandbox" | "live";
@@ -37,6 +57,8 @@ export class PayPalRail implements PaymentRail {
     if (!req.vendor.paypalEmail) {
       return fail("Vendor has no PayPal email");
     }
+    if (!isValidAmountMinor(req.amountMinor)) return fail(`Invalid amount ${req.amountMinor}`);
+    if (!SUPPORTED_CURRENCIES.includes(req.currency)) return fail(`Unsupported currency ${req.currency}`);
     const body = {
       sender_batch_header: {
         sender_batch_id: req.idempotencyKey,
@@ -46,46 +68,72 @@ export class PayPalRail implements PaymentRail {
       items: [
         {
           recipient_type: "EMAIL",
-          amount: { value: (req.amountMinor / 100).toFixed(2), currency: req.currency },
+          amount: { value: minorToDecimal(req.amountMinor, 2), currency: req.currency },
           receiver: req.vendor.paypalEmail,
           note: req.memo,
           sender_item_id: req.obligationId,
         },
       ],
     };
+    // Authentication happens before anything is sent, so a failure here is definitive.
+    try {
+      await this.accessToken();
+    } catch (e) {
+      return fail(`PayPal authentication failed: ${(e as Error).message}`);
+    }
     const res = await this.call("POST", "/v1/payments/payouts", body, { "PayPal-Request-Id": req.idempotencyKey });
+    if (res.transportError) {
+      return unknown(`No answer from PayPal (${res.transportError}). The payout may or may not have been created.`);
+    }
     if (!res.ok) {
       const err = (res.json as { name?: string; message?: string; details?: unknown }) ?? {};
-      return fail(`${err.name ?? res.status}: ${err.message ?? "payout request rejected"}`, res.json);
+      const message = `${err.name ?? res.status}: ${err.message ?? "payout request rejected"}`;
+      // 5xx, 408 and bodies we cannot read are ambiguous: PayPal may have processed the request.
+      if (res.status >= 500 || res.status === 408 || res.json === null) return unknown(message, res.json);
+      return fail(message, res.json);
     }
-    const header = (res.json as { batch_header?: { payout_batch_id?: string; batch_status?: string } }).batch_header ?? {};
-    const q = quotePayPal(req.vendor, req.amountMinor, req.currency, "US");
+    const header = (res.json as { batch_header?: { payout_batch_id?: string; batch_status?: string } } | null)?.batch_header ?? {};
+    if (!header.payout_batch_id) {
+      return unknown("PayPal accepted the request but returned no batch id", res.json);
+    }
+    const q = quotePayPal(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
     return {
       status: "submitted",
-      externalId: header.payout_batch_id ?? null,
+      externalId: header.payout_batch_id,
       externalStatus: header.batch_status ?? null,
       feeMinor: q.feeMinor,
       receivedMinor: q.receiveAmountMinor,
       receivedCurrency: q.receiveCurrency,
       fxRate: q.fxRate,
       raw: res.json,
+      note: "Fee and recipient figures are modelled from PayPal's published fee schedule; PayPal reports the actual amounts after settlement.",
     };
   }
 
   async getStatus(externalId: string): Promise<SettlementStatus> {
     const res = await this.call("GET", `/v1/payments/payouts/${encodeURIComponent(externalId)}`);
-    if (!res.ok) return { status: "pending", externalStatus: `HTTP ${res.status}`, raw: res.json };
+    if (res.transportError || !res.ok) return { status: "pending", externalStatus: res.transportError ? "no answer" : `HTTP ${res.status}`, raw: res.json };
     const j = res.json as { batch_header?: { batch_status?: string }; items?: Array<{ transaction_status?: string }> };
     const batch = j.batch_header?.batch_status ?? "UNKNOWN";
     const item = j.items?.[0]?.transaction_status ?? batch;
+    const externalStatus = `${batch}/${item}`;
+    if (ATTENTION_ITEM[item]) return { status: "exception", message: ATTENTION_ITEM[item], externalStatus, raw: j };
     const confirmed = item === "SUCCESS";
-    const failed = ["FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED", "DENIED", "CANCELED"].includes(item) || batch === "DENIED" || batch === "CANCELED";
-    return { status: confirmed ? "confirmed" : failed ? "failed" : "pending", externalStatus: `${batch}/${item}`, raw: j };
+    const failed = FAILED_ITEM.has(item) || batch === "DENIED" || batch === "CANCELED";
+    return { status: confirmed ? "confirmed" : failed ? "failed" : "pending", externalStatus, raw: j };
   }
 
-  /** Verify a webhook signature with PayPal before trusting its payload. */
+  /** Verify a webhook signature with PayPal before trusting its payload. Fails closed. */
   async verifyWebhook(headers: Record<string, string>, rawBody: string): Promise<boolean> {
     if (!this.creds.webhookId) return false;
+    const required = ["paypal-auth-algo", "paypal-cert-url", "paypal-transmission-id", "paypal-transmission-sig", "paypal-transmission-time"];
+    if (required.some((h) => !headers[h])) return false;
+    let event: unknown;
+    try {
+      event = JSON.parse(rawBody);
+    } catch {
+      return false;
+    }
     const body = {
       auth_algo: headers["paypal-auth-algo"],
       cert_url: headers["paypal-cert-url"],
@@ -93,10 +141,15 @@ export class PayPalRail implements PaymentRail {
       transmission_sig: headers["paypal-transmission-sig"],
       transmission_time: headers["paypal-transmission-time"],
       webhook_id: this.creds.webhookId,
-      webhook_event: JSON.parse(rawBody),
+      webhook_event: event,
     };
+    try {
+      await this.accessToken();
+    } catch {
+      return false;
+    }
     const res = await this.call("POST", "/v1/notifications/verify-webhook-signature", body);
-    return res.ok && (res.json as { verification_status?: string }).verification_status === "SUCCESS";
+    return res.ok && (res.json as { verification_status?: string } | null)?.verification_status === "SUCCESS";
   }
 
   private async accessToken(): Promise<string> {
@@ -106,13 +159,25 @@ export class PayPalRail implements PaymentRail {
     return token;
   }
 
-  private async call(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<{ ok: boolean; status: number; json: unknown }> {
-    const token = await this.accessToken();
-    const r = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extraHeaders },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+  /** One HTTP call with a hard timeout. Never throws on transport problems; reports them so the caller can classify. */
+  private async call(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<{ ok: boolean; status: number; json: unknown; transportError?: string }> {
+    let token: string;
+    try {
+      token = await this.accessToken();
+    } catch (e) {
+      return { ok: false, status: 0, json: null, transportError: (e as Error).message };
+    }
+    let r: Response;
+    try {
+      r = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extraHeaders },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      return { ok: false, status: 0, json: null, transportError: (e as Error).name === "TimeoutError" ? "timeout" : (e as Error).message };
+    }
     let json: unknown = null;
     try {
       json = await r.json();
@@ -125,4 +190,8 @@ export class PayPalRail implements PaymentRail {
 
 function fail(message: string, raw: unknown = null): ExecutionResult {
   return { status: "failed", externalId: null, externalStatus: null, feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw, errorMessage: message };
+}
+
+function unknown(message: string, raw: unknown = null): ExecutionResult {
+  return { status: "unknown", externalId: null, externalStatus: null, feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw, errorMessage: message };
 }

@@ -11,6 +11,9 @@ function env(name: string, fallback = ""): string {
   return v === undefined || v === "" ? fallback : v;
 }
 
+/** PYUSD issuer on Stellar testnet. Must never be used on the public network. */
+export const TESTNET_PYUSD_ISSUER = "GBT2KJDKUZYZTQPCSR57VZT5NJHI4H7FOB5LT5FPRWSR7I5B4FS3UU7G";
+
 export const config = {
   appName: "Dueline",
   tagline: "Verified supplier payments, routed and reconciled automatically.",
@@ -29,8 +32,8 @@ export const config = {
       horizonUrl: env("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org"),
       /** Treasury account that pays out. Secret never leaves the server. */
       treasurySecret: env("STELLAR_TREASURY_SECRET"),
-      /** PYUSD issuer on the chosen network. Testnet issuer from Paxos docs; override via env. */
-      pyusdIssuer: env("STELLAR_PYUSD_ISSUER", "GBBK7XPX7Y6QJJ3WTUHZ2DOEAHWAWPKWBWLLZ6ILK7ZHTVPWKOEPQPSB"),
+      /** PYUSD issuer on the chosen network. Testnet issuer verified on Horizon testnet 2026-10-03 (1,395 holders). Mainnet: GDQE7IXJ4HUHV6RQHIUPRJSEZE4DRS5WY577O2FY6YQ5LVWZ7JZTU2V5. Override via env; STELLAR_NETWORK=public refuses the testnet issuer. */
+      pyusdIssuer: env("STELLAR_PYUSD_ISSUER", TESTNET_PYUSD_ISSUER),
       pyusdCode: env("STELLAR_PYUSD_CODE", "PYUSD"),
     },
   },
@@ -38,7 +41,7 @@ export const config = {
   ai: {
     mode: (env("AI_MODE", "mock") as AiMode),
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
-    model: env("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+    model: env("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
   },
 
   accounting: {

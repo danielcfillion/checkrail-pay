@@ -32,7 +32,7 @@ export default function OverviewPage() {
 
       <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
-        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={pluralise(o.counts.open, "open obligation")} />
+        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open obligation")}, ${o.counts.blocked} blocked held back`} />
         <Figure label="Paid, last 30 days" value={formatMoneySymbol(o.money.paid30dMinor, base)} note={pluralise(o.counts.settled30d, "settlement")} tone="settled" />
         <Figure label="Fees, last 30 days" value={formatMoneySymbol(o.money.fees30dMinor, base)} note={o.money.paid30dMinor ? `${((o.money.fees30dMinor / o.money.paid30dMinor) * 100).toFixed(1)}% of paid` : "no payments yet"} />
         <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpayments and duplicates</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />

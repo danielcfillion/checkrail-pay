@@ -1,13 +1,17 @@
 import type { PaymentRail, Rail } from "../domain/types";
 import { config } from "../config";
 import { MockPayPalRail, MockStellarRail } from "./mock";
+import { PayPalRail } from "./paypal";
+import { StellarRail } from "./stellar";
 
 let registry: Record<Rail, PaymentRail> | null = null;
 
 /**
  * Rail registry. In mock mode everything is deterministic and offline.
- * In live mode a rail that is missing credentials falls back to its mock
- * and the fallback is reported in `railModes()` so the UI can show it honestly.
+ *
+ * In live mode there is NO fallback: a rail with missing or invalid credentials
+ * throws. A silent fallback to the mock would "settle" obligations with fake
+ * hashes while no money moved.
  */
 export function getRails(): Record<Rail, PaymentRail> {
   if (registry) return registry;
@@ -15,24 +19,8 @@ export function getRails(): Record<Rail, PaymentRail> {
     registry = { paypal: new MockPayPalRail(), stellar: new MockStellarRail() };
     return registry;
   }
-  // Lazy require so mock-mode builds never load the live SDKs.
-  let paypal: PaymentRail;
-  let stellar: PaymentRail;
-  try {
-    const { PayPalRail } = require("./paypal") as typeof import("./paypal");
-    paypal = new PayPalRail();
-  } catch (e) {
-    console.warn(`[rails] PayPal live unavailable, using mock: ${(e as Error).message}`);
-    paypal = new MockPayPalRail();
-  }
-  try {
-    const { StellarRail } = require("./stellar") as typeof import("./stellar");
-    stellar = new StellarRail();
-  } catch (e) {
-    console.warn(`[rails] Stellar live unavailable, using mock: ${(e as Error).message}`);
-    stellar = new MockStellarRail();
-  }
-  registry = { paypal, stellar };
+  // Constructors throw on missing or invalid credentials; that is deliberate, see above.
+  registry = { paypal: new PayPalRail(), stellar: new StellarRail() };
   return registry;
 }
 
@@ -44,4 +32,9 @@ export function railModes(): Record<Rail, string> {
 /** For tests. */
 export function resetRails(): void {
   registry = null;
+}
+
+/** For tests: install specific rail implementations. */
+export function setRailsForTest(rails: Record<Rail, PaymentRail>): void {
+  registry = rails;
 }

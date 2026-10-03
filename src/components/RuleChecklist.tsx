@@ -1,3 +1,5 @@
+import { Linkified } from "./ui";
+
 type Rule = { ruleId: string; passed: boolean; severity: string; message: string };
 
 /** The policy engine's own output, verbatim, with pass/fail marks and severity. */
@@ -24,7 +26,7 @@ export function RuleChecklist({ rules, decision }: { rules: Rule[]; decision?: s
               </span>
               <span className={r.passed ? "" : "font-medium"}>
                 <span className="sr-only">{r.passed ? "Passed: " : "Failed: "}</span>
-                {r.message}
+                <Linkified text={r.message} />
               </span>
               <span className="dense whitespace-nowrap" style={{ color: r.passed ? "var(--ink-soft)" : colour }}>
                 {r.passed ? r.ruleId.replace(/_/g, " ") : r.severity}

@@ -9,9 +9,11 @@ import { RouteCompare } from "@/components/RouteCompare";
 import { RuleChecklist } from "@/components/RuleChecklist";
 import { Timeline } from "@/components/Timeline";
 import { CopyButton } from "@/components/CopyButton";
-import { KeyValue, Money, Panel, RailTag, StatePill } from "@/components/ui";
+import { KeyValue, Linkified, Money, Panel, RailTag, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 export default async function ObligationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -146,6 +148,28 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 </ul>
               </div>
             ) : null}
+            {d.agentRun ? (
+              <div className="mt-3 border-t pt-3 hairline">
+                <p className="dense text-ink-soft">Read by</p>
+                <p className="mt-0.5">
+                  {d.agentRun.engine === "claude" ? <>Claude <span className="num text-ink-soft">{d.agentRun.model}</span></> : <>Rules extractor <span className="text-ink-soft">(no model call; set AI_MODE=live to use Claude)</span></>}
+                </p>
+                <p className="dense mt-2 text-ink-soft">Agent tool calls</p>
+                {d.agentRun.toolCalls.length ? (
+                  <ul className="mt-1 space-y-1.5">
+                    {d.agentRun.toolCalls.map((t, i) => (
+                      <li key={i} className="rounded bg-[color:var(--paper)] px-2.5 py-1.5">
+                        <span className="num font-medium">{t.name}</span>
+                        {t.input && t.input !== "{}" ? <span className="num ml-2 text-xs text-ink-soft">{clip(t.input, 90)}</span> : null}
+                        {t.resultPreview ? <p className="num mt-0.5 text-xs text-ink-soft">{clip(t.resultPreview, 160)}</p> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-0.5 text-ink-soft">None. This reading used no tools{d.agentRun.engine === "rules" ? "" : " beyond the request and attached records"}.</p>
+                )}
+              </div>
+            ) : null}
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
           </Panel>
 
@@ -154,7 +178,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             {o.blockedReason ? (
               <p className="mt-3 rounded bg-blocked-soft px-3 py-2 text-blocked">
                 <span className="font-medium">Blocked: </span>
-                {o.blockedReason}
+                <Linkified text={o.blockedReason} />
               </p>
             ) : d.policyReasons.length ? (
               <ul className="mt-3 space-y-1 rounded bg-attention-soft px-3 py-2 text-attention">
@@ -207,7 +231,9 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                           </a>,
                         ] as [string, React.ReactNode],
                       ]
-                    : []),
+                    : d.settlement.rail === "stellar"
+                      ? [["Explorer", <span key="x" className="text-ink-soft">Simulated, not on chain (mock rail)</span>] as [string, React.ReactNode]]
+                      : []),
                   [
                     "Books",
                     d.accounting ? (
@@ -221,7 +247,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                   ],
                 ]}
               />
-              <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The recipient saw a {d.settlement.receivedCurrency ?? d.settlement.grossCurrency} {d.settlement.rail === "stellar" ? "bank deposit" : "PayPal credit"}; the rail is invisible to them.</p>
+              <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">{d.settlement.note ?? "Delivery to the recipient is modelled from the quote, not observed."}</p>
             </Panel>
           ) : null}
 

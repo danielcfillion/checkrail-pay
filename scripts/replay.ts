@@ -38,7 +38,7 @@ async function main() {
   const rb = await executeObligation(db, b.id, { actor: "user:daniel" });
   const sb = db.select().from(settlements).where(eq(settlements.obligationId, b.id)).get()!;
   console.log(`   approved -> ${rb.status} -> ${get(b.id).state}; tx ${sb.externalId}`);
-  console.log(`   ${sb.explorerUrl}; fee ${fmt(sb.feeMinor, sb.grossCurrency)}; recipient gets ${fmt(sb.receivedMinor!, sb.receivedCurrency!)}`);
+  console.log(`   ${sb.explorerUrl ?? "(simulated hash, not on chain)"}; fee ${fmt(sb.feeMinor, sb.grossCurrency)}; recipient gets ${fmt(sb.receivedMinor!, sb.receivedCurrency!)}`);
 
   const { count } = exportPendingCsv(db);
   const audits = db.select().from(auditEntries).all().length;

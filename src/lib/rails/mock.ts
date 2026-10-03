@@ -26,7 +26,7 @@ export class MockPayPalRail implements PaymentRail {
   }
 
   async execute(req: ExecutionRequest): Promise<ExecutionResult> {
-    const q = quotePayPal(req.vendor, req.amountMinor, req.currency, "US");
+    const q = quotePayPal(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
     if (shouldFail(req)) {
       return { status: "failed", externalId: null, externalStatus: "DENIED", feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: { mock: true }, errorMessage: "RECEIVER_UNCONFIRMED: recipient account cannot receive funds" };
     }
@@ -57,7 +57,7 @@ export class MockStellarRail implements PaymentRail {
   }
 
   async execute(req: ExecutionRequest): Promise<ExecutionResult> {
-    const q = quoteStellar(req.vendor, req.amountMinor, req.currency, "US");
+    const q = quoteStellar(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
     if (shouldFail(req)) {
       return { status: "failed", externalId: null, externalStatus: "tx_failed", feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: { mock: true }, errorMessage: "op_no_trust: destination has no trustline for PYUSD" };
     }
@@ -66,7 +66,7 @@ export class MockStellarRail implements PaymentRail {
       status: "confirmed", // Stellar finality is ~5s; mock confirms immediately
       externalId: hash,
       externalStatus: "success",
-      explorerUrl: `https://stellar.expert/explorer/testnet/tx/${hash}`,
+      explorerUrl: null, // mock hashes are not on chain; never link to an explorer
       feeMinor: q.feeMinor,
       receivedMinor: q.receiveAmountMinor,
       receivedCurrency: q.receiveCurrency,
@@ -76,6 +76,6 @@ export class MockStellarRail implements PaymentRail {
   }
 
   async getStatus(externalId: string): Promise<SettlementStatus> {
-    return { status: "confirmed", externalStatus: "success", explorerUrl: `https://stellar.expert/explorer/testnet/tx/${externalId}`, raw: { mock: true, hash: externalId, successful: true } };
+    return { status: "confirmed", externalStatus: "success", explorerUrl: null, raw: { mock: true, hash: externalId, successful: true } };
   }
 }

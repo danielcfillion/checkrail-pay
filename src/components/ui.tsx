@@ -116,3 +116,17 @@ export function RowLink({ href, children, className = "" }: { href: string; chil
     </Link>
   );
 }
+
+/** Turns "obligation obl_xxx (settled)" in a policy message into a link to that obligation. */
+export function Linkified({ text }: { text: string }): ReactNode {
+  const parts = text.split(/(obl_[a-z0-9]+)/i);
+  return parts.map((p, i) =>
+    /^obl_[a-z0-9]+$/i.test(p) ? (
+      <Link key={i} href={`/obligations/${p}`} className="link num">
+        {p}
+      </Link>
+    ) : (
+      <span key={i}>{p}</span>
+    )
+  );
+}

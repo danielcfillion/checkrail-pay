@@ -14,9 +14,12 @@ import { approveObligation, confirmSettlement, executeObligation, ingestObligati
 
 export const DEMO_BUSINESS_ID = "biz_ridgeline";
 
+/** In live mode, point the Stellar demo recipient at a real funded testnet account (see scripts/stellar-setup.ts). */
+const STELLAR_DEMO_RECIPIENT = process.env.DEMO_STELLAR_RECIPIENT ?? "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYM9F3H6VCC4DEMONSTRATION";
+
 export const DEMO_VENDORS = [
   { id: "ven_maria", name: "Maria Santos", role: "guide", country: "PH", email: "maria.santos@example.com", preferredRail: null, paypalEmail: "maria.santos@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BDO ****4417", notes: "Lead guide, Palawan and Ha Giang departures. Prefers to be paid the day a trip ends." },
-  { id: "ven_ana", name: "Ana Reyes", role: "guide", country: "PH", email: "ana.reyes@example.com", preferredRail: "stellar", paypalEmail: "ana.reyes@example.com", stellarAccount: "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYM9F3H6VCC4DEMONSTRATION", bankCountry: "PH", bankCurrency: "PHP", bankLabel: "UnionBank ****0923", notes: "Asked for the faster rail after a PayPal withdrawal took five days in August." },
+  { id: "ven_ana", name: "Ana Reyes", role: "guide", country: "PH", email: "ana.reyes@example.com", preferredRail: "stellar", paypalEmail: "ana.reyes@example.com", stellarAccount: STELLAR_DEMO_RECIPIENT, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "UnionBank ****0923", notes: "Asked for the faster rail after a PayPal withdrawal took five days in August." },
   { id: "ven_phuong", name: "Phuong Transport", role: "driver", country: "VN", email: "phuong.transport@example.com", preferredRail: null, paypalEmail: "phuong.transport@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Vietcombank ****7781", notes: "16-seat van and driver for Ha Giang loop. Contract rate USD 200/day." },
   { id: "ven_linh", name: "Linh Family Homestay", role: "homestay", country: "VN", email: "linh.homestay@example.com", preferredRail: null, paypalEmail: "linh.homestay@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "BIDV ****2206", notes: "Du Gia village. USD 18 per guest per night including dinner." },
   { id: "ven_jake", name: "Jake Morrison", role: "creator", country: "US", email: "jake@example.com", preferredRail: null, paypalEmail: "jake@example.com", stellarAccount: "GBJAKE4Y2ZQ6QLPB3HQ5N3TBKX5TNFBN2V4ZL2RLJMK6UJCDEMONSTR", bankCountry: "US", bankCurrency: "USD", bankLabel: "Chase ****1180", notes: "Video content for departures. Invoices monthly." },
@@ -30,8 +33,8 @@ export function resetDemo(db: Db): void {
   }
 }
 
-export async function seedDemo(db: Db, opts: { history?: boolean } = {}): Promise<{ story: { blockedMismatch: string; blockedDuplicate: string; paypal: string; stellar: string } }> {
-  const { history = true } = opts;
+export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boolean } = {}): Promise<{ story: { blockedMismatch: string; blockedDuplicate: string; paypal: string; stellar: string } }> {
+  const { history = true, extras = false } = opts;
   resetDemo(db);
   const ts = new Date().toISOString();
   db.insert(businesses).values({ id: DEMO_BUSINESS_ID, name: "Ridgeline Expeditions LLC", baseCurrency: "USD", country: "US", policyJson: JSON.stringify(DEFAULT_POLICY), createdAt: ts }).run();
@@ -42,6 +45,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean } = {}): Promis
   }
 
   if (history) await seedHistory(db);
+  if (extras) await seedExtras(db);
 
   // ---- The story ----
 
@@ -121,7 +125,14 @@ async function seedHistory(db: Db): Promise<void> {
     backdate(db, id, it.days);
   }
 
-  // One obligation waiting on evidence and one awaiting approval, so the inbox is not empty.
+}
+
+/**
+ * Two extra open obligations (one waiting on evidence, one awaiting approval).
+ * Off by default so the dashboard matches the four-obligation story; pass
+ * { extras: true } to see the inbox with more texture.
+ */
+async function seedExtras(db: Db): Promise<void> {
   await ingestObligation(db, {
     businessId: DEMO_BUSINESS_ID,
     sourceType: "operator_instruction",

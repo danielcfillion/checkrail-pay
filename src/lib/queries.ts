@@ -49,7 +49,19 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
     aiMissing: JSON.parse(row.o.aiMissingJson ?? "[]") as string[],
     policyReasons: JSON.parse(row.o.policyReasonsJson ?? "[]") as string[],
     policyRules: latestPolicyRules(id, db),
+    agentRun: latestAgentRun(id, db),
   };
+}
+
+export type AgentRunView = { engine: "claude" | "rules"; model: string | null; toolCalls: Array<{ name: string; input: string; resultPreview: string }> };
+
+function latestAgentRun(id: string, db: Db): AgentRunView | null {
+  const e = db.select().from(auditEntries).where(and(eq(auditEntries.obligationId, id), eq(auditEntries.action, "ai.interpreted"))).orderBy(desc(auditEntries.seq)).get();
+  if (!e?.detailJson) return null;
+  const d = JSON.parse(e.detailJson) as { engine?: string; model?: string | null; toolCalls?: unknown[] };
+  const calls = (d.toolCalls ?? []).map((t) => (typeof t === "string" ? { name: t, input: "", resultPreview: "" } : (t as { name: string; input: string; resultPreview: string })));
+  const engine = d.engine === "claude" || e.actor.startsWith("ai:") && e.actor !== "ai:rules" ? "claude" : "rules";
+  return { engine, model: d.model ?? null, toolCalls: calls };
 }
 
 function latestPolicyRules(id: string, db: Db) {
@@ -143,7 +155,7 @@ export function getOverview(db: Db = getDb()) {
     business: getBusiness(db),
     counts: {
       open: all.filter((r) => openStates.includes(r.state as ObligationState)).length,
-      needsAction: all.filter((r) => ["needs_evidence", "awaiting_approval", "blocked", "failed"].includes(r.state)).length,
+      needsAction: all.filter((r) => ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"].includes(r.state)).length,
       awaitingApproval: all.filter((r) => r.state === "awaiting_approval").length,
       blocked: blocked.length,
       readyToPay: all.filter((r) => r.state === "approved").length,

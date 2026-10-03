@@ -7,6 +7,8 @@
   --sheet: #ffffff;
   --ink: #10233a;
   --ink-soft: #5b6b7c;
+  --primary: #10233a;
+  --primary-ink: #ffffff;
   --rule: rgb(91 107 124 / 0.24);
   --rule-strong: rgb(91 107 124 / 0.5);
   --settled: #0e7c5b;
@@ -29,6 +31,8 @@
     --sheet: #15222e;
     --ink: #e6ecf2;
     --ink-soft: #93a3b4;
+  --primary: #2a74c9;
+  --primary-ink: #ffffff;
     --rule: rgb(147 163 180 / 0.24);
     --rule-strong: rgb(147 163 180 / 0.5);
     --settled: #2fa37f;
@@ -51,6 +55,8 @@
   --sheet: #15222e;
   --ink: #e6ecf2;
   --ink-soft: #93a3b4;
+  --primary: #2a74c9;
+  --primary-ink: #ffffff;
   --rule: rgb(147 163 180 / 0.24);
   --rule-strong: rgb(147 163 180 / 0.5);
   --settled: #2fa37f;
@@ -196,12 +202,12 @@ summary:focus-visible {
   cursor: default;
 }
 .btn-primary {
-  background: var(--ink);
-  color: var(--sheet);
-  border-color: var(--ink);
+  background: var(--primary);
+  color: var(--primary-ink);
+  border-color: var(--primary);
 }
 .btn-primary:hover {
-  border-color: var(--ink);
+  border-color: var(--primary);
   opacity: 0.9;
 }
 .btn-danger {
