@@ -14,10 +14,27 @@ export interface RoutingDecision {
  * Order of precedence:
  *   1. Vendor preference, if that rail is available.
  *   2. Domestic obligations go PayPal when available (familiar, instant, no FX).
- *   3. Cross-border: the rail that delivers more to the recipient wins; ties go to the faster one.
+ *   3. Cross-border: compare what the recipient gets per unit the sender actually spends
+ *      (PayPal's fee is charged on top, Stellar's is taken out of the amount, so delivered
+ *      amount alone is not comparable). A difference under TIE_BPS is a tie, and ties go to
+ *      PayPal because it is the rail whose whole path is executed end to end today.
  *   4. Whatever is available.
  *   5. Nothing available: hold with the reasons.
  */
+/** Differences in effective rate below this many basis points count as a tie. */
+export const TIE_BPS = 50;
+
+/** What the sender spends for this quote: PayPal charges its fee on top, Stellar's fee comes out of the amount. */
+export function senderOutlayMinor(q: Pick<RouteQuote, "rail" | "sendAmountMinor" | "feeMinor">): number {
+  return q.rail === "paypal" ? q.sendAmountMinor + q.feeMinor : q.sendAmountMinor;
+}
+
+/** Recipient-currency units delivered per 1.00 of sender currency spent. */
+export function effectiveRate(q: Pick<RouteQuote, "rail" | "sendAmountMinor" | "feeMinor" | "receiveAmountMinor">): number {
+  const outlay = senderOutlayMinor(q);
+  return outlay > 0 ? q.receiveAmountMinor / outlay : 0;
+}
+
 export function chooseRoute(
   vendor: VendorPayoutProfile,
   businessCountry: string,
@@ -50,19 +67,26 @@ export function chooseRoute(
     };
   }
 
-  // Both available: compare delivered amount in the recipient's currency.
-  const sorted = [...available].sort((a, b) => {
-    if (b.receiveAmountMinor !== a.receiveAmountMinor) return b.receiveAmountMinor - a.receiveAmountMinor;
-    return a.etaSeconds - b.etaSeconds;
-  });
-  const best = sorted[0];
-  const runnerUp = sorted[1];
-  const delta = best.receiveAmountMinor - runnerUp.receiveAmountMinor;
-  const pct = runnerUp.receiveAmountMinor > 0 ? ((delta / runnerUp.receiveAmountMinor) * 100).toFixed(1) : "0.0";
-  const etaNote = best.etaSeconds < runnerUp.etaSeconds ? " and settles faster" : best.etaSeconds > runnerUp.etaSeconds ? ` (${label(runnerUp.rail)} is faster)` : "";
+  // Both available: compare delivered amount per unit the sender spends.
+  const pp = byRail.paypal!;
+  const st = byRail.stellar!;
+  const rp = effectiveRate(pp);
+  const rs = effectiveRate(st);
+  const gapBps = Math.round((Math.abs(rp - rs) / Math.max(rp, rs, 1e-9)) * 10_000);
+  const fmtRate = (r: number) => r.toFixed(2);
+  if (gapBps < TIE_BPS) {
+    return {
+      rail: "paypal",
+      reason: `Effectively equal cost: ${pp.receiveCurrency} ${fmtRate(rp)} per ${pp.sendCurrency} spent on PayPal against ${fmtRate(rs)} on Stellar (${(gapBps / 100).toFixed(2)}% apart). PayPal wins the tie because its whole path runs end to end today${st.etaSeconds < pp.etaSeconds ? "; Stellar is faster" : ""}.`,
+      quotes,
+    };
+  }
+  const best = rp > rs ? pp : st;
+  const other = best === pp ? st : pp;
+  const etaNote = best.etaSeconds < other.etaSeconds ? " and settles faster" : best.etaSeconds > other.etaSeconds ? ` (${label(other.rail)} is faster)` : "";
   return {
     rail: best.rail,
-    reason: `${label(best.rail)} delivers ${fmtMinor(delta, best.receiveCurrency)} more (${pct}%) to ${vendor.name}${etaNote}.`,
+    reason: `${label(best.rail)} delivers ${(gapBps / 100).toFixed(1)}% more per ${best.sendCurrency} spent (${best.receiveCurrency} ${fmtRate(effectiveRate(best))} against ${fmtRate(effectiveRate(other))}) to ${vendor.name}${etaNote}.`,
     quotes,
   };
 }
@@ -71,6 +95,3 @@ export function label(rail: Rail): string {
   return rail === "paypal" ? "PayPal" : "Stellar";
 }
 
-function fmtMinor(minor: number, currency: string): string {
-  return `${currency} ${(minor / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}

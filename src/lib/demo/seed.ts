@@ -70,7 +70,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     actor: "user:daniel",
   });
 
-  // A. Clean domestic-corridor-like case (US business -> PH guide) under threshold: auto-approved, PayPal wins on delivered amount at this size.
+  // A. Clean domestic-corridor-like case (US business -> PH guide) under threshold: auto-approved, effective cost is a tie with Stellar, and ties go to PayPal.
   const paypal = await ingestObligation(db, {
     businessId: DEMO_BUSINESS_ID,
     sourceType: "job_completion",
@@ -79,7 +79,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     actor: "system:booking-webhook",
   });
 
-  // B. Cross-border above threshold: needs approval; Stellar delivers more and faster; vendor prefers it.
+  // B. Cross-border above threshold: needs approval; vendor prefers Stellar, and it is cheaper per dollar spent at this size.
   const stellar = await ingestObligation(db, {
     businessId: DEMO_BUSINESS_ID,
     sourceType: "job_completion",

@@ -12,7 +12,7 @@ A Xero customer with overseas contractors (a tour operator, an agency with freel
 
 ## What Dueline writes into Xero
 
-For every settled obligation, three things that reconcile to the cent:
+For every settled obligation, four records that reconcile to the cent:
 
 - **Contact**: the vendor, created or matched by name, with country on the address.
 - **Bill (ACCPAY)**: reference, bill date, description, gross amount and currency, account code.
@@ -24,7 +24,7 @@ The mapping is built and exercised by tests and the CSV exporter today. OAuth to
 ## Why this is good for Xero
 
 - It removes the hardest manual reconciliation in the SME cross-border book: payouts to individuals by email or local bank account, with fees and FX.
-- It brings stablecoin settlement into Xero as ordinary bills and payments, with the fee and FX visible, which is how an accountant can sign off on it. Nobody else is doing this for SMEs in a way bookkeepers will accept.
+- It brings stablecoin settlement into Xero as ordinary bills and payments, with the fee and FX recorded against the quote, which is how an accountant can sign off on it. (On testnet the Stellar settlement records the PYUSD actually sent and the network fee; the PHP figure stays a labelled estimate until the anchor leg is built.) Other tools reconcile payouts too; the difference here is that the check on the request happens before the money moves.
 - The audit log behind every record (what was requested, what evidence was checked, which rule fired, who approved, which rail paid, with idempotency keys) is exactly what an advisor wants when a client asks "why did we pay this".
 - The customer is already on Xero. Dueline makes Xero the system of record for the whole payment, not just the aftermath.
 

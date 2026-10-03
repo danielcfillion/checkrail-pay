@@ -1,3 +1,4 @@
+import { senderOutlayMinor } from "@/lib/domain/routing";
 import { formatFxRate, formatMoney, formatMoneySymbol, humaniseEta, railLabel } from "@/lib/format";
 
 export type Quote = {
@@ -15,7 +16,7 @@ export type Quote = {
   explanation: string | null;
 };
 
-/** Both rails side by side. The delivered amount is the largest figure after the obligation amount. */
+/** Both rails side by side. The delivered amount is the largest figure; "Sender pays" puts both rails on the same footing (PayPal's fee is on top, Stellar's comes out of the amount). */
 export function RouteCompare({ quotes, selectedRail, routeReason }: { quotes: Quote[]; selectedRail: string | null; routeReason: string | null }) {
   const order = ["paypal", "stellar"];
   const sorted = [...quotes].sort((a, b) => order.indexOf(a.rail) - order.indexOf(b.rail));
@@ -41,6 +42,8 @@ export function RouteCompare({ quotes, selectedRail, routeReason }: { quotes: Qu
                   <dl className="num mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
                     <dt className="text-ink-soft">Fee</dt>
                     <dd>{formatMoney(q.feeMinor, q.sendCurrency)}</dd>
+                    <dt className="text-ink-soft">Sender pays</dt>
+                    <dd>{formatMoney(senderOutlayMinor({ rail: q.rail as "paypal" | "stellar", sendAmountMinor: q.sendAmountMinor ?? 0, feeMinor: q.feeMinor ?? 0 }), q.sendCurrency)}</dd>
                     <dt className="text-ink-soft">Rate</dt>
                     <dd>{q.receiveCurrency === q.sendCurrency ? "no FX" : `1 ${q.sendCurrency} = ${formatFxRate(q.fxRate)} ${q.receiveCurrency}`}</dd>
                     <dt className="text-ink-soft">Arrives</dt>

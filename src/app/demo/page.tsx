@@ -24,7 +24,7 @@ const STORY: Array<{ ref: string; title: string; line: string; pick: (rows: Obli
   {
     ref: "JOB-HG4D-0921",
     title: "A clean one, paid over PayPal",
-    line: "Under the $250 threshold and matching its trip sheet, this cleared on its own. PayPal delivers more pesos at this size, so the router picks it. Pay, and watch the marker travel.",
+    line: "Under the $250 threshold and matching its trip sheet, this cleared on its own. Both rails cost the same within a fraction of a percent at this size, so the router takes PayPal, whose whole path runs end to end today. Pay, and watch the marker travel.",
     pick: (rows) => rows.find((r) => r.sourceRef === "JOB-HG4D-0921"),
   },
   {

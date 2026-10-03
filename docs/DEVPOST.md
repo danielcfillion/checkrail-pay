@@ -26,11 +26,11 @@ An agent reads the raw request and attached evidence, resolves the vendor, extra
 
 A deterministic policy engine decides. Eight rules: known vendor, amount present, evidence attached, amount within tolerance of evidence, no duplicate reference, recipient details verified, corridor allow-listed, AI confidence above threshold. Outcome: block, hold, require approval or auto-execute. Same input, same output, no model in the loop.
 
-A routing rule quotes PayPal Payouts and Stellar PYUSD (via a Philippine anchor) side by side and picks by vendor preference, then delivered amount, then speed. The operator sees both and can override.
+A routing rule quotes PayPal Payouts and Stellar PYUSD (via a Philippine anchor) side by side and picks by vendor preference, then effective cost per dollar the sender actually spends (PayPal's fee is on top, Stellar's comes out of the amount), with near-ties going to PayPal. The operator sees both and can override.
 
 Execution re-runs policy, then calls PayPal Payouts or signs a Stellar payment, with an idempotency key on every attempt. Settlement is confirmed by polling. Every event lands in one audit log and exports as accounting-ready CSV with a Xero bill, payment and fee mapping.
 
-The demo: a US tour operator with four open obligations. One is USD 160 over the trip sheet, blocked. One duplicates a job settled 17 days earlier, blocked. A USD 180 guide fee is auto-approved and paid by PayPal, which delivers more pesos at that size. A USD 750 fee needs human approval, then pays over Stellar in minutes instead of days because the guide asked for the faster rail. Result: 2 settled, 2 errors prevented, USD 340 saved, 2 records exported.
+The demo: a US tour operator with four open obligations. One is USD 160 over the trip sheet, blocked. One duplicates a job settled 17 days earlier, blocked. A USD 180 guide fee is auto-approved and paid by PayPal, because at that size the two rails cost the same within a fraction of a percent and PayPal's path runs end to end today. A USD 750 fee needs human approval, then pays over Stellar in minutes instead of days because the guide asked for the faster rail. Result: 2 settled, 2 errors prevented, USD 340 saved, 2 records exported.
 
 ## How we built it
 

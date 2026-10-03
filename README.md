@@ -16,7 +16,7 @@ Dueline puts five fixed stations between "someone says we owe this" and "it is i
 
 1. **Read.** An agent reads the raw request and the attached evidence: Claude when `AI_MODE=live` and an API key is set, a rule-based extractor otherwise (the default, and the only path exercised so far). In live mode Claude also has read-only PayPal Agent Toolkit tools (`list_transactions`, `list_invoices`, `get_invoice`, `get_merchant_insights`) so it can check PayPal's own records. It returns a structured interpretation, a confidence score and plain-language flags. It cannot pay anyone.
 2. **Verified.** A deterministic policy engine (a pure function, no network, no model) runs eight rules: known vendor, amount present, evidence attached, amount matches evidence within tolerance, no duplicate reference, recipient details verified, corridor allow-listed, AI confidence above threshold. It returns block, hold, require approval or auto-execute.
-3. **Routed.** Both rails are quoted. A static rule picks the default: vendor preference first, then the rail that delivers more to the recipient, ties go to the faster one. Both quotes are shown to the operator.
+3. **Routed.** Both rails are quoted. A static rule picks the default: vendor preference first, then the rail that delivers more to the recipient per dollar the sender actually spends (PayPal's fee is charged on top, Stellar's comes out of the amount). A gap under 0.5% is a tie, and ties go to PayPal because its whole path is executed end to end today. Both quotes are shown to the operator.
 4. **Paid.** Execution re-runs policy, then calls PayPal Payouts or signs a Stellar PYUSD payment. Every attempt carries an idempotency key.
 5. **Reconciled.** Settlement is confirmed by polling the rail. The record lands in an audit log and exports as CSV with a Xero bill, payment and fee mapping ready for OAuth.
 
@@ -32,8 +32,8 @@ Ridgeline Expeditions LLC, a US tour operator, has four open obligations.
 |---|---|---|---|
 | 1 | Phuong Transport, INV-2026-0152, requests USD 960 | **Blocked** | The trip sheet says 4 vehicle-days x USD 200 = USD 800. The request is USD 160 over. Operator can correct to USD 800 and it re-enters the flow. |
 | 2 | Maria Santos, JOB-HG4D-0914 | **Blocked** | The reference was settled 17 days earlier. Duplicate. |
-| 3 | Maria Santos, JOB-HG4D-0921, USD 180 | **Auto-approved, paid via PayPal** | Under the USD 250 auto-execute threshold, evidence matches. At this size PayPal delivers more PHP than Stellar via the anchor. |
-| 4 | Ana Reyes, JOB-PAL3D-0927, USD 750 | **Needs approval, paid via Stellar** | Above threshold, so a human approves. Stellar delivers slightly more PHP and settles in about 15 minutes instead of 1 to 2 days. Ana asked for the faster rail. Explorer link in the settlement details. |
+| 3 | Maria Santos, JOB-HG4D-0921, USD 180 | **Auto-approved, paid via PayPal** | Under the USD 250 auto-execute threshold, evidence matches. At this size the two rails are within 0.1% per dollar spent (PHP 59.54 vs 59.58), so the tie goes to PayPal. |
+| 4 | Ana Reyes, JOB-PAL3D-0927, USD 750 | **Needs approval, paid via Stellar** | Above threshold, so a human approves. Stellar delivers about 2% more PHP per dollar spent and settles in about 15 minutes instead of 1 to 2 days. Ana asked for the faster rail. Explorer link in the settlement details. |
 
 Outcome: 2 settled, 2 errors prevented (USD 340 that would have left the business), 2 accounting records exported.
 
@@ -128,7 +128,7 @@ Rails: paypal=mock stellar=mock
    Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00 (+USD 160.00)
 2. JOB-HG4D-0914: BLOCKED
    Reference JOB-HG4D-0914 was already used by obligation obl_ac31263aad534dee (settled)
-3. JOB-HG4D-0921 USD 180.00: approved -> paypal (PayPal delivers PHP 207.24 more (1.9%) to Maria Santos (Stellar is faster).)
+3. JOB-HG4D-0921 USD 180.00: approved -> paypal (Effectively equal cost: PHP 59.54 per USD spent on PayPal against 59.58 on Stellar (0.07% apart). PayPal wins the tie because its whole path runs end to end today; Stellar is faster.)
    submitted -> settled; batch 78DA16445A174; fee USD 3.60; recipient gets PHP 10,931.31
 4. JOB-PAL3D-0927 USD 750.00: awaiting_approval -> stellar (Stellar is Ana Reyes's stated preference.)
    approved -> confirmed -> settled; tx d8392fc56753ff38cc496c44a53fe87358cfa71de96e4da570850e81b19f9907
