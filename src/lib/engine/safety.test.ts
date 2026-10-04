@@ -322,7 +322,7 @@ describe("H7: velocity cap and untrusted evidence", () => {
     ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
-      rawInput: `Invoice ${ref} from Kalaw Trekking Collective: porters, total USD 250.`,
+      rawInput: `Invoice ${ref} from Kalaw Trekking Collective: porters for trip KAL-2D-${ref.replace(/\D/g, "").padStart(4, "0")}, total USD 250.`,
       evidence: [{ kind: "invoice", label: `Invoice ${ref}`, amountMinor: 25_000, currency: "USD", reference: ref, excerpt: "USD 250.00" }],
       evidenceSource: source,
       actor: "system:email-ingest",

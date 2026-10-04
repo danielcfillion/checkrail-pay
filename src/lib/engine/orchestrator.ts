@@ -5,7 +5,7 @@ import { DEFAULT_POLICY, type AiInterpretation, type ApprovalPolicy, type Eviden
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
-import { hashPayoutDetails, idempotencyKey, newId, now } from "../domain/ids";
+import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { isLiveRails } from "../config";
 import { runObligationAgent } from "../ai/agent";
@@ -148,11 +148,17 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, state: obligations.state, updatedAt: obligations.updatedAt })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
+        .map((p) => {
+          const ev = db.select({ reference: evidenceTable.reference, label: evidenceTable.label }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
+          return { ...p, keys: jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label])) };
+        })
     : [];
+  const myEvidence = listEvidence(db, obligationId);
+  const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label]));
   // Distinct people, not rows: one person approving twice is still one approval.
   const approvalsCount = new Set(db.select({ actor: approvals.actor }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().map((a) => a.actor)).size;
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -163,11 +169,12 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const outcome = evaluatePolicy(policy, {
     obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId },
     vendor,
-    evidence: listEvidence(db, obligationId),
+    evidence: myEvidence,
     ai,
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
-    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState })),
+    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt })),
+    jobKeys: myJobKeys,
     approvalsCount,
     vendorRecentMinor,
   });

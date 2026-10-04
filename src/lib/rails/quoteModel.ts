@@ -69,11 +69,13 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
   }
   const s = c.stellar;
   const needsAnchor = c.recipientCurrency !== "USD";
+  // Until the anchor leg (SEP-31) is built, the adapter can only pay a Stellar wallet, so a wallet is
+  // required on every corridor. The quote must never say "available" for a payment execute() cannot make.
+  if (!vendor.stellarAccount) {
+    return { ...base, available: false, unavailableReason: `${vendor.name} has no Stellar wallet on file${needsAnchor ? " (bank payout via the anchor is not built yet)" : ""}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
+  }
   if (needsAnchor && !vendor.bankCountry) {
     return { ...base, available: false, unavailableReason: `${vendor.name} has no bank payout details for the anchor`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
-  }
-  if (!needsAnchor && !vendor.stellarAccount) {
-    return { ...base, available: false, unavailableReason: `${vendor.name} has no Stellar wallet on file`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
   }
   if (s.anchorMaxUsd && amountMinor > s.anchorMaxUsd * 100) {
     return { ...base, available: false, unavailableReason: `Above anchor limit of $${s.anchorMaxUsd} per transfer (${s.anchor})`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };

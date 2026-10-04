@@ -62,6 +62,19 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     rules.push(warn("evidence_provenance", "Evidence supplied by operator, not system; check it against the source documents"));
   }
 
+  // R3c: the evidence must name the vendor the agent chose. The agent proposes vendorId; this rule binds it.
+  if (vendor && evidence.length > 0) {
+    const parts = vendor.name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+    // Bound when a record names the vendor, or when a record is explicitly the document for this reference.
+    const named = evidence.some((e) => {
+      const text = `${e.label} ${e.excerpt ?? ""}`.toLowerCase();
+      const byName = parts.some((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text));
+      const byRef = Boolean(obligation.sourceRef && e.reference && e.reference.toLowerCase() === obligation.sourceRef.toLowerCase());
+      return byName || byRef;
+    });
+    rules.push(named ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name} or carry this reference; confirm the payee`));
+  }
+
   // R4: amount matches evidence within tolerance
   const evidenced = evidence.filter((e) => e.amountMinor != null && e.currency);
   if (hasAmount && evidenced.length > 0) {
@@ -89,26 +102,41 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     }
   }
 
-  // R5: duplicate reference / amount for same vendor
-  if (obligation.sourceRef) {
-    const dupRef = input.priorSourceRefs.find(
-      (p) => p.obligationId !== obligation.id && p.sourceRef && p.sourceRef.toLowerCase() === obligation.sourceRef!.toLowerCase() && p.state !== "cancelled"
-    );
-    if (dupRef) {
-      rules.push(block("no_duplicate", `Reference ${obligation.sourceRef} was already used by obligation ${dupRef.obligationId} (${dupRef.state})`));
+  // R5: duplicate job for the same vendor. Three layers:
+  //   a) the same reference string;
+  //   b) any shared job identifier (trip id, invoice number, evidence reference), which catches
+  //      the same job re-invoiced under a new number;
+  //   c) same vendor, same amount, settled in the last 30 days with no shared identifier: a warning that forces approval.
+  {
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed");
+    const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
+    if (obligation.sourceRef) myKeys.add(obligation.sourceRef.toLowerCase());
+    const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && p.sourceRef.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
+    const byKey = byRef ? undefined : live.find((p) => (p.keys ?? []).some((k) => myKeys.has(k) && !k.startsWith("~agr") && !k.startsWith("agr-")));
+    if (byRef) {
+      rules.push(block("no_duplicate", `Reference ${obligation.sourceRef} was already used by obligation ${byRef.obligationId} (${byRef.state})`));
+    } else if (byKey) {
+      const shared = (byKey.keys ?? []).find((k) => myKeys.has(k))!;
+      rules.push(block("no_duplicate", `Same job as obligation ${byKey.obligationId} (${byKey.state}): both name ${shared.replace(/^~/, "").toUpperCase()}${obligation.sourceRef ? `, this one under a new reference ${obligation.sourceRef}` : ""}`));
     } else {
-      rules.push(pass("no_duplicate", "Reference has not been paid before"));
+      // Only when this obligation carries no job identifier beyond its own reference. A guide paid the same
+      // day rate for a different, named trip is routine; an invoice number alone with a familiar amount is not.
+      const ownRef = obligation.sourceRef?.toLowerCase();
+      const independentKeys = [...myKeys].filter((k) => k !== ownRef && !k.startsWith("~") && k !== ownRef?.replace(/^(inv|job|bk|po|ref|trip|tour)-/, ""));
+      const coreOfRef = ownRef ? `~${ownRef.replace(/^(inv|job|bk|po|ref|trip|tour)-/, "").replace(/-/g, "")}` : null;
+      const hasOwnJobId = independentKeys.length > 0 || [...myKeys].some((k) => k.startsWith("~") && k !== coreOfRef);
+      const since = Date.now() - 30 * 86_400_000;
+      const sameAmount = obligation.amountMinor && !hasOwnJobId
+        ? live.find((p) => p.amountMinor === obligation.amountMinor && ["settled", "sent", "approved", "execution_pending"].includes(p.state) && (!p.updatedAt || new Date(p.updatedAt).getTime() >= since))
+        : undefined;
+      if (sameAmount) {
+        rules.push(warn("no_duplicate", `Same amount as obligation ${sameAmount.obligationId} (${sameAmount.state}) for this vendor in the last 30 days; confirm this is a different job`));
+      } else {
+        rules.push(pass("no_duplicate", obligation.sourceRef ? "Reference and job identifiers have not been paid before" : "No earlier obligation matches this job"));
+      }
     }
-  } else {
-    const dupAmount = input.priorSourceRefs.find(
-      (p) => p.obligationId !== obligation.id && p.amountMinor === obligation.amountMinor && ["sent", "settled", "approved", "execution_pending"].includes(p.state)
-    );
-    rules.push(
-      dupAmount
-        ? warn("no_duplicate", `No reference supplied and an identical amount was paid recently (${dupAmount.obligationId}); confirm this is not a duplicate`)
-        : warn("no_duplicate", "No reference supplied; duplicate check is amount-based only")
-    );
   }
+  if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
 
   // R6: recipient details changed since verification
   if (policy.blockOnRecipientChange && vendor) {

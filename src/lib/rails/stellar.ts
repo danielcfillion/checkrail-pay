@@ -82,7 +82,9 @@ export class StellarRail implements PaymentRail {
     if (!StrKey.isValidEd25519PublicKey(destination)) return fail("Vendor's Stellar destination is not a valid account address (expected a G... public key)");
     if (destination === this.treasury.publicKey() || destination === this.cfg.pyusdIssuer) return fail("Destination must not be the treasury or the asset issuer");
 
-    const memoText = req.idempotencyKey.slice(0, 28); // Memo.text max 28 bytes; hex keys are ASCII
+    // The memo carries the job reference plus the first 8 chars of the idempotency key (built by the
+    // orchestrator, safe charset, 28 bytes max). The duplicate search below matches on it.
+    const memoText = (req.memo && /^[A-Za-z0-9 ._:-]{1,28}$/.test(req.memo) ? req.memo : req.idempotencyKey.slice(0, 28)).slice(0, 28);
     const amount = minorToDecimal(req.amountMinor, 7); // exact 7-decimal string, no float
     return this.serialize(() => this.send(req, destination, memoText, amount));
   }

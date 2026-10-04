@@ -45,8 +45,13 @@ export function toXeroPayment(r: AccountingPayload, bankAccountCode: string) {
   };
 }
 
+/**
+ * A separate fee spend exists only when the fee left the bank account on top of the bill (PayPal).
+ * On the Stellar path the fee is deducted from the amount in transit, so the payer's cash out equals the
+ * bill and the recipient bears the fee; booking a second spend would double count it.
+ */
 export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: string) {
-  if (Number(r.feeAmount) === 0) return null;
+  if (Number(r.feeAmount) === 0 || r.rail !== "paypal") return null;
   return {
     Type: "SPEND",
     Contact: { Name: r.rail === "paypal" ? "PayPal" : "Stellar network / anchor" },

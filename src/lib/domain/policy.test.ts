@@ -156,3 +156,58 @@ describe("evaluatePolicy", () => {
     expect(evaluatePolicy(DEFAULT_POLICY, base({ evidence: sys })).decision).toBe("auto_execute");
   });
 });
+
+describe("duplicate detection beyond the exact reference", () => {
+  const base = (over: Partial<Parameters<typeof evaluatePolicy>[1]>) =>
+    evaluatePolicy(DEFAULT_POLICY, {
+      obligation: { id: "o2", amountMinor: 18_000, currency: "USD", sourceRef: "INV-MS-0044", vendorId: "ven_maria" },
+      vendor: { id: "ven_maria", name: "Maria Santos", country: "PH", preferredRail: null, paypalEmail: "m@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "x", verifiedAt: "2026-08-14T00:00:00.000Z", detailsHash: "h" } as never,
+      evidence: [{ id: "e", kind: "invoice", label: "Invoice INV-MS-0044", amountMinor: 18_000, currency: "USD", reference: "INV-MS-0044", excerpt: "guide fee" }] as never,
+      ai: null,
+      businessCountry: "US",
+      baseCurrency: "USD",
+      priorSourceRefs: [{ obligationId: "o1", sourceRef: "JOB-HG4D-0914", amountMinor: 18_000, state: "settled", keys: ["job-hg4d-0914", "~hg4d0914", "hg-4d-0914"], updatedAt: new Date().toISOString() }],
+      approvalsCount: 0,
+      ...over,
+    });
+
+  it("blocks the same trip re-invoiced under a new number when the text names the trip", () => {
+    const o = base({ jobKeys: ["inv-ms-0044", "~ms0044", "hg-4d-0914", "~hg4d0914"] });
+    const r = o.rules.find((x) => x.ruleId === "no_duplicate")!;
+    expect(r.passed).toBe(false);
+    expect(r.severity).toBe("block");
+    expect(r.message).toMatch(/Same job as obligation o1/);
+  });
+
+  it("warns and forces approval when only the amount matches and the invoice names no job", () => {
+    const o = base({ jobKeys: ["inv-ms-0044", "~ms0044"] });
+    const r = o.rules.find((x) => x.ruleId === "no_duplicate")!;
+    expect(r.passed).toBe(false);
+    expect(r.severity).toBe("warn");
+    expect(o.decision).toBe("require_approval");
+  });
+
+  it("passes a same-amount invoice that names a different trip", () => {
+    const o = base({ jobKeys: ["inv-ms-0044", "~ms0044", "hg-4d-0921", "~hg4d0921"] });
+    expect(o.rules.find((x) => x.ruleId === "no_duplicate")!.passed).toBe(true);
+  });
+});
+
+describe("the agent's vendor choice is bound to the evidence", () => {
+  const run = (evidence: Array<{ label: string; excerpt: string; reference: string | null }>) =>
+    evaluatePolicy(DEFAULT_POLICY, {
+      obligation: { id: "o", amountMinor: 18_000, currency: "USD", sourceRef: "INV-77", vendorId: "ven_jake" },
+      vendor: { id: "ven_jake", name: "Jake Morrison", country: "US", preferredRail: null, paypalEmail: "j@example.com", stellarAccount: null, bankCountry: "US", bankCurrency: "USD", bankLabel: "x", verifiedAt: "2026-08-14T00:00:00.000Z", detailsHash: "h" } as never,
+      evidence: evidence.map((e, i) => ({ id: `e${i}`, kind: "job_sheet", amountMinor: 18_000, currency: "USD", ...e })) as never,
+      ai: null, businessCountry: "US", baseCurrency: "USD", priorSourceRefs: [], approvalsCount: 0,
+    });
+  it("warns when the attached record names someone else and carries a different reference", () => {
+    const o = run([{ label: "Trip sheet HG-4D-0921", excerpt: "Lead guide Maria Santos, 4 days", reference: "JOB-HG4D-0921" }]);
+    const r = o.rules.find((x) => x.ruleId === "evidence_names_vendor")!;
+    expect(r.passed).toBe(false);
+    expect(o.decision).toBe("require_approval");
+  });
+  it("passes when the record names the vendor", () => {
+    expect(run([{ label: "Invoice", excerpt: "Jake Morrison: recap video", reference: null }]).rules.find((x) => x.ruleId === "evidence_names_vendor")!.passed).toBe(true);
+  });
+});

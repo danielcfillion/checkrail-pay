@@ -14,7 +14,7 @@ const vendor = (over: Partial<VendorPayoutProfile> = {}): VendorPayoutProfile =>
   bankCountry: "PH", bankCurrency: "PHP", bankLabel: "UnionBank ****0923", detailsHash: "h", verifiedAt: "2026-09-01T00:00:00Z", ...over,
 });
 const KEY = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
-const request = (over: Partial<ExecutionRequest> = {}): ExecutionRequest => ({ obligationId: "obl_1", idempotencyKey: KEY, vendor: vendor(), amountMinor: 75_000, currency: "USD", memo: "x", businessCountry: "US", ...over });
+const request = (over: Partial<ExecutionRequest> = {}): ExecutionRequest => ({ obligationId: "obl_1", idempotencyKey: KEY, vendor: vendor(), amountMinor: 75_000, currency: "USD", memo: KEY.slice(0, 28), businessCountry: "US", ...over });
 
 type Rec = { hash: string; memo_type: string; memo: string; successful: boolean; created_at: string; ops: Array<Record<string, unknown>> };
 const payment = (over: Record<string, unknown> = {}) => ({ type: "payment", to: dest, amount: "750.0000000", asset_code: "PYUSD", asset_issuer: issuer, ...over });

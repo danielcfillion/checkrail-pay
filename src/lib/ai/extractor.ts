@@ -8,20 +8,34 @@ import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../dom
 
 const CURRENCY_WORDS: Record<string, string> = { "$": "USD", usd: "USD", "us$": "USD", php: "PHP", "₱": "PHP", vnd: "VND", "₫": "VND", eur: "EUR", "€": "EUR", gbp: "GBP", "£": "GBP" };
 
-export function extractAmount(text: string): { amountMinor: number; currency: string } | null {
-  // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". When a request lists several
-  // figures (unit rate, days, total) prefer the one introduced by "total" or "=", else the largest.
-  const re = /(?:(\$|US\$|USD|PHP|₱|VND|₫|EUR|€|GBP|£)\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?))|(?:([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s?(USD|PHP|VND|EUR|GBP))/gi;
+export function extractAmount(text: string, defaultCurrency?: string): { amountMinor: number; currency: string; assumedCurrency?: boolean } | null {
+  // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". Commas are only thousands separators
+  // (exactly three digits follow), and a number glued to an identifier ("INV-K-77", "HG-4D-0914") is not an
+  // amount. When a request lists several figures prefer, in order: "balance due" / "amount due" / "total" / "=",
+  // else the largest.
+  const num = "(\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.(\\d{1,2}))?";
+  const re = new RegExp(`(?<![A-Za-z0-9-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|EUR|GBP))(?![A-Za-z0-9-])`, "gi");
   const found: Array<{ amountMinor: number; currency: string; index: number }> = [];
   for (const m of text.matchAll(re)) {
-    const symbol = (m[1] ?? m[4] ?? "").toLowerCase();
-    const num = (m[2] ?? m[3] ?? "").replace(/,/g, "");
-    const value = Number.parseFloat(num);
-    if (!Number.isFinite(value)) continue;
+    const symbol = (m[1] ?? m[6] ?? "").toLowerCase();
+    const whole = (m[2] ?? m[4] ?? "").replace(/,/g, "");
+    const frac = m[3] ?? m[5] ?? "";
+    const value = Number.parseFloat(frac ? `${whole}.${frac}` : whole);
+    if (!Number.isFinite(value) || value <= 0) continue;
     found.push({ amountMinor: Math.round(value * 100), currency: CURRENCY_WORDS[symbol] ?? symbol.toUpperCase(), index: m.index ?? 0 });
   }
-  if (found.length === 0) return null;
-  const total = found.find((f) => /(total|=|sum|amount due)[^0-9$]{0,12}$/i.test(text.slice(Math.max(0, f.index - 16), f.index)));
+  if (found.length === 0) {
+    // Chat shorthand: "send maria 180", "pay him 1,200 today". Only with a verb in front, a plain figure
+    // (no identifier glued on), and a default currency to assume. Flagged so confidence drops.
+    if (!defaultCurrency) return null;
+    const m = text.match(/\b(?:send|pay|transfer|wire|owe|owes|give)\b[^0-9\n]{0,24}?(?<![A-Za-z0-9-])(\d{1,3}(?:,\d{3})+|\d{2,6})(?:\.(\d{1,2}))?(?![A-Za-z0-9-])/i);
+    if (!m) return null;
+    const value = Number.parseFloat(`${m[1].replace(/,/g, "")}${m[2] ? `.${m[2]}` : ""}`);
+    return value > 0 ? { amountMinor: Math.round(value * 100), currency: defaultCurrency, assumedCurrency: true } : null;
+  }
+  const lead = (f: { index: number }) => text.slice(Math.max(0, f.index - 24), f.index);
+  const due = found.find((f) => /(balance due|amount due|net due|please pay|pay)[^0-9$]{0,12}$/i.test(lead(f)));
+  const total = due ?? found.find((f) => /(total|=|sum)[^0-9$]{0,12}$/i.test(lead(f)));
   const pick = total ?? found.reduce((a, b) => (b.amountMinor > a.amountMinor ? b : a));
   return { amountMinor: pick.amountMinor, currency: pick.currency };
 }
@@ -54,7 +68,10 @@ export function matchVendor(text: string, vendors: VendorPayoutProfile[]): Vendo
     const score = full + partial;
     if (score > 0 && (!best || score > best.score)) best = { v, score };
   }
-  return best && best.score >= 2 ? best.v : null;
+  if (best && best.score >= 2) return best.v;
+  // A single distinctive name part ("maria", "phuong") is enough when exactly one vendor has it.
+  const singles = vendors.filter((v) => v.name.toLowerCase().split(/\s+/).some((p) => p.length >= 3 && new RegExp(`\\b${p}\\b`, "i").test(lower)));
+  return singles.length === 1 ? singles[0] : null;
 }
 
 export function interpretWithRules(input: {
@@ -62,9 +79,10 @@ export function interpretWithRules(input: {
   sourceType: string;
   vendors: VendorPayoutProfile[];
   evidence: EvidenceItem[];
+  baseCurrency?: string;
 }): AiInterpretation {
   const { rawInput, vendors, evidence } = input;
-  const money = extractAmount(rawInput);
+  const money = extractAmount(rawInput, input.baseCurrency ?? "USD");
   const ref = extractReference(rawInput);
   const vendor = matchVendor(rawInput, vendors);
   const dueDate = extractDueDate(rawInput);
@@ -74,8 +92,11 @@ export function interpretWithRules(input: {
 
   if (vendor) confidence += 15;
   else missing.push("a recognisable vendor name");
-  if (money) confidence += 15;
-  else missing.push("an amount and currency");
+  if (money && !money.assumedCurrency) confidence += 15;
+  else if (money) {
+    confidence += 5;
+    flags.push(`No currency given; assumed ${money.currency}`);
+  } else missing.push("an amount and currency");
   if (ref) confidence += 10;
   else missing.push("an invoice, job or booking reference");
 

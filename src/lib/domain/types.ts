@@ -146,7 +146,18 @@ export interface PolicyInput {
   businessCountry: string;
   baseCurrency: string;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
-  priorSourceRefs: Array<{ obligationId: string; sourceRef: string | null; amountMinor: number | null; state: ObligationState }>;
+  priorSourceRefs: Array<{
+    obligationId: string;
+    sourceRef: string | null;
+    amountMinor: number | null;
+    state: ObligationState;
+    /** Every identifier that names the underlying job: source ref, evidence refs, trip or job ids found in the text. Lower-cased. */
+    keys?: string[];
+    /** ISO time of last update, for the same-amount recency check. */
+    updatedAt?: string;
+  }>;
+  /** Identifiers naming THIS obligation's job (same construction as priorSourceRefs[].keys). */
+  jobKeys?: string[];
   /** Number of DISTINCT people who approved. */
   approvalsCount: number;
   /** Total of this vendor's other committed obligations in the last 24h, in minor units. */

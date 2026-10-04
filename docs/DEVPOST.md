@@ -54,7 +54,7 @@ Keeping the AI out of the money path while keeping it useful meant making its ou
 
 ## Accomplishments that we're proud of
 
-No path exists from the model to a payment. The due line shows the whole book on one line. The demo catches two real classes of error (inflated amount, duplicate reference) rather than just moving money. 26 passing tests, including a story test that runs the whole demo through the orchestrator.
+No path exists from the model to a payment. The due line shows the whole book on one line. The demo catches two real classes of error (inflated amount, duplicate reference) rather than just moving money. 130 passing tests, including a story test that runs the whole demo through the orchestrator.
 
 ## What we learned
 

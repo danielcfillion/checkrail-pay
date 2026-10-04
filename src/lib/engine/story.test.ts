@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
 import { obligations, settlements, auditEntries, accountingSyncs, paymentAttempts, routeQuotes } from "../db/schema";
 import { seedDemo } from "../demo/seed";
-import { approveObligation, executeObligation, confirmSettlement, amendObligation } from "./orchestrator";
+import { approveObligation, executeObligation, confirmSettlement, amendObligation, ingestObligation } from "./orchestrator";
 import { exportPendingCsv } from "../accounting/record";
 
 let db: Db;
@@ -128,5 +128,33 @@ describe("accounting cash-out", () => {
     await confirmSettlement(db2, pay.id, "test");
     const rec = buildAccountingRecord(db2, pay.id)!;
     expect(Number(rec.payload.netPaid)).toBeCloseTo(Number(rec.payload.grossAmount) + Number(rec.payload.feeAmount), 2);
+  });
+});
+
+describe("probe A: the same trip re-invoiced under a new number", () => {
+  it("is blocked when the invoice names the trip, and held for approval when it does not", async () => {
+    const db2 = openTestDb();
+    await seedDemo(db2, { history: true }); // JOB-HG4D-0914 settled 17 days ago
+    const named = await ingestObligation(db2, {
+      businessId: "biz_ridgeline",
+      sourceType: "invoice",
+      rawInput: "Invoice INV-MS-0044 from Maria Santos: guide fee, Ha Giang departure HG-4D-0914, USD 180.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-MS-0044", amountMinor: 18_000, currency: "USD", reference: "INV-MS-0044", excerpt: "Guide fee HG-4D-0914, USD 180.00" }],
+      actor: "system:email-ingest",
+    });
+    const n = db2.select().from(obligations).where(eq(obligations.id, named)).get()!;
+    expect(n.state).toBe("blocked");
+    expect(n.blockedReason).toMatch(/Same job as obligation/);
+
+    const bare = await ingestObligation(db2, {
+      businessId: "biz_ridgeline",
+      sourceType: "invoice",
+      rawInput: "Invoice INV-MS-0045 from Maria Santos: guide fee, USD 180.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-MS-0045", amountMinor: 18_000, currency: "USD", reference: "INV-MS-0045", excerpt: "Guide fee USD 180.00" }],
+      actor: "system:email-ingest",
+    });
+    const b = db2.select().from(obligations).where(eq(obligations.id, bare)).get()!;
+    expect(b.state).toBe("awaiting_approval");
+    expect(b.policyReasonsJson).toMatch(/Same amount/);
   });
 });

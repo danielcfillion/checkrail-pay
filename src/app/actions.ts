@@ -123,7 +123,7 @@ export async function resetDemoAction(): Promise<ActionResult> {
     if (isLiveRails()) return { ok: false, message: "Demo reset is disabled when RAIL_MODE=live." };
     await seedDemo(getDb(), { history: true });
     done();
-    return { ok: true, message: "Demo reset. Three live obligations are waiting in the inbox." };
+    return { ok: true, message: "Demo reset. Four obligations are waiting: two will be blocked, one pays over PayPal, one needs approval." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
