@@ -8,10 +8,10 @@ Pace: speak plainly, one idea per sentence. No music under the voiceover; a quie
 
 | Time | On screen | Action | Voiceover |
 |---|---|---|---|
-| 0:00 to 0:08 | Black card, then the Dueline wordmark fades to the Overview page | None | Small businesses that pay guides, drivers and suppliers across borders check every request by hand, pay from a PayPal tab, and still pay duplicates and inflated invoices. |
-| 0:08 to 0:18 | Overview `/`. Cursor rests on the shared due line hero. | Slowly move the cursor across the five stations | Dueline draws every payment on one line: read, verified, routed, paid, reconciled. An AI agent reads. A deterministic policy decides. The rails pay. The books fill themselves. The agent is Claude when an API key is set and a rules extractor otherwise; the footer shows which is running. Four obligations are open this morning. |
+| 0:00 to 0:08 | Full-screen crop of the Phuong chat message on the obligation page: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently." | None, hold the crop | "Pay Phuong nine sixty today, he needs it for fuel." I run a tour company and I get this message every week. This one is one hundred and sixty dollars wrong. |
+| 0:08 to 0:18 | Cut to Overview `/`. Cursor rests on the shared due line hero. | Slowly move the cursor across the five stations | Every payment travels one line: read, verified, routed, paid, reconciled. Claude reads the request. It cannot pay. A fixed set of rules decides, and this morning two of four requests are about to fail them. |
 | 0:18 to 0:26 | Overview, "Needs you" list | Hover the Phuong Transport row | The first one is a chat message: pay Phuong Transport nine hundred and sixty dollars, he needs it urgently. |
-| 0:26 to 0:48 | Obligation page `/obligations/<phuong>` | Click the row. Let the page sit. Point at the raw request, then the trip sheet excerpt, then the red rule row "Requested USD 960.00 but Trip sheet says USD 800.00". | The agent read the request and the two attached records. The contract says two hundred dollars a day. The trip sheet says four days. Policy compared the request to the evidence and blocked it: one hundred and sixty dollars over. The line is broken at verified, and it says why. |
+| 0:26 to 0:48 | Obligation page `/obligations/<phuong>` | Click the row. Let the page sit. Point at the raw request, then the trip sheet excerpt, then the "Agent tool calls" list, then the red rule row "Requested USD 960.00 but Trip sheet says USD 800.00". | Claude read the request and the two attached records, and it shows its work: the tools it called are listed on the page. The contract says two hundred dollars a day. The trip sheet says four days. Policy compared the request to the evidence and blocked it: one hundred and sixty dollars over. The line is broken at verified, and it says why. |
 | 0:48 to 0:56 | Same page, action panel | Hover "Correct to USD 800.00", do not click | The operator can correct it to eight hundred and it re-enters the flow. Nothing left the account. |
 | 0:56 to 1:04 | Back to Overview, then click the Exceptions link in the hero break, land on `/exceptions` | Click | The second one looks fine. Maria Santos, a job sheet, the right amount. |
 | 1:04 to 1:20 | Obligation page `/obligations/<maria 0914>` | Click the JOB-HG4D-0914 row. Point at the "Reference JOB-HG4D-0914 was already used" rule row, then at the linked settled obligation | Except that reference was already settled seventeen days ago in Dueline's own ledger. Policy found the duplicate and blocked it. Two errors caught, three hundred and forty dollars kept. |
@@ -21,7 +21,16 @@ Pace: speak plainly, one idea per sentence. No music under the voiceover; a quie
 | 2:24 to 2:36 | `/audit` | Scroll slowly | Every step is in one audit log: what the agent read, which rule fired, who approved, which rail paid, with the idempotency key. The agent never had spending authority. Policy is a pure function. Execution re-runs it before touching a rail. |
 | 2:36 to 2:45 | Overview `/`, the due line with two dots at reconciled and two breaks. Hold. Fade to the wordmark and one line of text. | Hold on the hero, then cut to a closing card: "2 settled. 2 errors prevented. 2 records exported." | Two settled, two errors prevented, two records exported. Dueline. Verified supplier payments, routed and reconciled automatically. |
 
-If recording in mock mode, add one sentence at 2:30: "This run is in mock mode; the sidebar shows which rails are live."
+Record in live mode (PayPal sandbox, Stellar testnet, Claude). Then there are no disclaimers to speak and the sidebar footer reads sandbox/testnet/claude on its own. If you must record in mock mode, say so once at 2:30 and nowhere else.
+
+## Two cuts from one take
+
+- **Hackathon cut (under 3:00):** as above, but trim the Ana shot (1:40 to 2:12) to about 15 seconds: approve, pay, settled, explorer link. Judges want to see PayPal and Claude; Stellar is the second rail, not the story.
+- **SCF cut:** the same footage with the full Ana shot, the explorer tab held for three seconds, and a closing line about the anchor leg being the funded work.
+
+## The 20-second insert that matters most
+
+After obligation 3 pays in live mode, switch to the PayPal sandbox dashboard and show the payout batch id that Dueline printed. Hold for three seconds. This single shot answers "has a real PayPal call ever succeeded".
 
 ## Closing card text
 

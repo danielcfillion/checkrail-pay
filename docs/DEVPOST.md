@@ -22,7 +22,7 @@ Dueline is an AI payables operations layer for small businesses that pay contrac
 
 Every payment request travels along one line through five stations: read, verified, routed, paid, reconciled.
 
-An agent reads the raw request and attached evidence, resolves the vendor, extracts amount and reference, and flags anomalies. It is Claude when an Anthropic API key is set and a rule-based extractor otherwise; the app shows which one read each obligation. With Claude it also gets read-only PayPal Agent Toolkit tools (list transactions, list invoices, get invoice, merchant insights). It cannot pay.
+An agent reads the raw request and the attached documents (uploaded PDFs are read from their text; photos and scans are read by Claude), resolves the vendor, extracts amount and reference, and flags anomalies. It is Claude when an Anthropic API key is set and a rule-based extractor otherwise; the app shows which one read each obligation. With Claude it also gets read-only PayPal Agent Toolkit tools (list transactions, list invoices, get invoice, merchant insights). It cannot pay.
 
 A deterministic policy engine decides. Eight rules: known vendor, amount present, evidence attached, amount within tolerance of evidence, no duplicate reference, recipient details verified, corridor allow-listed, AI confidence above threshold. Outcome: block, hold, require approval or auto-execute. Same input, same output, no model in the loop.
 

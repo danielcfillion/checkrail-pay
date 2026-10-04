@@ -7,7 +7,7 @@ Written Saturday 3 Oct 2026 night, updated through the weekend. Everything below
 Dueline, an AI payables ops layer: it reads a payment request, checks it against the evidence, blocks mistakes, routes over PayPal or Stellar PYUSD, pays, and writes an accounting record. Runs fully offline in mock mode.
 
 - Repo: local git on `main`, three commits, MIT licence. No GitHub remote exists yet (see H3), so a git bundle and a source zip were sent to you in chat.
-- 130 tests pass (policy, routing, state machine, end-to-end story, both rail adapters against fakes, webhook, auth). Typecheck, lint and production build are clean.
+- 142 tests pass (policy, routing, state machine, end-to-end story, both rail adapters against fakes, webhook, auth). Typecheck, lint and production build are clean.
 - The demo: four obligations. Phuong asks USD 960 against an USD 800 trip sheet (blocked). Maria's JOB-HG4D-0914 was already paid (blocked). Maria's USD 180 pays over PayPal. Ana's USD 750 needs approval and pays over Stellar. Result: 2 settled, 2 errors prevented (USD 340), 2 accounting records.
 - A draft captioned screen recording (2:05, mock mode) was sent in chat. Add your voice or re-record once the sandboxes are live.
 - Docs: README, Devpost text, video script, SCF application draft, Xero pitch, corridor benchmark, decision log (also in the Project).
@@ -19,6 +19,20 @@ Nothing has touched real PayPal, real Stellar or the real Claude API. The build 
 ## Scores so far
 
 An independent simulated hackathon judge scored the first build 34 out of 50 (Tech 7, Design 7, Impact 7, Innovation 7, Presentation 6) and said one real PayPal sandbox payout on camera is worth more than any polish. An independent SCF-style reviewer scored the first SCF draft 4 out of 10 (no on-chain proof, solo team, unbuilt anchor leg). Both sets of fixes that could be done offline are in.
+
+## Sunday: what changed after the critic and coach reviews
+
+Both reviews are in the Project. The headline from both: nothing has run live, and in an AI hackathon every screen says "rules extractor". Only your logins fix that. Everything they found that could be fixed offline is fixed and tested:
+
+- Duplicate detection now matches job identifiers (trip ids, invoice numbers, evidence references), so the same job re-invoiced under a new number is blocked, and a bare same-amount invoice is held for a person. The critic's probe that auto-paid is now a story test.
+- The amount extractor no longer reads "INV-K-77, USD 180" as 77 or a gross figure over "balance due", and it reads chat shorthand ("send maria 180") with an assumed-currency flag.
+- Documents can be uploaded on the new-obligation form. PDF invoices and job sheets are read from their text offline; photos and scans are read by Claude in live mode and never guessed in mock mode. Evidence read from a document is marked as such and does not trigger the operator-evidence warning, so a typed-in demo can auto-pay.
+- A new policy rule binds the agent's vendor choice to the evidence, and the README's safety claim now says precisely what holds.
+- The Stellar quote is unavailable without a wallet (the adapter cannot pay a bank until the anchor leg exists). Maria has a demo wallet so the side-by-side comparison in the demo still shows.
+- The live Stellar memo is the job reference plus key prefix, as the video says. The Xero mapping no longer double-counts the Stellar fee, and it has tests.
+- Stale copy fixed (test counts, reset message, screenshots regenerated after the routing change). Video script opens on the chat message, the configuration disclaimer is gone, and there are two cuts: hackathon and SCF.
+
+Not done from the reviews, on purpose: mainnet PYUSD before a clean testnet run (I would not put a real key on mainnet first), RBAC, Xero OAuth, the Mexico corridor, and any further polish on dark mode, mobile or the secondary pages.
 
 ## Your queue, in order
 

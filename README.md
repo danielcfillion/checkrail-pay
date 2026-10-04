@@ -2,7 +2,7 @@
 
 **Verified supplier payments, routed and reconciled automatically.**
 
-Dueline is an AI payables operations layer for small businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads messy payment requests, works out who is owed what, refuses the ones that are wrong, picks the cheaper or faster rail between PayPal Payouts and Stellar PYUSD, pays, and lands every settlement in an accounting-ready export.
+Dueline is an AI payables operations layer for small businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads payment requests as they arrive (a pasted message, a PDF invoice or job sheet read from its text, a photo read by Claude when a key is set), works out who is owed what, refuses the ones that are wrong, picks the cheaper or faster rail between PayPal Payouts and Stellar PYUSD, pays, and lands every settlement in an accounting-ready export.
 
 Built for the PayPal AI Hackathon (Nov 2026) and submitted to Stellar Community Fund #46.
 
@@ -22,7 +22,7 @@ Dueline puts five fixed stations between "someone says we owe this" and "it is i
 
 ## Honest status
 
-Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 130 tests and a deterministic replay. The PayPal Payouts adapter, the Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call: the build environment had no network egress. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
+Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 142 tests and a deterministic replay. The PayPal Payouts adapter, the Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call: the build environment had no network egress. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
 
 ## The demo story
 
@@ -31,7 +31,7 @@ Ridgeline Expeditions LLC, a US tour operator, has four open obligations.
 | # | Obligation | What happens | Why |
 |---|---|---|---|
 | 1 | Phuong Transport, INV-2026-0152, requests USD 960 | **Blocked** | The trip sheet says 4 vehicle-days x USD 200 = USD 800. The request is USD 160 over. Operator can correct to USD 800 and it re-enters the flow. |
-| 2 | Maria Santos, JOB-HG4D-0914 | **Blocked** | The reference was settled 17 days earlier. Duplicate. |
+| 2 | Maria Santos, JOB-HG4D-0914 | **Blocked** | The reference was settled 17 days earlier. Duplicate. The check also matches trip and job identifiers inside the text and evidence, so the same job re-invoiced under a new number is blocked too, and a bare same-amount invoice is held for a person. |
 | 3 | Maria Santos, JOB-HG4D-0921, USD 180 | **Auto-approved, paid via PayPal** | Under the USD 250 auto-execute threshold, evidence matches. At this size the two rails are within 0.1% per dollar spent (PHP 59.54 vs 59.58), so the tie goes to PayPal. |
 | 4 | Ana Reyes, JOB-PAL3D-0927, USD 750 | **Needs approval, paid via Stellar** | Above threshold, so a human approves. Stellar delivers about 2% more PHP per dollar spent and settles in about 15 minutes instead of 1 to 2 days. Ana asked for the faster rail. Explorer link in the settlement details. |
 
@@ -156,7 +156,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
     npm run lint
     npm run build
 
-130 tests in 10 files pass as of this commit. The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+142 tests in 13 files pass as of this commit. The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
 
 ## Project layout
 
@@ -177,7 +177,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
 
 **What is mock.** Both rail adapters in `RAIL_MODE=mock`. The PayPal batch ids and Stellar hashes in the replay are generated locally. Fee and FX figures come from a published-fee model (`src/lib/rails/quoteModel.ts`, sourced in `docs/CORRIDOR_BENCHMARK.md`), not from live quotes. The AI in `AI_MODE=mock` is a rule-based extractor, not Claude. The Xero adapter maps records but does not push; OAuth is not wired. The Stellar anchor leg (SEP-31 to PeraHub) is modelled, not integrated; on testnet the Stellar adapter pays PYUSD to the vendor's wallet directly.
 
-**What is proven.** The policy engine, state machine, routing rule, orchestrator and accounting export, by tests and by the deterministic replay. The PayPal adapter builds a correct Payouts request with idempotency headers and the webhook receiver verifies signatures in live mode (both type-checked, not yet run against sandbox). The Stellar adapter builds, signs and submits a PYUSD payment with a memo-based idempotency check (type-checked, not yet run against testnet). The Claude agent loop with PayPal Agent Toolkit tools filtered to read-only (type-checked, not yet run against the API).
+**What is proven.** The policy engine, state machine, routing rule, orchestrator, document reader (PDF text layer) and accounting export, by tests and by the deterministic replay. The PayPal adapter builds a correct Payouts request with idempotency headers and the webhook receiver verifies signatures in live mode (both type-checked, not yet run against sandbox). The Stellar adapter builds, signs and submits a PYUSD payment with a memo-based idempotency check (type-checked, not yet run against testnet). The Claude agent loop with PayPal Agent Toolkit tools filtered to read-only (type-checked, not yet run against the API).
 
 **Safety review.** The money path (orchestrator, both rail adapters, webhook, policy) went through a line-by-line audit before any live credential was allowed near it. It found real problems, among them a retry that could mint a fresh idempotency key after an ambiguous failure, an unvalidated amend patch, and a silent fall-back to mock rails in live mode. All are fixed and covered by tests (`src/lib/engine/safety.test.ts` and the rail tests): ambiguous outcomes now stay "unknown" and block a second payment until reconciled, state changes are compare-and-swap inside a transaction, approvers are counted by distinct person, payout destinations are pinned at approval, and live mode fails closed. Known gaps: no fee-bump handling, no SEP-29 memo or trustline pre-check, no role-based access control, the anchor leg is not built, and the agent shares a PayPal app with Payouts scope (use a separate read-only app).
 
