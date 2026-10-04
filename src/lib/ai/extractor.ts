@@ -82,8 +82,23 @@ export function interpretWithRules(input: {
   baseCurrency?: string;
 }): AiInterpretation {
   const { rawInput, vendors, evidence } = input;
-  const money = extractAmount(rawInput, input.baseCurrency ?? "USD");
-  const ref = extractReference(rawInput);
+  let money = extractAmount(rawInput, input.baseCurrency ?? "USD");
+  let ref = extractReference(rawInput);
+  const adopted: string[] = [];
+  // When the request text carries no figure but exactly one attached record does (an uploaded invoice is the
+  // request), take the amount from the record and say so. Policy still checks it against that same record.
+  const amounts = evidence.filter((e) => e.amountMinor != null && e.currency);
+  if (!money && amounts.length === 1) {
+    money = { amountMinor: amounts[0].amountMinor!, currency: amounts[0].currency! };
+    adopted.push(`Amount taken from ${amounts[0].label}; the request text states none`);
+  }
+  if (!ref) {
+    const refs = Array.from(new Set(evidence.map((e) => e.reference).filter((r): r is string => Boolean(r) && !/^AGR-/i.test(r!))));
+    if (refs.length === 1) {
+      ref = refs[0].toUpperCase();
+      adopted.push(`Reference ${ref} taken from ${evidence.find((e) => e.reference?.toUpperCase() === ref)!.label}`);
+    }
+  }
   const vendor = matchVendor(rawInput, vendors);
   const dueDate = extractDueDate(rawInput);
   const flags: string[] = [];
@@ -130,6 +145,8 @@ export function interpretWithRules(input: {
     confidence -= 20;
   }
 
+  for (const a of adopted) flags.push(a);
+  if (adopted.length) confidence -= 5;
   confidence = Math.max(5, Math.min(98, confidence));
 
   const descr = describe(rawInput, vendor, money, ref);

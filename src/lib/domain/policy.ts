@@ -164,7 +164,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else {
       rules.push(pass("ai_confidence", `Agent confidence ${ai.confidence}%`));
     }
-    for (const f of ai.flags) rules.push(warn("ai_flag", f));
+    // Flags are concerns. A note that a figure was taken from the attached record is information, and the
+    // amount-matches-evidence rule already checks it, so it is recorded as passing rather than as a warning.
+    for (const f of ai.flags) rules.push(/^(Amount|Reference [A-Z0-9-]+) taken from /.test(f) ? pass("ai_flag", f) : warn("ai_flag", f));
     for (const m of ai.missing) rules.push(warn("ai_missing", `Agent wants: ${m}`));
   } else {
     rules.push(warn("ai_confidence", "No agent interpretation available; human review required"));

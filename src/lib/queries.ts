@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "./db/schema";
+import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "./db/schema";
 import type { ObligationState, Rail } from "./domain/types";
 import { railModes } from "./rails";
 import { config, isLiveAi } from "./config";
@@ -39,6 +39,7 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
     obligation: { ...row.o, vendorName: row.vendorName, vendorRole: row.vendorRole, vendorCountry: row.vendorCountry } as ObligationRow,
     vendor,
     evidence: db.select().from(evidence).where(eq(evidence.obligationId, id)).all(),
+    attachments: db.select({ id: attachments.id, name: attachments.name, mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes, reader: attachments.reader, sha256: attachments.sha256 }).from(attachments).where(eq(attachments.obligationId, id)).all(),
     quotes: db.select().from(routeQuotes).where(eq(routeQuotes.obligationId, id)).all(),
     approvals: db.select().from(approvals).where(eq(approvals.obligationId, id)).orderBy(approvals.createdAt).all(),
     attempts: db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(paymentAttempts.createdAt).all(),

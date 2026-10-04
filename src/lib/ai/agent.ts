@@ -7,6 +7,8 @@ import { loadPayPalTools, type AgentTool } from "./paypalTools";
 
 export interface AgentInput {
   rawInput: string;
+  /** Extracted text of uploaded source documents, so the model can read the record itself rather than a typed summary. */
+  documents?: Array<{ name: string; reader: string; text: string | null }>;
   sourceType: string;
   vendors: VendorPayoutProfile[];
   evidence: EvidenceItem[];
@@ -70,7 +72,7 @@ async function runClaude(input: AgentInput): Promise<AgentRun> {
         description: "Return all evidence records attached to this obligation (contracts, job sheets, bookings, invoices, messages).",
         input_schema: { type: "object", properties: {} },
       },
-      run: async () => JSON.stringify(input.evidence),
+      run: async () => JSON.stringify({ records: input.evidence, documents: (input.documents ?? []).map((d) => ({ name: d.name, readBy: d.reader, text: d.text?.slice(0, 6000) ?? null })) }),
     },
   ];
   const submitTool: Anthropic.Tool = {

@@ -98,6 +98,8 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                     <p className="dense text-ink-soft">
                       {evidenceKindLabel(e.kind)}
                       {e.reference ? <span className="num">, {e.reference}</span> : null}
+                      {e.provenance === "operator" ? <span className="text-attention">, typed by operator</span> : null}
+                      {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className="link" href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
                     </p>
                     {e.excerpt ? <blockquote className="mt-1 border-l-2 pl-3 text-ink-soft hairline">{e.excerpt}</blockquote> : null}
                   </li>

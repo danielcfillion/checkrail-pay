@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex, blob } from "drizzle-orm/sqlite-core";
 
 /**
  * Dueline data model.
@@ -82,7 +82,25 @@ export const evidence = sqliteTable("evidence", {
   currency: text("currency"),
   reference: text("reference"),
   excerpt: text("excerpt"), // short text excerpt shown in the UI
-  provenance: text("provenance"), // system | operator (null = system)
+  provenance: text("provenance"), // system | operator | document (null = system)
+  attachmentId: text("attachment_id"), // set when the row was read out of an uploaded document
+  createdAt: text("created_at").notNull(),
+});
+
+/** Uploaded source documents (PDF, image, text). The bytes stay here; the evidence rows read from them point back. */
+export const attachments = sqliteTable("attachments", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").notNull(),
+  obligationId: text("obligation_id"), // null until the obligation is created
+  name: text("name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  bytes: blob("bytes", { mode: "buffer" }).notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  extractedText: text("extracted_text"), // what the reader got out of it, if anything
+  reader: text("reader").notNull(), // pdf-text | plain | claude | none
+  proposedJson: text("proposed_json").notNull(), // evidence rows proposed from the document, as extracted
+  uploadedBy: text("uploaded_by").notNull(),
   createdAt: text("created_at").notNull(),
 });
 

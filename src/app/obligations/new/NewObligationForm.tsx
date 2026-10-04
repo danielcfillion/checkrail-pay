@@ -2,11 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ingestAction } from "@/app/actions";
+import { ingestAction, uploadEvidenceAction } from "@/app/actions";
 import type { SourceType } from "@/lib/domain/types";
 import { useToast } from "@/components/Toast";
 
-type EvidenceRow = { kind: string; label: string; amount: string; currency: string; reference: string; excerpt: string };
+type EvidenceRow = { kind: string; label: string; amount: string; currency: string; reference: string; excerpt: string; attachmentId?: string | null; readBy?: string | null; fileName?: string | null };
 
 const KINDS = ["job_sheet", "invoice", "contract", "booking", "message", "photo"];
 const SOURCE_TYPES: Array<{ value: SourceType; label: string }> = [
@@ -16,7 +16,7 @@ const SOURCE_TYPES: Array<{ value: SourceType; label: string }> = [
   { value: "booking", label: "Booking" },
 ];
 
-const blank = (): EvidenceRow => ({ kind: "job_sheet", label: "", amount: "", currency: "USD", reference: "", excerpt: "" });
+const blank = (): EvidenceRow => ({ kind: "job_sheet", label: "", amount: "", currency: "USD", reference: "", excerpt: "", attachmentId: null });
 
 const EXAMPLES: Record<"clean" | "mismatch", { sourceType: SourceType; raw: string; evidence: EvidenceRow[] }> = {
   clean: {
@@ -40,8 +40,51 @@ export function NewObligationForm() {
   const [rows, setRows] = useState<EvidenceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [uploading, setUploading] = useState(false);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
+
+  const onFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setUploadNote(null);
+    try {
+      for (const f of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", f);
+        const res = await uploadEvidenceAction(fd);
+        if (!res.ok || !res.upload) {
+          setUploadNote(res.message);
+          toast(res.message, "error");
+          continue;
+        }
+        const u = res.upload;
+        if (u.proposed.length === 0) {
+          setUploadNote(u.note ?? `Nothing readable in ${u.name}.`);
+          setRows((rs) => [...rs, { ...blank(), label: u.name, kind: /\.(png|jpe?g|webp|gif)$/i.test(u.name) ? "photo" : "invoice", attachmentId: u.attachmentId, readBy: "none", fileName: u.name }]);
+          continue;
+        }
+        setRows((rs) => [
+          ...rs,
+          ...u.proposed.map((p) => ({
+            kind: p.kind,
+            label: p.label,
+            amount: p.amountMinor != null ? (p.amountMinor / 100).toFixed(2) : "",
+            currency: p.currency ?? "USD",
+            reference: p.reference ?? "",
+            excerpt: p.excerpt ?? "",
+            attachmentId: u.attachmentId,
+            readBy: u.reader,
+            fileName: u.name,
+          })),
+        ]);
+        setUploadNote(`${u.name}: read by ${u.reader === "claude" ? "Claude" : u.reader === "pdf-text" ? "the PDF text reader" : "the text reader"}. Check the figures; an edited figure counts as operator-supplied.`);
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const load = (k: keyof typeof EXAMPLES) => {
     const ex = EXAMPLES[k];
@@ -73,6 +116,7 @@ export function NewObligationForm() {
             currency: r.amount.trim() ? r.currency.trim().toUpperCase() || "USD" : null,
             reference: r.reference.trim() || null,
             excerpt: r.excerpt.trim() || null,
+            attachmentId: r.attachmentId ?? null,
           })),
       });
       if (result.ok && result.id) {
@@ -117,10 +161,23 @@ export function NewObligationForm() {
             <span className="dense text-ink-soft">{rows.length === 0 ? "none attached" : `${rows.length} attached`}</span>
           </div>
           <div className="space-y-4 p-4">
-            {rows.length === 0 ? <p className="text-ink-soft">Without evidence the policy will hold the obligation. Attach a job sheet, invoice, contract or booking so the amount can be checked.</p> : null}
+            <div className="rounded border border-dashed p-3 hairline">
+              <label className="lbl" htmlFor="docs">
+                Upload the document itself
+              </label>
+              <input id="docs" type="file" className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.md,application/pdf,image/*,text/plain,text/csv" multiple disabled={uploading} onChange={(e) => void onFiles(e.target.files)} />
+              <p className="mt-1.5 text-xs text-ink-soft">
+                {uploading ? "Reading the file." : "PDF invoices and job sheets are read from their text. Photos and scans need the Claude reader (AI_MODE=live). The figures it reads are marked as document evidence; anything you type or change is marked as operator-supplied."}
+              </p>
+              {uploadNote ? <p className="mt-1.5 text-xs">{uploadNote}</p> : null}
+            </div>
+            {rows.length === 0 ? <p className="text-ink-soft">Without evidence the policy will hold the obligation. Upload a job sheet, invoice, contract or booking, or type one in, so the amount can be checked.</p> : null}
             {rows.map((r, i) => (
               <fieldset key={i} className="rounded border p-3 hairline">
-                <legend className="dense px-1 text-ink-soft">Record {i + 1}</legend>
+                <legend className="dense px-1 text-ink-soft">
+                  Record {i + 1}
+                  {r.fileName ? <span className="ml-2 font-normal">from {r.fileName}{r.readBy && r.readBy !== "none" ? ` (read by ${r.readBy === "claude" ? "Claude" : "text reader"})` : " (not readable here)"}</span> : null}
+                </legend>
                 <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
                   <div>
                     <label className="lbl" htmlFor={`kind-${i}`}>

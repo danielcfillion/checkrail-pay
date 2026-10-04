@@ -7,6 +7,7 @@ import { amendObligation, approveObligation, confirmSettlement, executeObligatio
 import { ACTOR_HEADER } from "@/lib/basicAuth";
 import { isLiveRails } from "@/lib/config";
 import { exportPendingCsv } from "@/lib/accounting/record";
+import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import type { Rail, SourceType } from "@/lib/domain/types";
 
@@ -94,7 +95,7 @@ export async function amendAction(id: string, patch: { amountMinor?: number; sou
   }
 }
 
-export async function ingestAction(input: { sourceType: SourceType; rawInput: string; evidence?: Array<{ kind: string; label: string; amountMinor: number | null; currency: string | null; reference: string | null; excerpt: string | null }> }): Promise<ActionResult & { id?: string }> {
+export async function ingestAction(input: { sourceType: SourceType; rawInput: string; evidence?: Array<{ kind: string; label: string; amountMinor: number | null; currency: string | null; reference: string | null; excerpt: string | null; attachmentId?: string | null }> }): Promise<ActionResult & { id?: string }> {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -124,6 +125,22 @@ export async function resetDemoAction(): Promise<ActionResult> {
     await seedDemo(getDb(), { history: true });
     done();
     return { ok: true, message: "Demo reset. Four obligations are waiting: two will be blocked, one pays over PayPal, one needs approval." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Upload a source document (PDF, image, text). It is read and stored; the proposed evidence rows come back for review. */
+export async function uploadEvidenceAction(form: FormData): Promise<(ActionResult & { upload?: UploadResult })> {
+  try {
+    const file = form.get("file");
+    if (!(file instanceof File)) return { ok: false, message: "No file received." };
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured. Run the demo seed first." };
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const upload = await uploadDocument(db, { businessId: biz.id, name: file.name, mimeType: file.type, bytes, actor: await actor() });
+    return { ok: true, message: upload.note ?? `Read ${upload.name} with ${upload.reader === "claude" ? "Claude" : upload.reader === "none" ? "no reader" : "the text reader"}.`, upload };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

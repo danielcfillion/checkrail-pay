@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
+import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
 import { DEFAULT_POLICY, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
@@ -27,8 +27,9 @@ export interface IngestInput {
   sourceType: SourceType;
   sourceRef?: string | null;
   rawInput: string;
-  evidence?: Array<Omit<EvidenceItem, "id">>;
-  /** Who supplied the evidence. Defaults to "system" (an integration). Operator-supplied evidence is flagged by policy. */
+  evidence?: Array<Omit<EvidenceItem, "id"> & { attachmentId?: string | null }>;
+  /** Who supplied the evidence. Defaults to "system" (an integration). Operator-supplied evidence is flagged by policy.
+   *  A row that points at an uploaded attachment and matches what the reader extracted gets provenance "document" instead. */
   evidenceSource?: "system" | "operator";
   actor?: string;
 }
@@ -51,7 +52,20 @@ export async function ingestObligation(db: Db, input: IngestInput): Promise<stri
     .run();
   audit(db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
   for (const e of input.evidence ?? []) {
-    db.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: input.evidenceSource ?? "system", createdAt: ts }).run();
+    let provenance: string = input.evidenceSource ?? "system";
+    let attachmentId: string | null = null;
+    if (e.attachmentId) {
+      const att = db.select().from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
+      if (att) {
+        attachmentId = att.id;
+        // "document" only when the figures are the ones the reader extracted. An edited figure is the operator's claim.
+        const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null }>;
+        const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase());
+        provenance = untouched ? "document" : "operator";
+        db.update(attachments).set({ obligationId: id }).where(eq(attachments.id, att.id)).run();
+      }
+    }
+    db.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance, attachmentId, createdAt: ts }).run();
   }
   if ((input.evidence ?? []).length > 0) {
     audit(db, { obligationId: id, actor: input.actor ?? "system", action: "evidence.attached", detail: { count: input.evidence!.length, labels: input.evidence!.map((e) => e.label) } });
@@ -69,7 +83,8 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   const ev = listEvidence(db, obligationId);
 
   // 1. AI interpretation
-  const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, businessName: biz.name, baseCurrency: biz.baseCurrency });
+  const docs = db.select({ name: attachments.name, reader: attachments.reader, text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
+  const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, documents: docs, businessName: biz.name, baseCurrency: biz.baseCurrency });
   const ai = run.interpretation;
   // Approvals were given for specific numbers. If re-interpretation changes who is paid, how much or what for, they no longer count.
   const approved = db.select().from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
