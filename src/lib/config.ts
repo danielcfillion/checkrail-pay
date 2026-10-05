@@ -3,6 +3,15 @@
  * replays deterministically and the app runs with zero credentials.
  */
 
+// Scripts (tsx) do not load .env on their own; Next does. Load it here so both agree.
+// Variables already set in the environment win. Skipped silently where unsupported (edge runtime).
+try {
+  const pl = process as unknown as { loadEnvFile?: (path?: string) => void };
+  if (typeof pl.loadEnvFile === "function") pl.loadEnvFile(".env");
+} catch {
+  /* no .env file, or not supported here */
+}
+
 export type RailMode = "mock" | "live";
 export type AiMode = "mock" | "live";
 
