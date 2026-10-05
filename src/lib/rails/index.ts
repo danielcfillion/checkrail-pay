@@ -20,7 +20,11 @@ export function getRails(): Record<Rail, PaymentRail> {
     return registry;
   }
   // Constructors throw on missing or invalid credentials; that is deliberate, see above.
-  registry = { paypal: new PayPalRail(), stellar: new StellarRail() };
+  // The only exception is an explicit, visible opt-in: STELLAR_RAIL=mock keeps Stellar simulated
+  // (labelled "Simulated, not on chain") so PayPal can be tested alone. Never implicit.
+  const paypal = new PayPalRail();
+  const stellar = process.env.STELLAR_RAIL === "mock" ? new MockStellarRail() : new StellarRail();
+  registry = { paypal, stellar };
   return registry;
 }
 

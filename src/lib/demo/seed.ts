@@ -15,10 +15,12 @@ import { approveObligation, confirmSettlement, executeObligation, ingestObligati
 export const DEMO_BUSINESS_ID = "biz_ridgeline";
 
 /** In live mode, point the Stellar demo recipient at a real funded testnet account (see scripts/stellar-setup.ts). */
+/** Live PayPal test: set DEMO_PAYPAL_RECIPIENT to a sandbox Personal account email so Maria's payout lands somewhere real. */
+const MARIA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT || "maria.santos@example.com";
 const STELLAR_DEMO_RECIPIENT = process.env.DEMO_STELLAR_RECIPIENT ?? "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYM9F3H6VCC4DEMONSTRATION";
 
 export const DEMO_VENDORS = [
-  { id: "ven_maria", name: "Maria Santos", role: "guide", country: "PH", email: "maria.santos@example.com", preferredRail: null, paypalEmail: "maria.santos@example.com", stellarAccount: "GBMARIA6S4NTOSPH7WALLET2LOBSTR3DEMO5ACCOUNT8FORDUELINE9DEMO", bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BDO ****4417", notes: "Lead guide, Palawan and Ha Giang departures. Prefers to be paid the day a trip ends." },
+  { id: "ven_maria", name: "Maria Santos", role: "guide", country: "PH", email: "maria.santos@example.com", preferredRail: null, paypalEmail: MARIA_PAYPAL, stellarAccount: "GBMARIA6S4NTOSPH7WALLET2LOBSTR3DEMO5ACCOUNT8FORDUELINE9DEMO", bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BDO ****4417", notes: "Lead guide, Palawan and Ha Giang departures. Prefers to be paid the day a trip ends." },
   { id: "ven_ana", name: "Ana Reyes", role: "guide", country: "PH", email: "ana.reyes@example.com", preferredRail: "stellar", paypalEmail: "ana.reyes@example.com", stellarAccount: STELLAR_DEMO_RECIPIENT, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "UnionBank ****0923", notes: "Asked for the faster rail after a PayPal withdrawal took five days in August." },
   { id: "ven_phuong", name: "Phuong Transport", role: "driver", country: "VN", email: "phuong.transport@example.com", preferredRail: null, paypalEmail: "phuong.transport@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Vietcombank ****7781", notes: "16-seat van and driver for Ha Giang loop. Contract rate USD 200/day." },
   { id: "ven_linh", name: "Linh Family Homestay", role: "homestay", country: "VN", email: "linh.homestay@example.com", preferredRail: null, paypalEmail: "linh.homestay@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "BIDV ****2206", notes: "Du Gia village. USD 18 per guest per night including dinner." },
