@@ -1,5 +1,7 @@
 # Monday handoff
 
+> Superseded in part on 6 Oct 2026: read `docs/SESSION_HANDOFF_02.md` first (live testing status, the brand name question, current queue).
+
 Written Saturday 3 Oct 2026 night, updated through the weekend. Everything below was done without your input, as you asked.
 
 ## What exists
