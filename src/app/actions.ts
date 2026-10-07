@@ -10,6 +10,8 @@ import { exportPendingCsv } from "@/lib/accounting/record";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import type { Rail, SourceType } from "@/lib/domain/types";
+import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
+import { signOffDailyClose } from "@/lib/engine/dailyClose";
 
 /**
  * Server actions: the only write surface of the UI. Each one calls the
@@ -29,7 +31,7 @@ async function actor(): Promise<string> {
   return `user:${user}`;
 }
 
-function done(paths: string[] = ["/", "/obligations", "/ledger", "/accounting", "/vendors", "/exceptions", "/audit"]) {
+function done(paths: string[] = ["/", "/obligations", "/ledger", "/accounting", "/vendors", "/exceptions", "/audit", "/close", "/settings"]) {
   for (const p of paths) revalidatePath(p);
 }
 
@@ -141,6 +143,72 @@ export async function uploadEvidenceAction(form: FormData): Promise<(ActionResul
     const bytes = Buffer.from(await file.arrayBuffer());
     const upload = await uploadDocument(db, { businessId: biz.id, name: file.name, mimeType: file.type, bytes, actor: await actor() });
     return { ok: true, message: upload.note ?? `Read ${upload.name} with ${upload.reader === "claude" ? "Claude" : upload.reader === "none" ? "no reader" : "the text reader"}.`, upload };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Autonomy. Every change here is made by a signed-in person and lands in the audit log; the agent cannot call these. */
+
+export async function setAutonomyAction(change: AutonomyChange): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const next = setAutonomy(db, biz.id, await actor(), change);
+    await runAutopilot(db, { businessId: biz.id }); // picks up anything already approved and clean
+    done();
+    const level = next.autonomy ?? "assist";
+    return { ok: true, message: level === "autopilot" ? "Autopilot is on. Clean payments within your caps are sent after the cancel window." : level === "review" ? "Every payment now waits for a person." : "Clean small payments are pre-approved. A person sends them." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function pauseAutopilotAction(paused: boolean): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    setAutopilotPaused(db, biz.id, await actor(), paused);
+    if (!paused) await runAutopilot(db, { businessId: biz.id });
+    done();
+    return { ok: true, message: paused ? "Autopilot paused. Nothing will be sent without a person." : "Autopilot resumed." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function cancelReleaseAction(id: string): Promise<ActionResult> {
+  try {
+    cancelAutopilotRelease(getDb(), id, await actor());
+    done([`/obligations/${id}`]);
+    done();
+    return { ok: true, message: "Release cancelled. The payment stays approved and can be sent by hand." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Run one autopilot pass now. The heartbeat does this on its own; the UI calls it when a countdown reaches zero. */
+export async function tickAutopilotAction(): Promise<ActionResult> {
+  try {
+    const r = await runAutopilot(getDb());
+    done();
+    return { ok: true, message: r.released.length ? `Autopilot sent ${r.released.length} payment${r.released.length === 1 ? "" : "s"}.` : "Nothing was due." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function signOffCloseAction(throughSeq: number): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    signOffDailyClose(db, biz.id, biz.baseCurrency, await actor(), throughSeq);
+    done();
+    return { ok: true, message: "Signed off. The next close starts from here." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

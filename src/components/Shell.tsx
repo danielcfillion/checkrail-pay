@@ -11,6 +11,7 @@ export const NAV = [
   { href: "/vendors", label: "Vendors", icon: "vendors" },
   { href: "/ledger", label: "Ledger", icon: "ledger" },
   { href: "/exceptions", label: "Exceptions", icon: "exceptions" },
+  { href: "/close", label: "Daily close", icon: "close" },
   { href: "/accounting", label: "Accounting", icon: "accounting" },
   { href: "/audit", label: "Audit", icon: "audit" },
   { href: "/settings", label: "Settings", icon: "settings" },

@@ -156,10 +156,11 @@ export function getOverview(db: Db = getDb()) {
     business: getBusiness(db),
     counts: {
       open: all.filter((r) => openStates.includes(r.state as ObligationState)).length,
-      needsAction: all.filter((r) => ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"].includes(r.state)).length,
+      needsAction: all.filter((r) => ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"].includes(r.state) && !scheduled(r)).length,
       awaitingApproval: all.filter((r) => r.state === "awaiting_approval").length,
       blocked: blocked.length,
-      readyToPay: all.filter((r) => r.state === "approved").length,
+      readyToPay: all.filter((r) => r.state === "approved" && !scheduled(r)).length,
+      scheduled: all.filter(scheduled).length,
       inFlight: all.filter((r) => ["execution_pending", "sent"].includes(r.state)).length,
       settled30d: settledRecent.length,
     },
@@ -173,10 +174,15 @@ export function getOverview(db: Db = getDb()) {
       byRail: { paypal: { grossMinor: grossByRail("paypal"), feeMinor: feesByRail("paypal"), count: byRail("paypal").length }, stellar: { grossMinor: grossByRail("stellar"), feeMinor: feesByRail("stellar"), count: byRail("stellar").length } },
     },
     weeks,
-    needsAction: all.filter((r) => ["blocked", "awaiting_approval", "needs_evidence", "failed", "approved"].includes(r.state)).sort((a, b) => rank(a.state) - rank(b.state)),
+    needsAction: all.filter((r) => ["blocked", "awaiting_approval", "needs_evidence", "failed", "approved"].includes(r.state) && !scheduled(r)).sort((a, b) => rank(a.state) - rank(b.state)),
     recent: listAudit(12, db),
     system: { railModes: railModes(), ai: isLiveAi() ? `claude (${config.ai.model})` : "rule-based (mock)", accounting: config.accounting.destination },
   };
+}
+
+/** Approved and scheduled by autopilot: the agent will send it, so it does not need a person. */
+function scheduled(r: ObligationRow): boolean {
+  return r.state === "approved" && !!r.releaseAt;
 }
 
 /** For a blocked mismatch, how much the block saved: requested minus evidenced amount, if positive. */

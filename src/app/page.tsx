@@ -5,6 +5,7 @@ import { BookLine } from "@/components/BookLine";
 import { NeedsYouList } from "@/components/ObligationList";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
 import { EmptyState, Panel, RelativeTime } from "@/components/ui";
+import { AutopilotStrip } from "@/components/AutopilotStrip";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +23,14 @@ export default function OverviewPage() {
           <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Dueline"}</h1>
           <p className="mt-1 text-ink-soft">
             {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "obligation")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+            {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}
             {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
           </p>
         </div>
         <ResetDemoButton />
       </header>
+
+      {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} /> : null}
 
       <BookLine rows={all} />
 

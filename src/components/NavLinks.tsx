@@ -91,6 +91,14 @@ function Icon({ name }: { name: string }) {
           <path d="M8 7v3M8 11.8v.2" />
         </svg>
       );
+    case "close":
+      return (
+        <svg {...common}>
+          <rect x="2.5" y="3.5" width="11" height="10" rx="1" />
+          <path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" />
+          <path d="M5.8 10l1.6 1.6 3-3.2" />
+        </svg>
+      );
     case "accounting":
       return (
         <svg {...common}>

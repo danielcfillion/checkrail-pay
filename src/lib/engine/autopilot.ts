@@ -123,12 +123,15 @@ export function setAutopilotPaused(db: Db, businessId: string, actor: string, pa
   const policy = readPolicy(db, businessId);
   writePolicy(db, businessId, { ...policy, autopilotPaused: paused });
   audit(db, { obligationId: null, actor, action: paused ? "autopilot.paused" : "autopilot.resumed", detail: {} });
-  if (paused) {
-    const scheduled = db.select().from(obligations).where(and(eq(obligations.businessId, businessId), eq(obligations.state, "approved"), isNotNull(obligations.releaseAt))).all();
-    for (const o of scheduled) {
-      db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(eq(obligations.id, o.id)).run();
-      audit(db, { obligationId: o.id, actor, action: "autopilot.stood_down", detail: { reason: "paused" } });
-    }
+  if (paused) standDown(db, businessId, actor, "paused");
+}
+
+/** Clear every pending release for a business. The payments stay approved for a person to send. */
+function standDown(db: Db, businessId: string, actor: string, reason: string): void {
+  const scheduled = db.select().from(obligations).where(and(eq(obligations.businessId, businessId), eq(obligations.state, "approved"), isNotNull(obligations.releaseAt))).all();
+  for (const o of scheduled) {
+    db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(eq(obligations.id, o.id)).run();
+    audit(db, { obligationId: o.id, actor, action: "autopilot.stood_down", detail: { reason } });
   }
 }
 
@@ -155,6 +158,7 @@ export function setAutonomy(db: Db, businessId: string, actor: string, change: A
   if (change.autopilotDailyCapMinor !== undefined) next.autopilotDailyCapMinor = num(change.autopilotDailyCapMinor, "Daily cap", 1_000_000_000);
   if (change.autopilotCancelWindowSeconds !== undefined) next.autopilotCancelWindowSeconds = num(change.autopilotCancelWindowSeconds, "Cancel window", 86_400);
   writePolicy(db, businessId, next);
+  if (effectiveAutonomy(next) !== "autopilot") standDown(db, businessId, actor, "autonomy lowered");
   audit(db, { obligationId: null, actor, action: "autonomy.changed", detail: { from: { autonomy: policy.autonomy, perPaymentCap: policy.autopilotPerPaymentCapMinor, dailyCap: policy.autopilotDailyCapMinor, windowSeconds: policy.autopilotCancelWindowSeconds }, to: { autonomy: next.autonomy, perPaymentCap: next.autopilotPerPaymentCapMinor, dailyCap: next.autopilotDailyCapMinor, windowSeconds: next.autopilotCancelWindowSeconds } } });
   return next;
 }

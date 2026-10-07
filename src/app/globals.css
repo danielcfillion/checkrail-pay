@@ -152,6 +152,10 @@ body {
 .hairline {
   border-color: var(--rule);
 }
+/* divide-y draws on the children, so the hairline colour has to reach them too. */
+.divide-y.hairline > * {
+  border-color: var(--rule);
+}
 
 /* Focus is always visible. */
 :focus-visible {

@@ -9,6 +9,7 @@ import { RouteCompare } from "@/components/RouteCompare";
 import { RuleChecklist } from "@/components/RuleChecklist";
 import { Timeline } from "@/components/Timeline";
 import { CopyButton } from "@/components/CopyButton";
+import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Linkified, Money, Panel, RailTag, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -198,6 +199,14 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
 
         {/* Column 3: actions, settlement, history */}
         <div className="space-y-6">
+          {o.state === "approved" && o.releaseAt ? (
+            <Panel title="Autopilot" aside="scheduled">
+              <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>
+              <div className="mt-2">
+                <ScheduledReleases compact rows={[{ id: o.id, vendorName: o.vendorName, amountText: formatMoney(o.amountMinor, o.currency), releaseAt: o.releaseAt }]} />
+              </div>
+            </Panel>
+          ) : null}
           <Panel title="Actions" aside={stateLabel(o.state)}>
             <ActionBar id={o.id} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
           </Panel>

@@ -1,7 +1,11 @@
 import { getBusiness, getSystemModes } from "@/lib/queries";
 import { DEFAULT_POLICY, type ApprovalPolicy } from "@/lib/domain/types";
-import { countryName, formatMoney, railLabel } from "@/lib/format";
+import { countryName, formatMoney, formatMoneySymbol, railLabel } from "@/lib/format";
 import { EmptyState, KeyValue, PageHeader, Panel } from "@/components/ui";
+import { AutonomyControl } from "@/components/AutonomyControl";
+import { CapMeter } from "@/components/CapMeter";
+import { autopilotStatus } from "@/lib/engine/autopilot";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -18,21 +22,36 @@ export default function SettingsPage() {
   }
   const policy = parsePolicy(biz.policyJson);
   const cur = biz.baseCurrency;
+  const ap = autopilotStatus(getDb(), biz.id);
+  const symbol = formatMoneySymbol(0, cur).replace(/[\d.,\s]+$/, "");
 
   const sentences: string[] = [
-    `Auto-pay up to ${formatMoney(policy.autoExecuteThresholdMinor, cur)} when evidence matches. Above that, a person approves.`,
+    `On Assist, pre-approve up to ${formatMoney(policy.autoExecuteThresholdMinor, cur)} when evidence matches. Above that, a person approves.`,
     policy.dualApprovalThresholdMinor > 0 ? `Above ${formatMoney(policy.dualApprovalThresholdMinor, cur)}, two people approve.` : "Dual approval is off.",
     `Allow the requested amount to differ from the evidence by up to ${(policy.amountToleranceBps / 100).toFixed(2)}%. Beyond that, block.`,
     policy.requireEvidence ? "Never pay without a job sheet, invoice, contract or booking attached." : "Evidence is recommended but not required.",
     policy.blockOnRecipientChange ? "Block any payment to a vendor whose payout details changed since they were last verified." : "Changed payout details do not block payments.",
     `Hold for review when the agent's confidence is below ${policy.minAiConfidence}%.`,
+    policy.vendorDailyCapMinor ? `Ask a person once one vendor passes ${formatMoney(policy.vendorDailyCapMinor, cur)} in 24 hours.` : "No per-vendor daily limit.",
     `Pay only along enabled corridors: ${policy.allowedCorridors.map(corridorText).join(", ")}.`,
   ];
 
   return (
     <>
-      <PageHeader title="Settings" lede="Read-only in this build. Policy is a JSON document on the business record; these are the same rules written out." />
+      <PageHeader title="Settings" lede="Choose how much the agent does without asking. The approval rules underneath stay the same at every level." />
       <div className="grid gap-6 lg:grid-cols-2">
+        <Panel title="Autonomy" aside={ap.level === "autopilot" ? (ap.paused ? "autopilot paused" : "autopilot on") : ap.level === "review" ? "a person approves everything" : "a person sends"} className="lg:col-span-2">
+          <AutonomyControl
+            key={`${ap.level}-${ap.paused}-${ap.perPaymentCapMinor}-${ap.dailyCapMinor}-${ap.cancelWindowSeconds}`}
+            view={{ level: ap.level, paused: ap.paused, perPaymentCapMinor: ap.perPaymentCapMinor, dailyCapMinor: ap.dailyCapMinor, cancelWindowSeconds: ap.cancelWindowSeconds, committed24hMinor: ap.committed24hMinor, autoApproveMinor: policy.autoExecuteThresholdMinor, dualApprovalMinor: policy.dualApprovalThresholdMinor, symbol }}
+          />
+          {ap.level === "autopilot" ? (
+            <div className="mt-5 max-w-md border-t pt-4 hairline">
+              <CapMeter label="Sent or scheduled in the last 24 hours" usedMinor={ap.committed24hMinor} capMinor={ap.dailyCapMinor} currency={cur} />
+            </div>
+          ) : null}
+        </Panel>
+
         <Panel title="Business">
           <KeyValue
             rows={[
@@ -54,7 +73,7 @@ export default function SettingsPage() {
           />
         </Panel>
 
-        <Panel title="Approval policy" className="lg:col-span-2">
+        <Panel title="Approval rules" aside="apply at every autonomy level" className="lg:col-span-2">
           <ol className="list-decimal space-y-2 pl-5">
             {sentences.map((s, i) => (
               <li key={i}>{s}</li>

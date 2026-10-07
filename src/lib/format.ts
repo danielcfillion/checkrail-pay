@@ -141,6 +141,17 @@ const ACTION_LABELS: Record<string, string> = {
   "accounting.exported": "Exported to accounting",
   "obligation.amended": "Obligation corrected",
   "obligation.cancelled": "Cancelled",
+  "execution.refused": "Refused at the last check",
+  "execution.unknown": "Outcome unclear, needs reconciling",
+  "autopilot.scheduled": "Scheduled the payment",
+  "autopilot.releasing": "Released the payment",
+  "autopilot.refused": "Stopped at the last check",
+  "autopilot.cancelled": "Cancelled the scheduled release",
+  "autopilot.stood_down": "Handed the payment back to a person",
+  "autopilot.paused": "Paused autopilot",
+  "autopilot.resumed": "Resumed autopilot",
+  "autonomy.changed": "Changed the autonomy setting",
+  "daily_close.reviewed": "Signed off the daily close",
 };
 
 /** "settlement.checked:seed" -> "Settlement checked (seed)". */
@@ -165,6 +176,8 @@ export function humaniseActor(actor: string | null | undefined): string {
       return railLabel(rest);
     case "system":
       return rest ? `System (${rest.replace(/-/g, " ")})` : "System";
+    case "agent":
+      return rest === "autopilot" ? "Autopilot" : "Agent";
     case "policy":
       return "Policy";
     case "router":
