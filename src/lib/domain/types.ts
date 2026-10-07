@@ -73,6 +73,22 @@ export interface ApprovalPolicy {
    * only with RAIL_MODE=live, so the single-operator demo keeps working.
    */
   requireSeparateApprover?: boolean;
+  /**
+   * How much the agent may do without asking.
+   *  review    every payment waits for a person
+   *  assist    clean requests under the auto-execute threshold are pre-approved; a person sends them (today's behaviour)
+   *  autopilot clean requests within the caps below are sent by the agent after a cancel window
+   * Blocks and holds apply at every level. Autonomy only removes the approval step.
+   */
+  autonomy?: "review" | "assist" | "autopilot";
+  /** Autopilot: largest single payment the agent may release alone, in base currency minor units. */
+  autopilotPerPaymentCapMinor?: number;
+  /** Autopilot: most the agent may release alone across the business in a rolling 24h, in base currency minor units. */
+  autopilotDailyCapMinor?: number;
+  /** Autopilot: seconds between "scheduled" and money moving, during which a person can cancel. 0 sends immediately. */
+  autopilotCancelWindowSeconds?: number;
+  /** Autopilot switched off without losing its settings. While true the level behaves as assist. */
+  autopilotPaused?: boolean;
 }
 
 export const DEFAULT_POLICY: ApprovalPolicy = {
@@ -84,7 +100,18 @@ export const DEFAULT_POLICY: ApprovalPolicy = {
   minAiConfidence: 75,
   allowedCorridors: ["US->US", "US->PH", "US->VN", "US->CA", "US->GB"],
   vendorDailyCapMinor: 100_000, // $1,000 per vendor per rolling 24h
+  autonomy: "assist",
+  autopilotPerPaymentCapMinor: 50_000, // $500
+  autopilotDailyCapMinor: 200_000, // $2,000 across the business per rolling 24h
+  autopilotCancelWindowSeconds: 600, // 10 minutes
+  autopilotPaused: false,
 };
+
+/** The level actually in force: a paused autopilot behaves as assist. */
+export function effectiveAutonomy(p: ApprovalPolicy): "review" | "assist" | "autopilot" {
+  const level = p.autonomy ?? "assist";
+  return level === "autopilot" && p.autopilotPaused ? "assist" : level;
+}
 
 export interface Money {
   amountMinor: number;
@@ -156,6 +183,8 @@ export interface PolicyInput {
     /** ISO time of last update, for the same-amount recency check. */
     updatedAt?: string;
   }>;
+  /** Business-wide committed payments in base currency over the last 24h, excluding this one. Used by the autopilot daily cap. */
+  businessRecentMinor?: number;
   /** Identifiers naming THIS obligation's job (same construction as priorSourceRefs[].keys). */
   jobKeys?: string[];
   /** Number of DISTINCT people who approved. */

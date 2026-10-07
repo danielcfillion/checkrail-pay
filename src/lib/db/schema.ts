@@ -66,6 +66,9 @@ export const obligations = sqliteTable(
     blockedReason: text("blocked_reason"),
     // hash of the vendor's payout details at the moment the obligation was approved; execution refuses if they changed since
     payoutHash: text("payout_hash"),
+    // Autopilot: when the agent will release this payment (end of the cancel window), and when a person cancelled that release.
+    releaseAt: text("release_at"),
+    autopilotCancelledAt: text("autopilot_cancelled_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

@@ -1,4 +1,5 @@
 import { isValidAmountMinor } from "./money";
+import { effectiveAutonomy } from "./types";
 import type {
   ApprovalPolicy,
   PolicyInput,
@@ -194,6 +195,23 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   const recent = input.vendorRecentMinor ?? 0;
   if (cap > 0 && recent + amount > cap && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons: [`Payments to this vendor in the last 24h would total ${fmt(recent + amount, input.baseCurrency)}, above the ${fmt(cap, input.baseCurrency)} daily cap`], rules };
+  }
+  // Autonomy only removes the approval step. Everything above (blocks, holds, warnings, dual approval, vendor cap) has already applied.
+  const level = effectiveAutonomy(policy);
+  if (level === "review" && input.approvalsCount < 1) {
+    return { decision: "require_approval", reasons: ["Autonomy is set to review everything: a person approves every payment"], rules };
+  }
+  if (level === "autopilot") {
+    const perCap = policy.autopilotPerPaymentCapMinor ?? 0;
+    if (perCap > 0 && amount > perCap && input.approvalsCount < 1) {
+      return { decision: "require_approval", reasons: [`Amount exceeds the autopilot per-payment cap ${fmt(perCap, input.baseCurrency)}`], rules };
+    }
+    const dayCap = policy.autopilotDailyCapMinor ?? 0;
+    const bizRecent = input.businessRecentMinor ?? 0;
+    if (dayCap > 0 && bizRecent + amount > dayCap && input.approvalsCount < 1) {
+      return { decision: "require_approval", reasons: [`Payments committed across the business in the last 24h total ${fmt(bizRecent, input.baseCurrency)}; this one would take it to ${fmt(bizRecent + amount, input.baseCurrency)}, above the ${fmt(dayCap, input.baseCurrency)} autopilot daily cap`], rules };
+    }
+    return { decision: "auto_execute", reasons: [], rules };
   }
   if (amount > policy.autoExecuteThresholdMinor && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons: [`Amount exceeds auto-execute threshold ${fmt(policy.autoExecuteThresholdMinor, input.baseCurrency)}`], rules };

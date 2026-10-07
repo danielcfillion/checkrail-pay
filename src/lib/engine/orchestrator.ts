@@ -1,7 +1,7 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
-import { DEFAULT_POLICY, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
+import { DEFAULT_POLICY, effectiveAutonomy, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
@@ -128,6 +128,24 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   // 4. State
   const current = mustGet(db, obligationId).state as ObligationState;
   moveTo(db, obligationId, targetState(outcome, current), outcome);
+
+  // 5. Autopilot: a clean payment inside the caps is scheduled for release after the cancel window.
+  if (outcome.decision === "auto_execute" && mustGet(db, obligationId).state === "approved") {
+    scheduleAutopilotRelease(db, obligationId);
+  }
+}
+
+/** Schedule an autopilot release for an approved obligation. No-op unless autopilot is in force, and never after a person cancelled it. */
+export function scheduleAutopilotRelease(db: Db, obligationId: string): void {
+  const ob = mustGet(db, obligationId);
+  if (ob.state !== "approved" || ob.releaseAt || ob.autopilotCancelledAt) return;
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
+  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
+  if (effectiveAutonomy(policy) !== "autopilot") return;
+  const windowSeconds = Math.max(0, policy.autopilotCancelWindowSeconds ?? 600);
+  const releaseAt = new Date(Date.now() + windowSeconds * 1000).toISOString();
+  db.update(obligations).set({ releaseAt, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  audit(db, { obligationId, actor: "agent:autopilot", action: "autopilot.scheduled", detail: { releaseAt, windowSeconds } });
 }
 
 /**
@@ -178,6 +196,14 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const approvalsCount = new Set(db.select({ actor: approvals.actor }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().map((a) => a.actor)).size;
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const vendorRecentMinor = prior.filter((p) => ["approved", "execution_pending", "sent", "settled"].includes(p.state) && p.updatedAt >= since).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
+  // Business-wide committed money in the last 24h (base currency), for the autopilot daily cap. Pre-approved payments only count once autopilot has scheduled them.
+  const businessRecentMinor = db
+    .select({ state: obligations.state, amountMinor: obligations.amountMinor, currency: obligations.currency, releaseAt: obligations.releaseAt, updatedAt: obligations.updatedAt })
+    .from(obligations)
+    .where(and(eq(obligations.businessId, ob.businessId), ne(obligations.id, obligationId)))
+    .all()
+    .filter((o) => o.currency === biz.baseCurrency && o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt)))
+    .reduce((sum, o) => sum + (o.amountMinor ?? 0), 0);
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
@@ -192,6 +218,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     jobKeys: myJobKeys,
     approvalsCount,
     vendorRecentMinor,
+    businessRecentMinor,
   });
   db.update(obligations)
     .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
