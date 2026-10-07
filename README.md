@@ -22,7 +22,7 @@ Dueline puts five fixed stations between "someone says we owe this" and "it is i
 
 ## Honest status
 
-Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 142 tests and a deterministic replay. The PayPal Payouts adapter, the Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call: the build environment had no network egress. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
+Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 162 tests and a deterministic replay. The PayPal Payouts adapter has reached the PayPal sandbox from a developer machine (authentication and adapter start-up confirmed; a full settled payout is not yet confirmed). The Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call. Autopilot has only been exercised on mock rails. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
 
 ## The demo story
 
@@ -77,9 +77,28 @@ More in `docs/screenshots/`, including dark theme and mobile.
 
 Every step appends to the audit log. No step can be skipped by a caller.
 
+## Autonomy: how much the agent does without asking
+
+One setting, three levels, described by who does each step (Settings, and a strip on the overview):
+
+| Level | Checks | Approves | Sends |
+|---|---|---|---|
+| Review everything | Agent | You | You |
+| Assist (default) | Agent | Agent, for clean requests up to USD 250 | You |
+| Autopilot | Agent | Agent | Agent, within your caps, after a cancel window |
+
+- **Autonomy removes the approval step and nothing else.** A mismatched amount, an already-paid job, changed payout details, missing evidence, a disabled corridor, the two-person rule above USD 5,000 and the per-vendor daily limit stop a payment at every level. `src/lib/engine/autopilot.test.ts` proves each one with autopilot on.
+- **Autopilot has hard limits**: a per-payment cap (default USD 500), a rolling 24-hour cap across the business (default USD 2,000), a cancel window before money moves (default 10 minutes, zero allowed) and a pause button that takes effect at once. Turning autopilot on asks for confirmation; turning it down or pausing never does.
+- **Policy runs again at the moment of release.** If anything changed during the cancel window (the vendor's payout email, a new duplicate, the cap), the payment is refused, no rail is called, and it shows up in the Daily close.
+- **The actor is recorded.** Autopilot sends are logged as `agent:autopilot`; setting changes, pauses and cancellations as the person who made them.
+- **Daily close** (`/close`): one page to read before signing out. What needs a look comes first (unclear outcomes, failures, last-moment refusals, new blocks, cancelled releases, slow settlements), then what autopilot sent, what people sent, spend against the cap and what is still waiting. "Sign off" writes an audit entry recording exactly what was on the page, and is refused if something changed after the page loaded.
+- **Heartbeat.** The server runs one autopilot pass every 15 seconds (`src/instrumentation.ts`). For more than one server process, set `AUTOPILOT_HEARTBEAT=off` and call `POST /api/autopilot/tick` from a scheduler.
+
+The overview also has an interactive **Money out** chart: settled payments by rail over the last 7, 30 or 90 days, with a tooltip per column and a payment table that narrows when a column is selected.
+
 ## The safety model: why the AI cannot pay
 
-- **The agent has no spending authority.** Its only output is an `AiInterpretation` (vendor, amount, reference, summary, confidence, flags). Its PayPal tools are filtered to a read-only set at load time (`src/lib/ai/paypalTools.ts`). There is no tool that moves money.
+- **The model has no spending authority, at any autonomy level.** Autopilot is not the model deciding to pay: it is a timer that releases payments the deterministic policy has already cleared, inside caps a person set. The reading agent's only output is an `AiInterpretation` (vendor, amount, reference, summary, confidence, flags). Its PayPal tools are filtered to a read-only set at load time (`src/lib/ai/paypalTools.ts`). There is no tool that moves money.
 - **Policy is a pure function.** `evaluatePolicy(policy, input)` in `src/lib/domain/policy.ts` takes the same input and returns the same output, with no network and no model. The agent proposes the fields (vendor, amount, reference); policy then binds them to the evidence: the amount must match an attached record, the vendor must be named by the evidence, the reference must not collide with a paid job. A wrong proposal from the agent therefore fails a rule rather than changing the outcome. Its confidence and flags can add warnings that require a human, never remove one.
 - **Execution re-runs policy before touching a rail.** `executeObligation` in `src/lib/engine/orchestrator.ts` refuses if anything changed since approval (a duplicate appeared, details changed).
 - **Idempotency on every attempt, and no re-minting after an unclear answer.** PayPal: the attempt's key is both `sender_batch_id` and the `PayPal-Request-Id` header. Stellar: the key is the transaction memo, and the adapter looks through the treasury's history (paged back up to 14 days) for a payment with that memo, destination, asset and amount before sending; if it cannot read the history it does not send. A rail answers `failed` only when the provider definitively rejected the request. A timeout, 5xx, lost response or exception is `unknown`: the obligation stays in `execution_pending`, the attempt is `unknown`, and `retryAmbiguousExecution` replays the same request under the same key. A new key is only ever issued after a definitive failure. The Stellar transaction hash is stored before the transaction is submitted.
@@ -156,19 +175,19 @@ The build environment for this submission could not reach PayPal sandbox or Stel
     npm run lint
     npm run build
 
-142 tests in 13 files pass as of this commit. The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+162 tests in 15 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
 
 ## Project layout
 
     src/lib/domain/       types, policy (pure), routing (static rule), state machine, ids
-    src/lib/engine/       orchestrator: ingest -> interpret -> policy -> quote -> route -> execute -> settle -> accounting
+    src/lib/engine/       orchestrator: ingest -> interpret -> policy -> quote -> route -> execute -> settle -> accounting; autopilot runner; daily close
     src/lib/ai/           Claude agent, read-only PayPal tools, rule-based fallback extractor
     src/lib/rails/        PaymentRail interface, mock adapters, PayPal Payouts adapter, Stellar adapter, fee model, corridors
     src/lib/accounting/   accounting record builder, CSV export, Xero mapping
     src/lib/db/           Drizzle schema and SQLite connection
     src/lib/demo/         Ridgeline Expeditions seed data and the four-obligation story
-    src/app/              Next.js App Router pages: overview, inbox, obligation detail, vendors, ledger, exceptions, accounting, audit, settings, demo
-    src/app/api/          accounting CSV export, PayPal webhook receiver
+    src/app/              Next.js App Router pages: overview, inbox, obligation detail, vendors, ledger, exceptions, daily close, accounting, audit, settings, demo
+    src/app/api/          accounting CSV export, PayPal webhook receiver, autopilot tick
     src/components/       the due line, route comparison, rule checklist, action bar, shell
     scripts/              seed.ts, replay.ts
     docs/                 corridor benchmark, UI notes, Devpost text, video script, SCF application, Xero pitch, screenshots
@@ -179,7 +198,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
 
 **What is proven.** The policy engine, state machine, routing rule, orchestrator, document reader (PDF text layer) and accounting export, by tests and by the deterministic replay. The PayPal adapter builds a correct Payouts request with idempotency headers and the webhook receiver verifies signatures in live mode (both type-checked, not yet run against sandbox). The Stellar adapter builds, signs and submits a PYUSD payment with a memo-based idempotency check (type-checked, not yet run against testnet). The Claude agent loop with PayPal Agent Toolkit tools filtered to read-only (type-checked, not yet run against the API).
 
-**Safety review.** The money path (orchestrator, both rail adapters, webhook, policy) went through a line-by-line audit before any live credential was allowed near it. It found real problems, among them a retry that could mint a fresh idempotency key after an ambiguous failure, an unvalidated amend patch, and a silent fall-back to mock rails in live mode. All are fixed and covered by tests (`src/lib/engine/safety.test.ts` and the rail tests): ambiguous outcomes now stay "unknown" and block a second payment until reconciled, state changes are compare-and-swap inside a transaction, approvers are counted by distinct person, payout destinations are pinned at approval, and live mode fails closed. Known gaps: no fee-bump handling, no SEP-29 memo or trustline pre-check, no role-based access control, the anchor leg is not built, and the agent shares a PayPal app with Payouts scope (use a separate read-only app).
+**Safety review.** The money path (orchestrator, both rail adapters, webhook, policy) went through a line-by-line audit before any live credential was allowed near it. It found real problems, among them a retry that could mint a fresh idempotency key after an ambiguous failure, an unvalidated amend patch, and a silent fall-back to mock rails in live mode. All are fixed and covered by tests (`src/lib/engine/safety.test.ts` and the rail tests): ambiguous outcomes now stay "unknown" and block a second payment until reconciled, state changes are compare-and-swap inside a transaction, approvers are counted by distinct person, payout destinations are pinned at approval, and live mode fails closed. Known gaps: autopilot is untested on live rails and its heartbeat assumes one server process; the Daily close does not yet flag new vendors or amounts far from a vendor's history; no fee-bump handling, no SEP-29 memo or trustline pre-check, no role-based access control, the anchor leg is not built, and the agent shares a PayPal app with Payouts scope (use a separate read-only app).
 
 **What is next.** Exercise live mode against PayPal sandbox and Stellar testnet (the top of the human action queue). Record the video. Then: a PYUSD to USDC path payment before the anchor leg, since anchors accept USDC not PYUSD; a sending-anchor agreement with PeraHub; Xero OAuth; a second corridor (Mexico via Bitso).
 
