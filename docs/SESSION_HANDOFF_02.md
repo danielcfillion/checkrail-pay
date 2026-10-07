@@ -42,6 +42,10 @@ Nothing has yet been verified against real Stellar or the real Claude API. The a
 
 Daniel wants a toggle between human-in-the-loop and fully automatic. Design agreed in principle: three levels (Review everything, Auto-pay clean requests, Autopilot). It only removes the approval step; blocks and holds (mismatch, duplicate, changed or unverified payout details, missing evidence, corridor limits) apply in every mode. Autopilot needs a per-payment cap, a daily spend cap, a visible pause switch, and audit actor `agent:autopilot`. Build it as a field in the business policy, a runner that executes on ingest when the decision is auto_execute and the level allows it, a settings control in the UI, tests proving blocks still stop it, and a demo beat for the video. Daniel's refinement (see D26 addendum): the approval screen must be visual context for exceptions only; Autopilot gets a one-screen Daily close summary with a Reviewed sign-off, plus a short cancel window before money moves. Roughly one day with the Daily close. Frame it in the pitch as an agent that transacts inside guardrails.
 
+## Dashboard and voice (D27, D28)
+
+Build the interactive dashboard together with the autonomy setting: headline strip, Daily close, interactive money-flow timeline (rail split, outcome colours, range picker, click-through), live feed. Use Recharts and load the dataviz skill first. Then a read-only voice control center (ElevenLabs preferred, test one alternative, browser speech as fallback); voice may question, summarise and pause Autopilot, and may not approve payments, raise caps or switch Autopilot on. Daniel is applying for the ElevenLabs startup grant himself (H12, draft in `docs/ELEVENLABS_GRANT.md`). Build order is in D28.
+
 ## Rest of the queue (from HUMAN_ACTION_QUEUE.md)
 
 H1 PayPal sandbox app: in progress. H5 Anthropic key: not started. H4 Stellar testnet treasury (`npx tsx scripts/stellar-setup.ts`, then a PYUSD faucet): not started. H3 GitHub repo: hold until the name is chosen. H2 SCF interest form: hold until the name is chosen, no later than about Oct 25. H6 video, H7 Xero app, H8 PeraHub, H9 Devpost, H10 SCF decisions: unchanged.
