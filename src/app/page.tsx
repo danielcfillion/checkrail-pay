@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { getOverview, listObligations } from "@/lib/queries";
-import { formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise } from "@/lib/format";
+import { getOverview, listObligations, listPaymentPoints } from "@/lib/queries";
+import { formatMoneySymbol, humaniseAction, humaniseActor, pluralise } from "@/lib/format";
 import { BookLine } from "@/components/BookLine";
 import { NeedsYouList } from "@/components/ObligationList";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
 import { EmptyState, Panel, RelativeTime } from "@/components/ui";
 import { AutopilotStrip } from "@/components/AutopilotStrip";
+import { MoneyOut } from "@/components/MoneyOut";
+import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
 
@@ -13,11 +15,11 @@ export default function OverviewPage() {
   const o = getOverview();
   const all = listObligations({ limit: 1000 });
   const base = o.business?.baseCurrency ?? "USD";
-  const rails = o.money.byRail;
-  const maxGross = Math.max(rails.paypal.grossMinor, rails.stellar.grossMinor, 1);
+  const points = listPaymentPoints(120);
 
   return (
     <>
+      <AutoRefresh seconds={10} />
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Dueline"}</h1>
@@ -34,13 +36,15 @@ export default function OverviewPage() {
 
       <BookLine rows={all} />
 
-      <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-3 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
+      <dl className="mt-6 grid grid-cols-1 gap-y-4 border-y hairline py-4 sm:grid-cols-3 sm:divide-x sm:divide-[color:var(--rule)]">
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
         <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open obligation")}, ${o.counts.blocked} blocked held back`} />
-        <Figure label="Paid, last 30 days" value={formatMoneySymbol(o.money.paid30dMinor, base)} note={pluralise(o.counts.settled30d, "settlement")} tone="settled" />
-        <Figure label="Fees, last 30 days" value={formatMoneySymbol(o.money.fees30dMinor, base)} note={o.money.paid30dMinor ? `${((o.money.fees30dMinor / o.money.paid30dMinor) * 100).toFixed(1)}% of paid` : "no payments yet"} />
         <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpayments and duplicates</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
       </dl>
+
+      <div className="mt-6">
+        <MoneyOut points={points} currency={base} />
+      </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="Needs you" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
@@ -48,18 +52,7 @@ export default function OverviewPage() {
         </Panel>
 
         <div className="space-y-6">
-          <Panel title="Rail split, last 30 days">
-            {o.money.paid30dMinor === 0 ? (
-              <p className="text-ink-soft">No settlements in the last 30 days.</p>
-            ) : (
-              <div className="space-y-4">
-                <RailBar rail="PayPal" colour="var(--paypal)" soft="var(--paypal-soft)" gross={rails.paypal.grossMinor} fee={rails.paypal.feeMinor} count={rails.paypal.count} max={maxGross} currency={base} />
-                <RailBar rail="Stellar" colour="var(--stellar)" soft="var(--stellar-soft)" gross={rails.stellar.grossMinor} fee={rails.stellar.feeMinor} count={rails.stellar.count} max={maxGross} currency={base} />
-              </div>
-            )}
-          </Panel>
-
-          <Panel title="Recent activity" aside={<Link href="/audit" className="link">Full audit log</Link>} padded={false}>
+          <Panel title="Live activity" aside={<Link href="/audit" className="link">Full audit log</Link>} padded={false}>
             {o.recent.length ? (
               <ul className="divide-y hairline">
                 {o.recent.map((a) => (
@@ -98,31 +91,10 @@ export default function OverviewPage() {
 function Figure({ label, value, note, tone }: { label: string; value: string; note?: React.ReactNode; tone?: "attention" | "settled" | "blocked" }) {
   const colour = tone === "attention" ? "text-attention" : tone === "settled" ? "text-settled" : tone === "blocked" ? "text-blocked" : "";
   return (
-    <div className="px-1 lg:px-5 lg:first:pl-1">
+    <div className="px-1 sm:px-5 sm:first:pl-1">
       <dt className="dense text-ink-soft">{label}</dt>
       <dd className={`wide num mt-1 text-2xl ${colour}`}>{value}</dd>
       {note ? <dd className="mt-0.5 text-xs text-ink-soft">{note}</dd> : null}
-    </div>
-  );
-}
-
-function RailBar({ rail, colour, soft, gross, fee, count, max, currency }: { rail: string; colour: string; soft: string; gross: number; fee: number; count: number; max: number; currency: string }) {
-  const pct = Math.max(2, Math.round((gross / max) * 100));
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="dense" style={{ color: colour }}>
-          {rail}
-        </span>
-        <span className="num">{formatMoney(gross, currency)}</span>
-      </div>
-      <div className="mt-1 h-2 w-full rounded-sm" style={{ background: soft }} role="img" aria-label={`${rail}: ${formatMoney(gross, currency)} gross across ${pluralise(count, "payment")}`}>
-        <div className="h-2 rounded-sm" style={{ width: `${gross ? pct : 0}%`, background: colour }} />
-      </div>
-      <p className="num mt-1 text-xs text-ink-soft">
-        {pluralise(count, "payment")}, fees {formatMoney(fee, currency)}
-        {gross ? ` (${((fee / gross) * 100).toFixed(1)}%)` : ""}
-      </p>
     </div>
   );
 }

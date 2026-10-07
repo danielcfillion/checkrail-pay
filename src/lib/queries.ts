@@ -104,6 +104,23 @@ export function listSettlements(db: Db = getDb()) {
     .map((r) => ({ ...r.s, obligation: r.o, vendorName: r.vendorName, vendorCountry: r.vendorCountry }));
 }
 
+export type PaymentPoint = { id: string; vendorName: string | null; sourceRef: string | null; rail: string; grossMinor: number; feeMinor: number; currency: string; settledAt: string; by: "agent" | "person" | "unknown" };
+
+/** Settled payments in the last `days`, each tagged with who started it. Feeds the overview chart. */
+export function listPaymentPoints(days = 120, db: Db = getDb()): PaymentPoint[] {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const starters = new Map<string, string>();
+  for (const e of db.select({ obligationId: auditEntries.obligationId, actor: auditEntries.actor }).from(auditEntries).where(eq(auditEntries.toState, "execution_pending")).orderBy(auditEntries.seq).all()) {
+    if (e.obligationId) starters.set(e.obligationId, e.actor);
+  }
+  return listSettlements(db)
+    .filter((s) => s.settledAt >= since)
+    .map((s) => {
+      const actor = starters.get(s.obligationId) ?? "";
+      return { id: s.obligationId, vendorName: s.vendorName, sourceRef: s.obligation.sourceRef, rail: s.rail, grossMinor: s.grossMinor, feeMinor: s.feeMinor, currency: s.grossCurrency, settledAt: s.settledAt, by: actor.startsWith("agent:") ? "agent" : actor.startsWith("user:") ? "person" : "unknown" };
+    });
+}
+
 export function listAccountingSyncs(db: Db = getDb()) {
   return db
     .select({ a: accountingSyncs, o: obligations, vendorName: vendors.name })
