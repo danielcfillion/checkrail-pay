@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ObligationRow } from "@/lib/queries";
-import { DueLine } from "./DueLine";
+import { CheckLine } from "./CheckLine";
 import { Money, RailTag, RelativeTime, StatePill } from "./ui";
 
 /** One-line reason for a row in a "needs you" list. */
@@ -62,7 +62,7 @@ export function NeedsYouList({ rows }: { rows: ObligationRow[] }) {
               </p>
             </div>
             <div className="hidden items-center sm:flex" style={{ height: 20 }}>
-              <DueLine state={r.state} variant="compact" hasAccounting />
+              <CheckLine state={r.state} variant="compact" hasAccounting />
             </div>
             <div className="hidden sm:flex sm:flex-col sm:items-start">
               <StatePill state={r.state} />
@@ -122,7 +122,7 @@ export function ObligationTable({ rows }: { rows: ObligationRow[] }) {
               </td>
               <td>
                 <div className="flex items-center gap-2.5">
-                  <DueLine state={r.state} variant="compact" hasAccounting />
+                  <CheckLine state={r.state} variant="compact" hasAccounting />
                   <StatePill state={r.state} />
                 </div>
               </td>

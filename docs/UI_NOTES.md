@@ -1,4 +1,4 @@
-# Dueline UI notes
+# Checkrail Pay UI notes
 
 Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no component or icon libraries. Every data page is `force-dynamic` and reads through `src/lib/queries.ts`; every write goes through `src/app/actions.ts`.
 
@@ -6,8 +6,8 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 
 - **Archivo is vendored, not fetched.** The build sandbox cannot reach fonts.googleapis.com (proxy 403), so `next/font/google` failed at build time. The same variable file Google serves (weight 100 to 900, width 62 to 125) sits at `src/app/fonts/archivo-variable.woff2` and is loaded with `next/font/local`, exposing `--font-archivo`. The one-line `next/font/google` equivalent is in a comment in `layout.tsx`; swap back if you prefer a network font. Width is applied with `font-stretch` via the `.wide` (112%) and `.dense` (88%) classes; `.num` applies tabular figures.
 - **Palette lives in `:root` CSS variables and is mapped into Tailwind through `@theme inline`**, so `bg-paper`, `text-ink`, `text-blocked` and friends work. Dark follows `prefers-color-scheme` unless `<html data-theme="light|dark">` is set. No toggle UI.
-- **Station mapping** (`src/components/dueline-model.ts`): drafted and needs_evidence at read; verified, awaiting_approval and blocked at verified (blocked breaks the line there); approved and execution_pending at routed; sent at paid with a "confirming" caption; settled at reconciled when an accounting row exists, otherwise at paid with "not yet in the books"; failed breaks at paid; cancelled is a grey inactive line; refunded and disputed sit at paid with a caption.
-- **The pay animation** is the only motion. `DueLine` steps its marker one station per 600ms toward `animateTo`; `ObligationStageProvider` shares that target between the header line and the `ActionBar` so a successful `executeAction` sends the marker to paid, then reconciled, then hands control back to the server-rendered state. `prefers-reduced-motion` disables the transition.
+- **Station mapping** (`src/components/checkline-model.ts`): drafted and needs_evidence at read; verified, awaiting_approval and blocked at verified (blocked breaks the line there); approved and execution_pending at routed; sent at paid with a "confirming" caption; settled at reconciled when an accounting row exists, otherwise at paid with "not yet in the books"; failed breaks at paid; cancelled is a grey inactive line; refunded and disputed sit at paid with a caption.
+- **The pay animation** is the only motion. `CheckLine` steps its marker one station per 600ms toward `animateTo`; `ObligationStageProvider` shares that target between the header line and the `ActionBar` so a successful `executeAction` sends the marker to paid, then reconciled, then hands control back to the server-rendered state. `prefers-reduced-motion` disables the transition.
 - **Overview hero** (`BookLine`) plots every non-cancelled obligation as a dot at its station, settled ones in green, with a count per station and a red break plus count beneath any station where obligations are blocked. Dots link to the obligation; the break links to Exceptions.
 - **Blocked reason parsing** reuses the backend's own phrasing: "says USD 800.00" prefills the correct-amount form; "already used" switches the form to a reference correction (amendAction with `sourceRef`), since the duplicate case is not an amount problem.
 - **needs_evidence has no evidence form.** The action panel says so plainly and offers re-create with evidence or cancel, rather than pretending an endpoint exists.
@@ -40,7 +40,7 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Overview: shared due line, figures row, needs-you list, rail split, recent activity, reset demo |
+| `/` | Overview: shared check line, figures row, needs-you list, rail split, recent activity, reset demo |
 | `/obligations` | Inbox with `?filter=all|needs_action|in_flight|settled|blocked` |
 | `/obligations/new` | Ingest form with evidence rows and two example loaders |
 | `/obligations/[id]` | Obligation detail, three columns, actions by state, pay animation |
@@ -56,10 +56,10 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 
 ## Components (`src/components`)
 
-- `DueLine` (client): compact and full variants; props `state`, `variant`, `hasAccounting`, `blockedAtStation`, `animateTo`, `caption`.
-- `dueline-model.ts`: stations, `positionFor(state)`, `stationOffset(i)`.
+- `CheckLine` (client): compact and full variants; props `state`, `variant`, `hasAccounting`, `blockedAtStation`, `animateTo`, `caption`.
+- `checkline-model.ts`: stations, `positionFor(state)`, `stationOffset(i)`.
 - `BookLine`: overview hero, all obligations on one line.
-- `ObligationStage` (client): `ObligationStageProvider`, `StageDueLine`, `useStage` for the pay animation.
+- `ObligationStage` (client): `ObligationStageProvider`, `StageCheckLine`, `useStage` for the pay animation.
 - `ActionBar` (client): state-dependent actions, correct-amount and correct-reference forms.
 - `ConfirmButton` (client), `ResetDemoButton` (client), `CopyButton` (client).
 - `Toast` (client): `ToastProvider`, `useToast`, `ToastFromParam`.

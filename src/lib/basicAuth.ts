@@ -1,11 +1,19 @@
 /**
- * Optional HTTP Basic auth for the whole app. Active only when DUELINE_BASIC_AUTH=user:pass
+ * Optional HTTP Basic auth for the whole app. Active only when CHECKRAIL_BASIC_AUTH=user:pass
  * is set. Pure functions so they can run in the Edge middleware and in tests.
  * This is a single shared credential, not RBAC: it gives each request a username
  * (used as the audit actor) and keeps strangers out.
  */
 
-export const ACTOR_HEADER = "x-dueline-user";
+export const ACTOR_HEADER = "x-checkrail-user";
+
+/**
+ * The configured credential. DUELINE_BASIC_AUTH is the variable's name from before the
+ * product was renamed: it is still honoured so an existing .env does not silently switch auth off.
+ */
+export function basicAuthSetting(env: Record<string, string | undefined> = process.env): string | undefined {
+  return env.CHECKRAIL_BASIC_AUTH || env.DUELINE_BASIC_AUTH || undefined;
+}
 
 const USERNAME_RE = /^[A-Za-z0-9._@-]{1,64}$/;
 

@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { positionFor, stationOffset, STATIONS, STATION_LABELS } from "./dueline-model";
+import { positionFor, stationOffset, STATIONS, STATION_LABELS } from "./checkline-model";
 import type { ObligationRow } from "@/lib/queries";
 import { formatMoney, stateLabel } from "@/lib/format";
 
 /**
- * The overview hero: every open obligation plotted on one shared due line.
+ * The overview hero: every open obligation plotted on one shared check line.
  * Markers stack at their station; blocked obligations are shown as a break
  * beneath the station where they stopped, with a count.
  */

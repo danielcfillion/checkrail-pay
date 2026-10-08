@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
 import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation } from "@/lib/engine/orchestrator";
-import { ACTOR_HEADER } from "@/lib/basicAuth";
+import { ACTOR_HEADER, basicAuthSetting } from "@/lib/basicAuth";
 import { isLiveRails } from "@/lib/config";
 import { exportPendingCsv } from "@/lib/accounting/record";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
@@ -16,7 +16,7 @@ import { signOffDailyClose } from "@/lib/engine/dailyClose";
 /**
  * Server actions: the only write surface of the UI. Each one calls the
  * orchestrator; none of them talks to a rail directly. The demo operator is
- * "user:daniel" unless DUELINE_BASIC_AUTH is set, in which case the middleware
+ * "user:daniel" unless CHECKRAIL_BASIC_AUTH is set, in which case the middleware
  * authenticates every request and the username becomes the actor (this is a single
  * shared credential, not RBAC).
  */
@@ -25,7 +25,7 @@ const DEMO_ACTOR = "user:daniel";
 
 /** The acting user for this request. The header is only trusted when Basic auth is configured: the middleware sets it itself. */
 async function actor(): Promise<string> {
-  if (!process.env.DUELINE_BASIC_AUTH) return DEMO_ACTOR;
+  if (!basicAuthSetting()) return DEMO_ACTOR;
   const user = (await headers()).get(ACTOR_HEADER);
   if (!user) throw new Error("Not authenticated");
   return `user:${user}`;

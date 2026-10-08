@@ -1,5 +1,5 @@
 /**
- * Core domain types for Dueline.
+ * Core domain types for Checkrail Pay.
  *
  * The AI proposes. Deterministic policy disposes. Rails execute. The audit log remembers.
  */
@@ -220,7 +220,7 @@ export interface RouteQuote {
   corridor: string;
   provider: string;
   explanation: string;
-  /** True when part of the quote (swap, anchor off-ramp, recipient-currency delivery) is an estimate Dueline does not execute. */
+  /** True when part of the quote (swap, anchor off-ramp, recipient-currency delivery) is an estimate Checkrail Pay does not execute. */
   modelled?: boolean;
 }
 

@@ -4,7 +4,7 @@ import { getObligationDetail } from "@/lib/queries";
 import type { Rail } from "@/lib/domain/types";
 import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, stateLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
-import { ObligationStageProvider, StageDueLine } from "@/components/ObligationStage";
+import { ObligationStageProvider, StageCheckLine } from "@/components/ObligationStage";
 import { RouteCompare } from "@/components/RouteCompare";
 import { RuleChecklist } from "@/components/RuleChecklist";
 import { Timeline } from "@/components/Timeline";
@@ -61,7 +61,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           </div>
         </div>
         <div className="mt-5">
-          <StageDueLine state={o.state} hasAccounting={hasAccounting} caption={caption} />
+          <StageCheckLine state={o.state} hasAccounting={hasAccounting} caption={caption} />
         </div>
       </header>
 
@@ -324,7 +324,7 @@ function decisionText(d: string): string {
   }
 }
 
-/** Trims a blocked reason to a short caption for the due line. */
+/** Trims a blocked reason to a short caption for the check line. */
 function shortReason(reason: string): string {
   if (/already used/.test(reason)) return "duplicate reference";
   const m = reason.match(/says ([A-Z]{3} [\d,]+\.\d{2})/);

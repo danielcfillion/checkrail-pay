@@ -1,4 +1,4 @@
-# Dueline demo video script
+# Checkrail Pay demo video script
 
 Target length 2:45 (hackathon limit 3:00). One take per shot is fine; cut in post. Browser window 1440px wide, light theme, system fonts off (Archivo is vendored). Run `npm run db:seed` before recording so the four obligations are in their starting states. If live mode is set up, the sidebar footer will read "rails: sandbox/testnet"; if not, it reads "mock/mock" and the voiceover at 2:30 says so.
 
@@ -9,17 +9,17 @@ Pace: speak plainly, one idea per sentence. No music under the voiceover; a quie
 | Time | On screen | Action | Voiceover |
 |---|---|---|---|
 | 0:00 to 0:08 | Full-screen crop of the Phuong chat message on the obligation page: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently." | None, hold the crop | "Pay Phuong nine sixty today, he needs it for fuel." I run a tour company and I get this message every week. This one is one hundred and sixty dollars wrong. |
-| 0:08 to 0:18 | Cut to Overview `/`. Cursor rests on the shared due line hero. | Slowly move the cursor across the five stations | Every payment travels one line: read, verified, routed, paid, reconciled. Claude reads the request. It cannot pay. A fixed set of rules decides, and this morning two of four requests are about to fail them. |
+| 0:08 to 0:18 | Cut to Overview `/`. Cursor rests on the shared check line hero. | Slowly move the cursor across the five stations | Every payment travels one line: read, verified, routed, paid, reconciled. Claude reads the request. It cannot pay. A fixed set of rules decides, and this morning two of four requests are about to fail them. |
 | 0:18 to 0:26 | Overview, "Needs you" list | Hover the Phuong Transport row | The first one is a chat message: pay Phuong Transport nine hundred and sixty dollars, he needs it urgently. |
 | 0:26 to 0:48 | Obligation page `/obligations/<phuong>` | Click the row. Let the page sit. Point at the raw request, then the trip sheet excerpt, then the "Agent tool calls" list, then the red rule row "Requested USD 960.00 but Trip sheet says USD 800.00". | Claude read the request and the two attached records, and it shows its work: the tools it called are listed on the page. The contract says two hundred dollars a day. The trip sheet says four days. Policy compared the request to the evidence and blocked it: one hundred and sixty dollars over. The line is broken at verified, and it says why. |
 | 0:48 to 0:56 | Same page, action panel | Hover "Correct to USD 800.00", do not click | The operator can correct it to eight hundred and it re-enters the flow. Nothing left the account. |
 | 0:56 to 1:04 | Back to Overview, then click the Exceptions link in the hero break, land on `/exceptions` | Click | The second one looks fine. Maria Santos, a job sheet, the right amount. |
-| 1:04 to 1:20 | Obligation page `/obligations/<maria 0914>` | Click the JOB-HG4D-0914 row. Point at the "Reference JOB-HG4D-0914 was already used" rule row, then at the linked settled obligation | Except that reference was already settled seventeen days ago in Dueline's own ledger. Policy found the duplicate and blocked it. Two errors caught, three hundred and forty dollars kept. |
+| 1:04 to 1:20 | Obligation page `/obligations/<maria 0914>` | Click the JOB-HG4D-0914 row. Point at the "Reference JOB-HG4D-0914 was already used" rule row, then at the linked settled obligation | Except that reference was already settled seventeen days ago in Checkrail Pay's own ledger. Policy found the duplicate and blocked it. Two errors caught, three hundred and forty dollars kept. |
 | 1:20 to 1:40 | Obligation page `/obligations/<maria 0921>` | Navigate via Inbox. Point at the route comparison: PayPal quote on the left, Stellar on the right, delivered PHP as the big figure. Click "Pay with PayPal". Let the marker travel to paid, then reconciled. | Third: one hundred and eighty dollars to the same guide for last week's trip. Evidence matches, under the threshold, auto-approved. Both rails are quoted, and I compare what the guide gets per dollar I actually spend, since PayPal charges its fee on top. At this size they are within a fraction of a percent, so the tie goes to PayPal. One click. The marker travels to paid, then reconciled. |
 | 1:40 to 2:12 | Obligation page `/obligations/<ana>` | Navigate via Inbox. Point at "awaiting approval". Point at the Stellar quote: more PHP per dollar spent, about fifteen minutes versus one to two days, and the vendor preference reason. Click "Approve", then "Pay with Stellar". Marker travels. In live mode only: click the explorer link in settlement details, show the tab, come back. In mock mode there is no link, and the page says "Simulated, not on chain"; leave it on screen. | Fourth: seven hundred and fifty dollars to Ana Reyes. Above the auto threshold, so a person approves. Here Stellar wins on cost and on speed: a couple of percent more pesos per dollar spent, in about fifteen minutes instead of days, and Ana asked for the faster rail after a slow PayPal withdrawal in August. Approve. Pay with Stellar. PYUSD leaves the treasury with the job reference in the memo. In live mode the transaction link is right there; in mock mode the page says so plainly. |
 | 2:12 to 2:24 | `/accounting` then `/ledger` | Click Accounting, show two pending records and the CSV export link. Click Ledger. | Both settlements are in the ledger with gross, fee and net. The accounting export is ready: bill, payment and fee lines mapped for Xero. |
 | 2:24 to 2:36 | `/audit` | Scroll slowly | Every step is in one audit log: what the agent read, which rule fired, who approved, which rail paid, with the idempotency key. The agent never had spending authority. Policy is a pure function. Execution re-runs it before touching a rail. |
-| 2:36 to 2:45 | Overview `/`, the due line with two dots at reconciled and two breaks. Hold. Fade to the wordmark and one line of text. | Hold on the hero, then cut to a closing card: "2 settled. 2 errors prevented. 2 records exported." | Two settled, two errors prevented, two records exported. Dueline. Verified supplier payments, routed and reconciled automatically. |
+| 2:36 to 2:45 | Overview `/`, the check line with two dots at reconciled and two breaks. Hold. Fade to the wordmark and one line of text. | Hold on the hero, then cut to a closing card: "2 settled. 2 errors prevented. 2 records exported." | Two settled, two errors prevented, two records exported. Checkrail Pay. Verified supplier payments, routed and reconciled automatically. |
 
 Record in live mode (PayPal sandbox, Stellar testnet, Claude). Then there are no disclaimers to speak and the sidebar footer reads sandbox/testnet/claude on its own. If you must record in mock mode, say so once at 2:30 and nowhere else.
 
@@ -30,18 +30,18 @@ Record in live mode (PayPal sandbox, Stellar testnet, Claude). Then there are no
 
 ## The 20-second insert that matters most
 
-After obligation 3 pays in live mode, switch to the PayPal sandbox dashboard and show the payout batch id that Dueline printed. Hold for three seconds. This single shot answers "has a real PayPal call ever succeeded".
+After obligation 3 pays in live mode, switch to the PayPal sandbox dashboard and show the payout batch id that Checkrail Pay printed. Hold for three seconds. This single shot answers "has a real PayPal call ever succeeded".
 
 ## Closing card text
 
-    Dueline
+    Checkrail Pay
     Verified supplier payments, routed and reconciled automatically.
     2 settled. 2 errors prevented. 2 records exported.
-    github.com/<you>/dueline
+    github.com/<you>/checkrail-pay
 
 ## 20-second social teaser
 
-Cut from the same footage. Vertical or square crop on the obligation page is fine; the due line and the big PHP figure carry it.
+Cut from the same footage. Vertical or square crop on the obligation page is fine; the check line and the big PHP figure carry it.
 
 | Time | On screen | Voiceover or caption |
 |---|---|---|
@@ -49,7 +49,7 @@ Cut from the same footage. Vertical or square crop on the obligation page is fin
 | 0:04 to 0:08 | Zoom on "Requested USD 960.00 but Trip sheet says USD 800.00" | Caption: "The trip sheet says $800." |
 | 0:08 to 0:12 | Ana obligation page, click Pay with Stellar, marker travels | Caption: "The right ones pay in minutes." |
 | 0:12 to 0:16 | Overview hero: two dots reconciled, two breaks | Caption: "2 paid. 2 caught. Books done." |
-| 0:16 to 0:20 | Wordmark and one-liner | Caption: "Dueline. Verified supplier payments, routed and reconciled automatically." |
+| 0:16 to 0:20 | Wordmark and one-liner | Caption: "Checkrail Pay. Verified supplier payments, routed and reconciled automatically." |
 
 ## Recording checklist
 

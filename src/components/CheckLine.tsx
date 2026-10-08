@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { positionFor, stationOffset, STATIONS, STATION_LABELS, type StationIndex } from "./dueline-model";
+import { positionFor, stationOffset, STATIONS, STATION_LABELS, type StationIndex } from "./checkline-model";
 import { stateLabel } from "@/lib/format";
 
 type Props = {
@@ -26,11 +26,11 @@ const TONE_FILL: Record<string, string> = {
 };
 
 /**
- * The due line. A marker travels left to right through five stations. The only
+ * The check line. A marker travels left to right through five stations. The only
  * motion in the app happens here: when the target station moves forward, the
  * marker steps one station at a time (600ms each, CSS transition on left).
  */
-export function DueLine({ state, variant = "compact", hasAccounting, blockedAtStation, animateTo, caption, className = "" }: Props) {
+export function CheckLine({ state, variant = "compact", hasAccounting, blockedAtStation, animateTo, caption, className = "" }: Props) {
   const pos = positionFor(state, { hasAccounting });
   const target: StationIndex = animateTo ?? pos.station;
   const brokenAt = blockedAtStation === undefined ? pos.brokenAt : blockedAtStation;

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { attachments } from "@/lib/db/schema";
 
-/** Serve an uploaded source document. Behind the same Basic auth as every page when DUELINE_BASIC_AUTH is set. */
+/** Serve an uploaded source document. Behind the same Basic auth as every page when CHECKRAIL_BASIC_AUTH is set. */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   if (!/^att_[a-z0-9]+$/i.test(id)) return new Response("Not found", { status: 404 });

@@ -1,8 +1,8 @@
-# Dueline design plan
+# Checkrail Pay design plan
 
 Subject: a finance-operations tool for a small business that pays a distributed roster of contractors and suppliers, often across borders. Audience: the owner or finance manager who today does this from spreadsheets, chat threads and a PayPal tab, and the hackathon judges watching a three-minute video. Primary job: make it obvious, at a glance, where every payment is on its way from "someone says we owe this" to "it is in the books", and make it impossible to miss the ones that are wrong.
 
-## The one memorable thing: the due line
+## The one memorable thing: the check line
 
 Every obligation is drawn as a line that money travels along, left to right, through five fixed stations:
 
@@ -46,7 +46,7 @@ Left rail navigation, 220px, collapsing to icons under 1024px and to a bottom ba
 Overview
 
     ┌────────────┬────────────────────────────────────────────────────────┐
-    │ Dueline    │ Ridgeline Expeditions                 [Reset demo]     │
+    │ Checkrail Pay    │ Ridgeline Expeditions                 [Reset demo]     │
     │            │                                                         │
     │ Overview   │ Needs you (3)              Outstanding   Paid 30d  Fees │
     │ Inbox      │                            $2,414.00     $4,331.00 $71  │

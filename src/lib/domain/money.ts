@@ -1,5 +1,5 @@
 /**
- * Integer money helpers. Every amount in Dueline is an integer count of minor
+ * Integer money helpers. Every amount in Checkrail Pay is an integer count of minor
  * units (cents). Rates are held as integer basis points or micro-units so no
  * float ever touches a payable amount.
  */

@@ -1,6 +1,6 @@
 # Contributing
 
-Dueline is built under a two-lane model. Knowing which lane a change belongs to is most of what you need.
+Checkrail Pay is built under a two-lane model. Knowing which lane a change belongs to is most of what you need.
 
 ## The two lanes
 

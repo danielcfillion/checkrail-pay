@@ -22,7 +22,7 @@ type Props = {
 
 /**
  * The actions a person can take, by state. Each button names the action.
- * On a successful payment the due line marker travels to paid, then reconciled.
+ * On a successful payment the check line marker travels to paid, then reconciled.
  */
 export function ActionBar(p: Props) {
   const [pending, start] = useTransition();

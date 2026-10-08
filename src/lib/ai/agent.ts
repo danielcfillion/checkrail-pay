@@ -23,7 +23,7 @@ export interface AgentRun {
   toolCalls: Array<{ name: string; input: unknown; resultPreview: string }>;
 }
 
-const SYSTEM = `You are Dueline's obligation agent for an SME finance team. Your job is to read a messy payment request (an invoice, a job-completion note, a booking record, or an operator's chat message) and work out, carefully, who is owed what and whether the evidence supports it.
+const SYSTEM = `You are Checkrail Pay's obligation agent for an SME finance team. Your job is to read a messy payment request (an invoice, a job-completion note, a booking record, or an operator's chat message) and work out, carefully, who is owed what and whether the evidence supports it.
 
 You do NOT have the authority to pay anyone. A deterministic policy engine decides whether money moves. Your output is advice: a structured interpretation plus plain-language flags. Being conservative is correct: if an amount does not match the evidence, say so; if a reference was already paid, say so; if the request contains urgency pressure or changed bank details, say so.
 

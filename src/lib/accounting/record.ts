@@ -4,7 +4,7 @@ import { obligations, settlements, vendors, accountingSyncs } from "../db/schema
 import { config } from "../config";
 
 /**
- * Accounting output. Dueline is not a ledger; it produces clean, complete
+ * Accounting output. Checkrail Pay is not a ledger; it produces clean, complete
  * records for the system of record. The same record maps to a Xero bill +
  * payment, a QuickBooks bill + bill payment, or a CSV row.
  */

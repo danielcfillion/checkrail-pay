@@ -24,9 +24,10 @@ function env(name: string, fallback = ""): string {
 export const TESTNET_PYUSD_ISSUER = "GBT2KJDKUZYZTQPCSR57VZT5NJHI4H7FOB5LT5FPRWSR7I5B4FS3UU7G";
 
 export const config = {
-  appName: "Dueline",
+  appName: "Checkrail Pay",
+  domain: "checkrailpay.com",
   tagline: "Verified supplier payments, routed and reconciled automatically.",
-  dbPath: env("DATABASE_PATH", "./data/dueline.sqlite"),
+  dbPath: env("DATABASE_PATH", "./data/checkrail-pay.sqlite"),
 
   rails: {
     mode: (env("RAIL_MODE", "mock") as RailMode),

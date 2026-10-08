@@ -19,7 +19,7 @@ const archivo = localFont({
 });
 
 export const metadata: Metadata = {
-  title: { default: "Dueline", template: "%s, Dueline" },
+  title: { default: "Checkrail Pay", template: "%s, Checkrail Pay" },
   description: "Verified supplier payments, routed and reconciled automatically.",
 };
 

@@ -22,10 +22,10 @@ export function Shell({ businessName, system, children }: { businessName: string
     <div className="min-h-screen md:grid md:grid-cols-[64px_1fr] lg:grid-cols-[220px_1fr]">
       <aside className="hidden md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
         <div className="px-3 py-4 lg:px-5">
-          <Link href="/" className="wide block text-lg leading-6" aria-label="Dueline, overview">
-            <span className="hidden lg:inline">Dueline</span>
+          <Link href="/" className="wide block text-lg leading-6" aria-label="Checkrail Pay, overview">
+            <span className="hidden lg:inline">Checkrail Pay</span>
             <span className="lg:hidden" aria-hidden>
-              D
+              C
             </span>
           </Link>
           <p className="mt-0.5 hidden truncate text-xs text-ink-soft lg:block" title={businessName ?? undefined}>

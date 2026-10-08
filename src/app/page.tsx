@@ -22,7 +22,7 @@ export default function OverviewPage() {
       <AutoRefresh seconds={10} />
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Dueline"}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Checkrail Pay"}</h1>
           <p className="mt-1 text-ink-soft">
             {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "obligation")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
             {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}

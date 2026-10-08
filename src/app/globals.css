@@ -306,7 +306,7 @@ table.ledger td.r {
   text-align: right;
 }
 
-/* The due line marker's only motion. */
+/* The check line marker's only motion. */
 .dl-marker {
   transition: left 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }

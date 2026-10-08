@@ -1,4 +1,4 @@
-/** Shared station model for the due line. Pure, usable from server and client. */
+/** Shared station model for the check line. Pure, usable from server and client. */
 
 export const STATIONS = ["read", "verified", "routed", "paid", "reconciled"] as const;
 export type Station = (typeof STATIONS)[number];

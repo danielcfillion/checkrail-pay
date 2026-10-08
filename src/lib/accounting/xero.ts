@@ -1,7 +1,7 @@
 import type { AccountingPayload } from "./record";
 
 /**
- * Xero adapter: the interface Dueline writes to, with the OAuth path stubbed.
+ * Xero adapter: the interface Checkrail Pay writes to, with the OAuth path stubbed.
  *
  * Human Gate: a Xero developer app and OAuth consent are required before
  * `XeroAdapter.push` can run against a real tenant. Until then the mapping

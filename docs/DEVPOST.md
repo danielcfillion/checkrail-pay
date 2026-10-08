@@ -4,7 +4,7 @@ Paste each section into the matching Devpost field. Categories to select, in thi
 
 ## Project name
 
-Dueline
+Checkrail Pay
 
 ## Tagline (under 60 characters)
 
@@ -14,11 +14,11 @@ Verified supplier payments, routed and reconciled automatically.
 
 ## Inspiration
 
-I run a small tour company in Northern Vietnam. Every week we pay guides, drivers and homestays, and the requests arrive as an invoice photo, a job sheet, or a chat message saying "can you pay Phuong today, he needs it for fuel". Someone checks each one against a contract, pays from a PayPal tab, then types it into the books. Nothing in the chain is checking, and amounts drift and job sheets get paid twice. Dueline is the layer I wanted: it reads the mess, refuses what is wrong, pays what is right over the better rail, and leaves the books done.
+I run a small tour company in Northern Vietnam. Every week we pay guides, drivers and homestays, and the requests arrive as an invoice photo, a job sheet, or a chat message saying "can you pay Phuong today, he needs it for fuel". Someone checks each one against a contract, pays from a PayPal tab, then types it into the books. Nothing in the chain is checking, and amounts drift and job sheets get paid twice. Checkrail Pay is the layer I wanted: it reads the mess, refuses what is wrong, pays what is right over the better rail, and leaves the books done.
 
 ## What it does
 
-Dueline is an AI payables operations layer for small businesses that pay contractors and suppliers across borders.
+Checkrail Pay is an AI payables operations layer for small businesses that pay contractors and suppliers across borders.
 
 Every payment request travels along one line through five stations: read, verified, routed, paid, reconciled.
 
@@ -54,7 +54,7 @@ Keeping the AI out of the money path while keeping it useful meant making its ou
 
 ## Accomplishments that we're proud of
 
-No path exists from the model to a payment. The due line shows the whole book on one line. The demo catches two real classes of error (inflated amount, duplicate reference) rather than just moving money. 130 passing tests, including a story test that runs the whole demo through the orchestrator.
+No path exists from the model to a payment. The check line shows the whole book on one line. The demo catches two real classes of error (inflated amount, duplicate reference) rather than just moving money. 130 passing tests, including a story test that runs the whole demo through the orchestrator.
 
 ## What we learned
 

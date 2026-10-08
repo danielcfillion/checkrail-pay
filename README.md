@@ -1,8 +1,10 @@
-# Dueline
+# Checkrail Pay
 
 **Verified supplier payments, routed and reconciled automatically.**
 
-Dueline is an AI payables operations layer for small businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads payment requests as they arrive (a pasted message, a PDF invoice or job sheet read from its text, a photo read by Claude when a key is set), works out who is owed what, refuses the ones that are wrong, picks the cheaper or faster rail between PayPal Payouts and Stellar PYUSD, pays, and lands every settlement in an accounting-ready export.
+[checkrailpay.com](https://checkrailpay.com) (domain registered; site not live yet). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it. Checkrail Pay checks every payment before money moves.
+
+Checkrail Pay is an AI payables operations layer for small businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads payment requests as they arrive (a pasted message, a PDF invoice or job sheet read from its text, a photo read by Claude when a key is set), works out who is owed what, refuses the ones that are wrong, picks the cheaper or faster rail between PayPal Payouts and Stellar PYUSD, pays, and lands every settlement in an accounting-ready export.
 
 Built for the PayPal AI Hackathon (Nov 2026) and submitted to Stellar Community Fund #46.
 
@@ -10,7 +12,7 @@ Built for the PayPal AI Hackathon (Nov 2026) and submitted to Stellar Community 
 
 A tour operator in the US pays guides, drivers and homestays in the Philippines and Vietnam. Requests arrive as invoices, job sheets and chat messages. Today the owner reconciles them by hand against contracts and a PayPal tab, and still pays duplicates and inflated invoices.
 
-Dueline puts five fixed stations between "someone says we owe this" and "it is in the books":
+Checkrail Pay puts five fixed stations between "someone says we owe this" and "it is in the books":
 
     read ──── verified ──── routed ──── paid ──── reconciled
 
@@ -22,7 +24,7 @@ Dueline puts five fixed stations between "someone says we owe this" and "it is i
 
 ## Honest status
 
-Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 162 tests and a deterministic replay. The PayPal Payouts adapter has reached the PayPal sandbox from a developer machine (authentication and adapter start-up confirmed; a full settled payout is not yet confirmed). The Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call. Autopilot has only been exercised on mock rails. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Dueline's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
+Everything runs end to end in mock mode, and that is what the demo and the tests exercise. The policy engine, state machine, routing rule, orchestrator and accounting export are proven by 162 tests and a deterministic replay. The PayPal Payouts adapter has reached the PayPal sandbox from a developer machine (authentication and adapter start-up confirmed; a full settled payout is not yet confirmed). The Stellar PYUSD adapter and the Claude agent with PayPal Agent Toolkit tools are written against the real SDKs and type-checked, but have not yet made a live call. Autopilot has only been exercised on mock rails. By default the "agent" is a rule-based extractor, not Claude. Duplicate detection runs against Checkrail Pay's own ledger, not PayPal's history. Details in "Honesty" below, and the steps to go live are in `HUMAN_ACTION_QUEUE.md`.
 
 ## The demo story
 
@@ -37,7 +39,7 @@ Ridgeline Expeditions LLC, a US tour operator, has four open obligations.
 
 Outcome: 2 settled, 2 errors prevented (USD 340 that would have left the business), 2 accounting records exported.
 
-![Overview: every open obligation on one due line](docs/screenshots/overview.png)
+![Overview: every open obligation on one check line](docs/screenshots/overview.png)
 
 ![Phuong Transport blocked: the request says USD 960, the trip sheet says USD 800](docs/screenshots/blocked-mismatch.png)
 
@@ -116,14 +118,14 @@ The overview also has an interactive **Money out** chart: settled payments by ra
 |---|---|---|
 | `RAIL_MODE` | `mock` (default), `live` | `mock` uses deterministic offline adapters with the fee model from `docs/CORRIDOR_BENCHMARK.md`. `live` uses PayPal sandbox (or live, by `PAYPAL_ENV`) and Stellar testnet (or public, by `STELLAR_NETWORK`). |
 | `AI_MODE` | `mock` (default), `live` | `mock` uses a rule-based extractor. `live` calls Claude through the Anthropic API with the PayPal tools attached, and falls back to rules if the call fails. |
-| `DUELINE_BASIC_AUTH` | unset (default), `user:pass` | Optional HTTP Basic auth for every page and action (see Access control). |
+| `CHECKRAIL_BASIC_AUTH` | unset (default), `user:pass` | Optional HTTP Basic auth for every page and action (see Access control). |
 | `ACCOUNTING_DESTINATION` | `csv` (default), `xero` | `csv` writes the export. `xero` is the adapter interface with OAuth not yet wired. |
 
 Mock mode needs zero credentials and is how the demo replays. The sidebar footer always shows the current modes; the demo does not pretend.
 
 ## Access control
 
-The demo runs with no login and acts as `user:daniel`. Before pointing the app at live credentials, set `DUELINE_BASIC_AUTH=user:pass`. Every page and server action then requires that HTTP Basic credential, and the username becomes the audit actor (`user:<name>`). This is one shared credential, not role-based access control: it keeps strangers out and gives the audit log a name. A malformed value refuses all requests instead of leaving the app open. The PayPal webhook route (`/api/webhooks/paypal`) is exempt because PayPal cannot send Basic credentials; it verifies PayPal's signature instead. The demo reset is disabled when `RAIL_MODE=live`. Separation of approvers needs at least two people, which a single shared credential cannot provide: put the app behind a proxy that authenticates individual users and sets distinct usernames, or keep the policy's `requireSeparateApprover` off.
+The demo runs with no login and acts as `user:daniel`. Before pointing the app at live credentials, set `CHECKRAIL_BASIC_AUTH=user:pass`. Every page and server action then requires that HTTP Basic credential, and the username becomes the audit actor (`user:<name>`). This is one shared credential, not role-based access control: it keeps strangers out and gives the audit log a name. A malformed value refuses all requests instead of leaving the app open. The PayPal webhook route (`/api/webhooks/paypal`) is exempt because PayPal cannot send Basic credentials; it verifies PayPal's signature instead. The demo reset is disabled when `RAIL_MODE=live`. Separation of approvers needs at least two people, which a single shared credential cannot provide: put the app behind a proxy that authenticates individual users and sets distinct usernames, or keep the policy's `requireSeparateApprover` off.
 
 ## Quick start
 
@@ -138,7 +140,7 @@ Requires Node 20 or later. SQLite is bundled through `better-sqlite3`; no extern
 Output of `npm run demo:replay` in mock mode on 2026-10-03 (only the explorer line differs from the current script, which now prints "simulated hash, not on chain"):
 
 ```
-> dueline@0.1.0 demo:replay
+> checkrail-pay@0.1.0 demo:replay
 > tsx scripts/replay.ts
 
 Rails: paypal=mock stellar=mock
@@ -188,7 +190,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
     src/lib/demo/         Ridgeline Expeditions seed data and the four-obligation story
     src/app/              Next.js App Router pages: overview, inbox, obligation detail, vendors, ledger, exceptions, daily close, accounting, audit, settings, demo
     src/app/api/          accounting CSV export, PayPal webhook receiver, autopilot tick
-    src/components/       the due line, route comparison, rule checklist, action bar, shell
+    src/components/       the check line, route comparison, rule checklist, action bar, shell
     scripts/              seed.ts, replay.ts
     docs/                 corridor benchmark, UI notes, Devpost text, video script, SCF application, Xero pitch, screenshots
 
@@ -202,7 +204,7 @@ The build environment for this submission could not reach PayPal sandbox or Stel
 
 **What is next.** Exercise live mode against PayPal sandbox and Stellar testnet (the top of the human action queue). Record the video. Then: a PYUSD to USDC path payment before the anchor leg, since anchors accept USDC not PYUSD; a sending-anchor agreement with PeraHub; Xero OAuth; a second corridor (Mexico via Bitso).
 
-**On the Stellar cost argument.** Per the benchmark, on published fees Stellar via PeraHub beats PayPal to the Philippines only above roughly USD 500, and Wise is cheaper than both. Vietnam has no licensed VND off-ramp. Dueline's value is automation, control and reconciliation first; routing cost second. The routing rule is honest about this: at USD 180 it picks PayPal.
+**On the Stellar cost argument.** Per the benchmark, on published fees Stellar via PeraHub beats PayPal to the Philippines only above roughly USD 500, and Wise is cheaper than both. Vietnam has no licensed VND off-ramp. Checkrail Pay's value is automation, control and reconciliation first; routing cost second. The routing rule is honest about this: at USD 180 it picks PayPal.
 
 ## Licence
 

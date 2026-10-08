@@ -1,7 +1,7 @@
 import { sqliteTable, text, integer, index, uniqueIndex, blob } from "drizzle-orm/sqlite-core";
 
 /**
- * Dueline data model.
+ * Checkrail Pay data model.
  *
  * Money is stored as integer minor units (cents) plus an ISO currency code.
  * All timestamps are ISO-8601 strings in UTC.

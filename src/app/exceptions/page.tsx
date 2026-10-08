@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getOverview, listObligations } from "@/lib/queries";
 import { formatMoneySymbol, pluralise } from "@/lib/format";
-import { DueLine } from "@/components/DueLine";
+import { CheckLine } from "@/components/CheckLine";
 import { EmptyState, Money, PageHeader, RelativeTime, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,7 @@ export default function ExceptionsPage() {
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-4">
-                  <DueLine state={r.state} variant="compact" />
+                  <CheckLine state={r.state} variant="compact" />
                   <p className="min-w-0 flex-1 text-blocked">{r.blockedReason ?? "The rail rejected the payment. Open to retry or cancel."}</p>
                 </div>
                 <p className="mt-1 text-xs text-ink-soft">{nextStep(r.blockedReason, r.state)}</p>

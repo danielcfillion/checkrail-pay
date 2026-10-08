@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatMoney, formatMoneySymbol, railLabel, stateLabel, timeAgo, formatDateTime } from "@/lib/format";
-import { STATION_LABELS, type Station } from "./dueline-model";
+import { STATION_LABELS, type Station } from "./checkline-model";
 
 /* Small, server-safe presentational pieces. */
 

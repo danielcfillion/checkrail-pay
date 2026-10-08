@@ -62,7 +62,7 @@ export class PayPalRail implements PaymentRail {
     const body = {
       sender_batch_header: {
         sender_batch_id: req.idempotencyKey,
-        email_subject: "You have a payment from Dueline",
+        email_subject: "You have a payment from Checkrail Pay",
         email_message: req.memo,
       },
       items: [

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { findObligationsBySourceRef, getOverview } from "@/lib/queries";
 import type { ObligationRow } from "@/lib/queries";
 import { formatMoneySymbol } from "@/lib/format";
-import { DueLine } from "@/components/DueLine";
+import { CheckLine } from "@/components/CheckLine";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
 import { EmptyState, Money, PageHeader, RailTag, StatePill } from "@/components/ui";
 
@@ -66,7 +66,7 @@ export default function DemoPage() {
                   <p className="mt-1 text-ink-soft">{f.line}</p>
                   {f.row ? (
                     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                      <DueLine state={f.row.state} variant="compact" hasAccounting />
+                      <CheckLine state={f.row.state} variant="compact" hasAccounting />
                       <StatePill state={f.row.state} />
                       <span className="num text-ink-soft">{f.row.vendorName}, {f.ref}</span>
                       <Money minor={f.row.amountMinor} currency={f.row.currency} />
@@ -93,7 +93,7 @@ export default function DemoPage() {
         <div className="panel p-4">
           <h2 className="font-medium">Suggested order</h2>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-ink-soft">
-            <li>Overview: the shared due line, two breaks, errors prevented.</li>
+            <li>Overview: the shared check line, two breaks, errors prevented.</li>
             <li>Phuong: the mismatch, the rule that caught it, correct to $800.</li>
             <li>Maria duplicate: the reference was paid 17 days ago; cancel it.</li>
             <li>Maria JOB-HG4D-0921: pay with PayPal, marker travels to reconciled.</li>

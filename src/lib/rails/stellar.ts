@@ -136,7 +136,7 @@ export class StellarRail implements PaymentRail {
   private figures(req: ExecutionRequest, feeStroops: string | null): Pick<ExecutionResult, "feeMinor" | "receivedMinor" | "receivedCurrency" | "fxRate" | "note"> {
     const q = quoteStellar(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
     const fee = feeStroops ? `Network fee ${feeStroops} stroops (${(Number(feeStroops) / 1e7).toFixed(7)} XLM), not converted to USD.` : "Network fee not recorded.";
-    const modelled = q.available && q.modelled ? ` PHP/${q.receiveCurrency} delivery through the anchor is modelled, not executed: Dueline sent PYUSD on Stellar only.` : "";
+    const modelled = q.available && q.modelled ? ` PHP/${q.receiveCurrency} delivery through the anchor is modelled, not executed: Checkrail Pay sent PYUSD on Stellar only.` : "";
     return { feeMinor: 0, receivedMinor: req.amountMinor, receivedCurrency: "PYUSD", fxRate: "1", note: `${fee}${modelled}` };
   }
 

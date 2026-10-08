@@ -91,7 +91,7 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
     return { ...base, available: false, unavailableReason: `Amount is too small: fees of ${usd(feeMinor)} leave nothing for the recipient`, feeMinor, fxRate: microToDecimal(rateMicro), receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: s.etaSeconds, provider: s.provider, explanation: "" };
   }
   const explanation = needsAnchor
-    ? `PYUSD on Stellar, swapped to USDC (${s.swapToUsdcPct}%), off-ramped by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid). Network fee under one cent. Recipient sees a ${c.recipientCurrency} bank deposit. The swap, off-ramp and ${c.recipientCurrency} figures are modelled estimates: Dueline sends PYUSD on Stellar and does not execute the anchor leg yet.`
+    ? `PYUSD on Stellar, swapped to USDC (${s.swapToUsdcPct}%), off-ramped by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid). Network fee under one cent. Recipient sees a ${c.recipientCurrency} bank deposit. The swap, off-ramp and ${c.recipientCurrency} figures are modelled estimates: Checkrail Pay sends PYUSD on Stellar and does not execute the anchor leg yet.`
     : `PYUSD on Stellar delivered to the recipient's wallet. Network fee under one cent; no FX.`;
   return {
     ...base,

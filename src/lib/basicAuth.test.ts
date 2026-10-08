@@ -38,15 +38,18 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const prev = process.env.DUELINE_BASIC_AUTH;
+  const prev = process.env.CHECKRAIL_BASIC_AUTH;
+  const prevOld = process.env.DUELINE_BASIC_AUTH;
   afterEach(() => {
-    if (prev === undefined) delete process.env.DUELINE_BASIC_AUTH;
-    else process.env.DUELINE_BASIC_AUTH = prev;
+    if (prev === undefined) delete process.env.CHECKRAIL_BASIC_AUTH;
+    else process.env.CHECKRAIL_BASIC_AUTH = prev;
+    if (prevOld === undefined) delete process.env.DUELINE_BASIC_AUTH;
+    else process.env.DUELINE_BASIC_AUTH = prevOld;
   });
   const req = (headers: Record<string, string> = {}) => new NextRequest("http://localhost/obligations", { headers });
 
-  it("is a no-op when DUELINE_BASIC_AUTH is unset, and strips a client-supplied actor header", () => {
-    delete process.env.DUELINE_BASIC_AUTH;
+  it("is a no-op when CHECKRAIL_BASIC_AUTH is unset, and strips a client-supplied actor header", () => {
+    delete process.env.CHECKRAIL_BASIC_AUTH;
     const res = middleware(req({ [ACTOR_HEADER]: "forged" }));
     expect(res.status).toBe(200);
     expect(res.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBeNull();
@@ -54,7 +57,7 @@ describe("middleware", () => {
   });
 
   it("returns 401 with a challenge when auth is on and credentials are missing or wrong", () => {
-    process.env.DUELINE_BASIC_AUTH = "rianne:pw";
+    process.env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
     const none = middleware(req());
     expect(none.status).toBe(401);
     expect(none.headers.get("WWW-Authenticate")).toMatch(/^Basic/);
@@ -62,14 +65,23 @@ describe("middleware", () => {
   });
 
   it("passes the authenticated username to the app and ignores a forged actor header", () => {
-    process.env.DUELINE_BASIC_AUTH = "rianne:pw";
+    process.env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
     const res = middleware(req({ authorization: basic("rianne", "pw"), [ACTOR_HEADER]: "daniel" }));
     expect(res.status).toBe(200);
     expect(res.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBe("rianne");
   });
 
+  it("still enforces auth when only the pre-rename variable DUELINE_BASIC_AUTH is set", () => {
+    delete process.env.CHECKRAIL_BASIC_AUTH;
+    process.env.DUELINE_BASIC_AUTH = "rianne:pw";
+    expect(middleware(req()).status).toBe(401);
+    const ok = middleware(req({ authorization: basic("rianne", "pw") }));
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBe("rianne");
+  });
+
   it("refuses everything when the setting is malformed, instead of leaving the app open", () => {
-    process.env.DUELINE_BASIC_AUTH = "oops";
+    process.env.CHECKRAIL_BASIC_AUTH = "oops";
     expect(middleware(req()).status).toBe(503);
     expect(middleware(req({ authorization: basic("oops", "") })).status).toBe(503);
   });
