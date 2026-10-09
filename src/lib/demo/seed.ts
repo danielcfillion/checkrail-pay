@@ -4,6 +4,7 @@ import { accountingSyncs, approvals, auditEntries, businesses, evidence, events,
 import { DEFAULT_POLICY } from "../domain/types";
 import { hashPayoutDetails, newId } from "../domain/ids";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation } from "../engine/orchestrator";
+import { withMockRails } from "../rails";
 
 /**
  * Demo data: Ridgeline Expeditions, a US tour operator running small-group
@@ -96,8 +97,16 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
 
-/** A month of settled history so totals, vendor pages and the ledger have texture. */
+/**
+ * A month of settled history so totals, vendor pages and the ledger have texture.
+ * Always paid through the mock rails: with RAIL_MODE=live this used to send nine real sandbox
+ * payouts (and, with an empty sandbox balance, left nine failed attempts and no history at all).
+ */
 async function seedHistory(db: Db): Promise<void> {
+  await withMockRails(() => seedHistoryRows(db));
+}
+
+async function seedHistoryRows(db: Db): Promise<void> {
   const items: Array<{ vendor: string; ref: string; amount: number; text: string; days: number; sourceType: "job_completion" | "invoice" }> = [
     { vendor: "Maria Santos", ref: "JOB-HG4D-0914", amount: 18_000, text: "Trip HG-4D-0914 closed. Lead guide Maria Santos, 4 days, USD 180 (JOB-HG4D-0914). Release payment.", days: 17, sourceType: "job_completion" },
     { vendor: "Phuong Transport", ref: "INV-2026-0138", amount: 24_000, text: "Invoice INV-2026-0138 from Phuong Transport: van hire 3 days at USD 80, total USD 240.", days: 12, sourceType: "invoice" },

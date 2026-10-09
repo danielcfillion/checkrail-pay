@@ -33,6 +33,21 @@ export function railModes(): Record<Rail, string> {
   return { paypal: r.paypal.mode, stellar: r.stellar.mode };
 }
 
+/**
+ * Run `fn` with the mock rails installed, whatever RAIL_MODE says, then put the real registry back.
+ * For the demo seed only: its month of "history" must never send real payments. Settlements made this
+ * way carry the mock adapter's mode ("mock") on the attempt row, so they are visibly simulated.
+ */
+export async function withMockRails<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = registry;
+  registry = { paypal: new MockPayPalRail(), stellar: new MockStellarRail() };
+  try {
+    return await fn();
+  } finally {
+    registry = previous;
+  }
+}
+
 /** For tests. */
 export function resetRails(): void {
   registry = null;

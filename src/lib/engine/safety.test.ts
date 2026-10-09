@@ -408,3 +408,25 @@ describe("L1: audit sequence", () => {
     expect(after).toBe(before + 1);
   });
 });
+
+describe("demo seed never touches a live rail (C5)", () => {
+  it("pays its history through the mock rails even when a throwing live rail is installed", async () => {
+    const { setRailsForTest, resetRails } = await import("../rails");
+    // Quotes are read-only and may come from a live rail; moving money must not.
+    const { MockPayPalRail } = await import("../rails/mock");
+    const quoteOnly = new MockPayPalRail();
+    const boom: PaymentRail = { rail: "paypal", mode: "sandbox", quote: (i) => quoteOnly.quote(i), execute: async () => { throw new Error("live execute called"); }, getStatus: async () => { throw new Error("live status called"); } };
+    const stellarQuote = new MockStellarRail();
+    setRailsForTest({ paypal: boom, stellar: { ...boom, rail: "stellar", quote: (i) => stellarQuote.quote(i) } });
+    try {
+      const db = openTestDb();
+      await seedDemo(db, { history: true });
+      const settled = db.select().from(obligations).where(eq(obligations.state, "settled")).all();
+      expect(settled.length).toBeGreaterThanOrEqual(9);
+      const attempts = db.select().from(paymentAttempts).all();
+      expect(attempts.every((a) => a.mode === "mock")).toBe(true);
+    } finally {
+      resetRails();
+    }
+  });
+});
