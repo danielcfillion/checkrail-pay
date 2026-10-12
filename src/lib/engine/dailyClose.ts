@@ -27,7 +27,7 @@ export interface CloseItem {
 }
 
 export interface AttentionItem extends CloseItem {
-  kind: "unknown_outcome" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement";
+  kind: "unknown_outcome" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
 }
 
 export interface DailyClose {
@@ -125,7 +125,38 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     if (e.toState === "blocked" && byId.get(e.obligationId)?.state === "blocked") flag("blocked", e.obligationId, e.createdAt, byId.get(e.obligationId)?.blockedReason ?? null);
   }
 
-  const order: AttentionItem["kind"][] = ["unknown_outcome", "failed", "refused", "slow_settlement", "blocked", "cancelled_release"];
+  // Payments that went out but deserve a second look: a first payment to a vendor, an amount far above
+  // that vendor's usual, or a payment a person approved over the policy's warnings.
+  const settledHistory = db
+    .select({ obligationId: settlements.obligationId, grossMinor: settlements.grossMinor, settledAt: settlements.settledAt })
+    .from(settlements)
+    .all();
+  const settledById = new Map(settledHistory.map((h) => [h.obligationId, h]));
+  for (const [id, s] of started) {
+    const o = byId.get(id);
+    if (!o || !o.vendorId || !["sent", "settled"].includes(o.state)) continue;
+    const earlier = obs
+      .filter((x) => x.vendorId === o.vendorId && x.id !== id && x.currency === o.currency && settledById.has(x.id) && settledById.get(x.id)!.settledAt < s.at)
+      .map((x) => x.amountMinor ?? 0)
+      .filter((a) => a > 0)
+      .sort((a, b) => a - b);
+    const name = o.vendorId ? vendorNames.get(o.vendorId) ?? "this vendor" : "this vendor";
+    if (earlier.length === 0) {
+      flag("new_vendor", id, s.at, `First payment ever to ${name}. Check the payout details were confirmed with them directly.`);
+    } else if (earlier.length >= 2 && o.amountMinor) {
+      const median = earlier[Math.floor(earlier.length / 2)];
+      if (median > 0 && o.amountMinor >= median * 2) {
+        const times = (o.amountMinor / median).toFixed(1);
+        flag("unusual_amount", id, s.at, `${times} times ${name}'s usual payment (median of ${earlier.length} earlier payments).`);
+      }
+    }
+    const warned = latestWarnings(db, id);
+    if (warned.length && !s.actor.startsWith("agent:")) {
+      flag("approved_over_warning", id, s.at, `Approved over ${warned.length} warning${warned.length === 1 ? "" : "s"}: ${warned.slice(0, 2).join("; ")}${warned.length > 2 ? "; ..." : ""}`);
+    }
+  }
+
+  const order: AttentionItem["kind"][] = ["unknown_outcome", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
   attention.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.at.localeCompare(a.at));
 
   const waitingOnYou = obs
@@ -166,6 +197,20 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     baseCurrency,
     throughSeq,
   };
+}
+
+/** Warning-level rules that did not pass in the policy evaluation just before the payment started. */
+function latestWarnings(db: Db, obligationId: string): string[] {
+  const e = db
+    .select()
+    .from(auditEntries)
+    .where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "policy.evaluated")))
+    .orderBy(desc(auditEntries.seq))
+    .limit(1)
+    .get();
+  if (!e?.detailJson) return [];
+  const d = JSON.parse(e.detailJson) as { rules?: Array<{ passed: boolean; severity: string; message: string }> };
+  return (d.rules ?? []).filter((r) => !r.passed && r.severity === "warn").map((r) => r.message);
 }
 
 function firstReason(json: string | null): string | null {

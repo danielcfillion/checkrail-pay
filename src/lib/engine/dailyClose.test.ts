@@ -95,3 +95,46 @@ describe("daily close", () => {
     expect(() => signOffDailyClose(db, DEMO_BUSINESS_ID, "USD", "agent:autopilot")).toThrow(/Only a person/);
   });
 });
+
+describe("daily close: payments that went out but deserve a second look", () => {
+  async function payByHand(db: Db, text: string, amountUsd: number, ref: string, who: string) {
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "job_completion",
+      rawInput: text,
+      evidence: [{ kind: "job_sheet", label: `Trip sheet ${ref}`, amountMinor: amountUsd * 100, currency: "USD", reference: ref, excerpt: `${who}, USD ${amountUsd}.00. Completed and signed off.` }],
+      actor: "system:booking-webhook",
+    });
+    const { approveObligation } = await import("./orchestrator");
+    if (db.select().from(obligations).where(eq(obligations.id, id)).get()!.state === "awaiting_approval") approveObligation(db, id, "user:daniel", "checked");
+    await executeObligation(db, id, { actor: "user:daniel" });
+    return id;
+  }
+
+  it("flags an amount far above the vendor's usual, and a payment approved over warnings", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: true });
+    const big = await payByHand(db, "Trip closed. Lead guide Maria Santos, USD 450 (JOB-HG7D-0990). Release payment.", 450, "JOB-HG7D-0990", "Maria Santos");
+    const urgent = await payByHand(db, "URGENT pay today please. Lead guide Ana Reyes, USD 120 (JOB-PAL1D-0991).", 120, "JOB-PAL1D-0991", "Ana Reyes");
+    const kinds = new Map(getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.map((a) => [a.id, a.kind]));
+    expect(kinds.get(big)).toBe("unusual_amount");
+    expect(kinds.get(urgent)).toBe("approved_over_warning");
+  });
+
+  it("flags the first payment ever to a vendor", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: true });
+    const maria = db.select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!;
+    db.insert(vendors).values({ ...maria, id: "ven_tuan", name: "Tuan Nguyen" }).run();
+    const id = await payByHand(db, "Trip closed. Driver Tuan Nguyen, USD 90 (JOB-HG2D-0992). Release payment.", 90, "JOB-HG2D-0992", "Tuan Nguyen");
+    const item = getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.find((a) => a.id === id);
+    expect(item?.kind).toBe("new_vendor");
+  });
+
+  it("does not flag a routine payment to a known vendor", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: true });
+    const id = await payByHand(db, "Trip closed. Lead guide Maria Santos, USD 160 (JOB-HG4D-0993). Release payment.", 160, "JOB-HG4D-0993", "Maria Santos");
+    expect(getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.find((a) => a.id === id)).toBeUndefined();
+  });
+});

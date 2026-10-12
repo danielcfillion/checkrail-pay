@@ -18,6 +18,9 @@ const KIND: Record<AttentionItem["kind"], { label: string; tone: string; next: s
   slow_settlement: { label: "Slow to settle", tone: "var(--attention)", next: "Sent, not yet confirmed by the provider." },
   blocked: { label: "Blocked by policy", tone: "var(--attention)", next: "Correct it or cancel it." },
   cancelled_release: { label: "Release cancelled", tone: "var(--ink-soft)", next: "Still approved. Send by hand or cancel." },
+  approved_over_warning: { label: "Approved over warnings", tone: "var(--attention)", next: "Paid. Worth a second look at why the warnings were accepted." },
+  unusual_amount: { label: "Unusual amount", tone: "var(--attention)", next: "Paid. Confirm the job really was larger than usual." },
+  new_vendor: { label: "New vendor", tone: "var(--ink-soft)", next: "Paid. Confirm the vendor received it." },
 };
 
 export default function DailyClosePage() {
