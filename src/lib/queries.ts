@@ -51,6 +51,7 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
     policyReasons: JSON.parse(row.o.policyReasonsJson ?? "[]") as string[],
     policyRules: latestPolicyRules(id, db),
     agentRun: latestAgentRun(id, db),
+    payoutException: row.o.state === "sent" ? latestPayoutException(id, db) : null,
   };
 }
 
@@ -63,6 +64,14 @@ function latestAgentRun(id: string, db: Db): AgentRunView | null {
   const calls = (d.toolCalls ?? []).map((t) => (typeof t === "string" ? { name: t, input: "", resultPreview: "" } : (t as { name: string; input: string; resultPreview: string })));
   const engine = d.engine === "claude" || e.actor.startsWith("ai:") && e.actor !== "ai:rules" ? "claude" : "rules";
   return { engine, model: d.model ?? null, notes: (d.notes ?? []).map(String), toolCalls: calls };
+}
+
+/** The provider's last word on a sent payment when it needs a person (for example an unclaimed PayPal payout). */
+function latestPayoutException(id: string, db: Db): { externalStatus: string | null; message: string; at: string } | null {
+  const e = db.select().from(auditEntries).where(and(eq(auditEntries.obligationId, id), eq(auditEntries.action, "settlement.exception"))).orderBy(desc(auditEntries.seq)).get();
+  if (!e?.detailJson) return null;
+  const d = JSON.parse(e.detailJson) as { externalStatus?: string | null; message?: string };
+  return { externalStatus: d.externalStatus ?? null, message: d.message ?? "The provider needs a person to look at this payout.", at: e.createdAt };
 }
 
 function latestPolicyRules(id: string, db: Db) {

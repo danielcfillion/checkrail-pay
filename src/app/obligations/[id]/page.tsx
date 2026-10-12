@@ -209,6 +209,18 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
 
         {/* Column 3: actions, settlement, history */}
         <div className="space-y-6">
+          {d.payoutException ? (
+            <section className="panel" style={{ borderColor: "var(--attention)" }} aria-label="Payout needs attention">
+              <div className="flex items-baseline justify-between gap-3 border-b px-4 py-2.5 hairline">
+                <h2 className="font-medium text-attention">Payout needs attention</h2>
+                <span className="dense num text-ink-soft">{d.payoutException.externalStatus}</span>
+              </div>
+              <div className="p-4">
+                <p>{d.payoutException.message}</p>
+                <p className="mt-2 text-xs text-ink-soft">The money left the account and may still be claimed, so this payment will not be sent again. Fix it with the vendor, or cancel it with the provider.</p>
+              </div>
+            </section>
+          ) : null}
           {o.state === "approved" && o.releaseAt ? (
             <Panel title="Autopilot" aside="scheduled">
               <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>

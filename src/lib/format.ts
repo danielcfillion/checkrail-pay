@@ -137,6 +137,7 @@ const ACTION_LABELS: Record<string, string> = {
   "settlement.confirmed": "Settlement confirmed",
   "settlement.pending": "Settlement pending",
   "settlement.checked": "Settlement checked",
+  "settlement.exception": "Payout needs attention",
   "accounting.queued": "Queued for accounting",
   "accounting.exported": "Exported to accounting",
   "obligation.amended": "Obligation corrected",

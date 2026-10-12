@@ -138,3 +138,44 @@ describe("daily close: payments that went out but deserve a second look", () => 
     expect(getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.find((a) => a.id === id)).toBeUndefined();
   });
 });
+
+describe("daily close: a sent payout the provider says needs a person", () => {
+  it("lists an unclaimed payout, and the payment is never retried", async () => {
+    const { setRailsForTest, resetRails } = await import("../rails");
+    const { MockPayPalRail, MockStellarRail } = await import("../rails/mock");
+    const { confirmSettlement } = await import("./orchestrator");
+    const { paymentAttempts } = await import("../db/schema");
+    const db = openTestDb();
+    await seedDemo(db, { history: true });
+    const base = new MockPayPalRail();
+    setRailsForTest({
+      paypal: {
+        rail: "paypal",
+        mode: "sandbox",
+        quote: (i) => base.quote(i),
+        execute: async (r) => ({ status: "submitted", externalId: `BATCH-${r.idempotencyKey.slice(0, 6)}`, externalStatus: "PENDING", feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: {} }),
+        getStatus: async () => ({ status: "exception", externalStatus: "SUCCESS/UNCLAIMED", message: "Payout is UNCLAIMED: the recipient has no PayPal account for this email.", raw: {} }),
+      },
+      stellar: new MockStellarRail(),
+    });
+    try {
+      const id = await ingestObligation(db, {
+        businessId: DEMO_BUSINESS_ID,
+        sourceType: "job_completion",
+        rawInput: "Trip closed. Lead guide Maria Santos, USD 160 (JOB-HG4D-0995). Release payment.",
+        evidence: [{ kind: "job_sheet", label: "Trip sheet JOB-HG4D-0995", amountMinor: 16_000, currency: "USD", reference: "JOB-HG4D-0995", excerpt: "Maria Santos, USD 160.00." }],
+        actor: "system:booking-webhook",
+      });
+      await executeObligation(db, id, { actor: "user:daniel" });
+      await confirmSettlement(db, id, "test");
+      expect(db.select().from(obligations).where(eq(obligations.id, id)).get()!.state).toBe("sent");
+      const item = getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.find((a) => a.id === id);
+      expect(item?.kind).toBe("payout_exception");
+      expect(item?.note).toMatch(/UNCLAIMED/);
+      await expect(executeObligation(db, id, { actor: "user:daniel" })).rejects.toThrow();
+      expect(db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).all()).toHaveLength(1);
+    } finally {
+      resetRails();
+    }
+  });
+});

@@ -27,7 +27,7 @@ export interface CloseItem {
 }
 
 export interface AttentionItem extends CloseItem {
-  kind: "unknown_outcome" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
+  kind: "unknown_outcome" | "payout_exception" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
 }
 
 export interface DailyClose {
@@ -114,6 +114,21 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     if (o && o.state === "execution_pending") flag("unknown_outcome", o.id, a.updatedAt, a.errorMessage ?? "The provider did not give a clear answer. Do not pay again until this is reconciled.");
   }
 
+  // A sent payment the provider says needs a person (unclaimed, on hold). Shown every day until it resolves, not only on the day it happened.
+  for (const o of obs.filter((x) => x.state === "sent")) {
+    const ex = db
+      .select()
+      .from(auditEntries)
+      .where(and(eq(auditEntries.obligationId, o.id), eq(auditEntries.action, "settlement.exception")))
+      .orderBy(desc(auditEntries.seq))
+      .limit(1)
+      .get();
+    if (ex) {
+      const d = ex.detailJson ? (JSON.parse(ex.detailJson) as { message?: string }) : {};
+      flag("payout_exception", o.id, ex.createdAt, d.message ?? "The provider needs a person to look at this payout.");
+    }
+  }
+
   for (const e of entries) {
     if (!e.obligationId) continue;
     const detail = e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : {};
@@ -156,7 +171,7 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     }
   }
 
-  const order: AttentionItem["kind"][] = ["unknown_outcome", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
+  const order: AttentionItem["kind"][] = ["unknown_outcome", "payout_exception", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
   attention.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.at.localeCompare(a.at));
 
   const waitingOnYou = obs
