@@ -1,0 +1,41 @@
+# Render Blueprint for the hosted judging demo (rules: judges must be able to test until Dec 15, 2026).
+# Create it from the Render dashboard: New, Blueprint, pick the GitHub repo. Secrets marked sync: false
+# are typed into the Render dashboard, never committed.
+services:
+  - type: web
+    name: checkrail-pay
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci && npm run build
+    # The free plan has no persistent disk: every restart reseeds the demo story, which is what a judge wants.
+    startCommand: npm run db:seed && npm run start -- -p $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_PATH
+        value: ./data/checkrail-pay.sqlite
+      # mock = runs with zero credentials; live = real PayPal sandbox (set the keys below).
+      - key: RAIL_MODE
+        value: mock
+      - key: STELLAR_RAIL
+        value: mock
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: DEMO_PAYPAL_RECIPIENT
+        sync: false
+      # mock = rule-based reader; live = Claude (set the key below; cap spend in the Anthropic console).
+      - key: AI_MODE
+        value: mock
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5-5
+      # Autopilot heartbeat runs inside the single web process.
+      - key: AUTOPILOT_HEARTBEAT_SECONDS
+        value: "15"
