@@ -155,8 +155,10 @@ export interface AiInterpretation {
   dueDate: string | null;
   summary: string;
   confidence: number; // 0..100
-  flags: string[]; // anomalies the agent noticed, in plain language
+  flags: string[]; // concerns that should hold the payment for a person, in plain language
   missing: string[]; // evidence the agent wants before it would be comfortable
+  /** Neutral observations shown to the approver. They never affect policy. */
+  notes?: string[];
 }
 
 export interface PolicyInput {

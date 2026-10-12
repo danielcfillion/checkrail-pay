@@ -48,3 +48,32 @@ describe("normalise (agent output is untrusted)", () => {
     expect(normalise({ ...good, confidence: -5 }, input).confidence).toBe(0);
   });
 });
+
+describe("agent notes never move policy", () => {
+  it("clamps notes and keeps them out of the flags", () => {
+    const n = normalise({ ...good, flags: [], notes: Array.from({ length: 20 }, () => "n".repeat(900)) }, input);
+    expect(n.flags).toEqual([]);
+    expect(n.notes).toHaveLength(6);
+    expect(n.notes!.every((x) => x.length <= 300)).toBe(true);
+  });
+
+  it("a clean interpretation with notes still auto-executes, and the same text as a flag holds it", async () => {
+    const { evaluatePolicy } = await import("../domain/policy");
+    const { DEFAULT_POLICY } = await import("../domain/types");
+    const vendor = input.vendors[0];
+    const base = {
+      obligation: { id: "obl_x", amountMinor: 18_000, currency: "USD", sourceRef: "JOB-HG4D-0921", vendorId: vendor.id },
+      vendor,
+      evidence: [{ id: "evd_1", kind: "job_sheet", label: "Trip sheet HG-4D-0921", amountMinor: 18_000, currency: "USD", reference: "JOB-HG4D-0921", excerpt: `${vendor.name}, USD 180.00` }],
+      businessCountry: "US",
+      baseCurrency: "USD",
+      priorSourceRefs: [],
+      approvalsCount: 0,
+    };
+    const ai = { vendorName: vendor.name, vendorId: vendor.id, amountMinor: 18_000, currency: "USD", description: "guide fee", sourceRef: "JOB-HG4D-0921", dueDate: null, summary: "ok", confidence: 92, flags: [] as string[], missing: [] as string[] };
+    const withNote = evaluatePolicy(DEFAULT_POLICY, { ...base, ai: { ...ai, notes: ["Guest feedback score is mentioned; it does not affect the amount"] } });
+    expect(withNote.decision).toBe("auto_execute");
+    const withFlag = evaluatePolicy(DEFAULT_POLICY, { ...base, ai: { ...ai, flags: ["Guest feedback score is mentioned; it does not affect the amount"] } });
+    expect(withFlag.decision).toBe("require_approval");
+  });
+});

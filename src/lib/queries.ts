@@ -54,15 +54,15 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
   };
 }
 
-export type AgentRunView = { engine: "claude" | "rules"; model: string | null; toolCalls: Array<{ name: string; input: string; resultPreview: string }> };
+export type AgentRunView = { engine: "claude" | "rules"; model: string | null; notes: string[]; toolCalls: Array<{ name: string; input: string; resultPreview: string }> };
 
 function latestAgentRun(id: string, db: Db): AgentRunView | null {
   const e = db.select().from(auditEntries).where(and(eq(auditEntries.obligationId, id), eq(auditEntries.action, "ai.interpreted"))).orderBy(desc(auditEntries.seq)).get();
   if (!e?.detailJson) return null;
-  const d = JSON.parse(e.detailJson) as { engine?: string; model?: string | null; toolCalls?: unknown[] };
+  const d = JSON.parse(e.detailJson) as { engine?: string; model?: string | null; notes?: unknown[]; toolCalls?: unknown[] };
   const calls = (d.toolCalls ?? []).map((t) => (typeof t === "string" ? { name: t, input: "", resultPreview: "" } : (t as { name: string; input: string; resultPreview: string })));
   const engine = d.engine === "claude" || e.actor.startsWith("ai:") && e.actor !== "ai:rules" ? "claude" : "rules";
-  return { engine, model: d.model ?? null, toolCalls: calls };
+  return { engine, model: d.model ?? null, notes: (d.notes ?? []).map(String), toolCalls: calls };
 }
 
 function latestPolicyRules(id: string, db: Db) {

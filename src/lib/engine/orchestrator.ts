@@ -112,7 +112,7 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
     obligationId,
     actor: run.engine === "claude" ? `ai:${run.model}` : "ai:rules",
     action: "ai.interpreted",
-    detail: { vendorId: ai.vendorId, amountMinor: ai.amountMinor, currency: ai.currency, sourceRef: ai.sourceRef, confidence: ai.confidence, flags: ai.flags, missing: ai.missing, engine: run.engine, model: run.model, toolCalls: run.toolCalls.map((t) => ({ name: t.name, input: JSON.stringify(t.input ?? {}).slice(0, 200), resultPreview: String(t.resultPreview ?? "").slice(0, 200) })) },
+    detail: { vendorId: ai.vendorId, amountMinor: ai.amountMinor, currency: ai.currency, sourceRef: ai.sourceRef, confidence: ai.confidence, flags: ai.flags, missing: ai.missing, notes: ai.notes ?? [], engine: run.engine, model: run.model, toolCalls: run.toolCalls.map((t) => ({ name: t.name, input: JSON.stringify(t.input ?? {}).slice(0, 200), resultPreview: String(t.resultPreview ?? "").slice(0, 200) })) },
   });
 
   // 2. Policy

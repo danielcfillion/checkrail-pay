@@ -141,6 +141,16 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 </ul>
               </div>
             ) : null}
+            {d.agentRun?.notes.length ? (
+              <div className="mt-3">
+                <p className="dense text-ink-soft">Notes (do not affect payment)</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-ink-soft">
+                  {d.agentRun.notes.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {d.aiMissing.length ? (
               <div className="mt-3">
                 <p className="dense text-attention">Wants before paying</p>
