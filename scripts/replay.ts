@@ -45,18 +45,35 @@ async function main() {
 
   const a = get(story.paypal);
   console.log(`3. ${a.sourceRef} ${fmt(a.amountMinor!, a.currency!)}: ${a.state} -> ${a.selectedRail} (${a.routeReason})`);
-  const ra = await executeObligation(db, a.id, { actor: "user:daniel" });
-  await settleOrReport(a.id, ra.status);
+  if (a.state !== "approved") {
+    // With the Claude agent live, a concern it raises holds the payment for a person. Show why, then approve as the operator would.
+    const reasons = JSON.parse(a.policyReasonsJson ?? "[]") as string[];
+    console.log(`   Held for a person: ${reasons.join("; ") || a.state}`);
+    if (a.state === "awaiting_approval") {
+      approveObligation(db, a.id, "user:daniel", "Reviewed the agent's concerns");
+      console.log(`   Approved by the operator; state now: ${get(a.id).state}`);
+    }
+  }
+  if (get(a.id).state === "approved") {
+    const ra = await executeObligation(db, a.id, { actor: "user:daniel" });
+    await settleOrReport(a.id, ra.status);
+  } else {
+    console.log("   Not paid: still needs a person (see the reasons above).");
+  }
 
   const b = get(story.stellar);
   console.log(`4. ${b.sourceRef} ${fmt(b.amountMinor!, b.currency!)}: ${b.state} -> ${b.selectedRail} (${b.routeReason})`);
-  approveObligation(db, b.id, "user:daniel", "Rate confirmed with ops");
-  const rb = await executeObligation(db, b.id, { actor: "user:daniel" });
-  await settleOrReport(b.id, rb.status);
+  if (b.state === "awaiting_approval") approveObligation(db, b.id, "user:daniel", "Rate confirmed with ops");
+  if (get(b.id).state === "approved") {
+    const rb = await executeObligation(db, b.id, { actor: "user:daniel" });
+    await settleOrReport(b.id, rb.status);
+  } else {
+    console.log(`   Not paid: ${get(b.id).state} (${(JSON.parse(get(b.id).policyReasonsJson ?? "[]") as string[]).join("; ")})`);
+  }
 
   const { count } = exportPendingCsv(db);
   const audits = db.select().from(auditEntries).all().length;
-  console.log(`\nResult: 2 settled, 2 errors prevented, ${count} accounting records exported, ${audits} audit entries.`);
+  console.log(`\nResult: ${db.select().from(obligations).all().filter((o) => [story.paypal, story.stellar].includes(o.id) && o.state === "settled").length} of 2 settled, 2 errors prevented, ${count} accounting records exported, ${audits} audit entries.`);
   closeDb();
 }
 main().catch((e) => { console.error(e); process.exit(1); });
