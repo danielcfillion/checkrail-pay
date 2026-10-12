@@ -1,61 +1,61 @@
 # Checkrail Pay demo video script
 
-Target length 2:45 (hackathon limit 3:00). One take per shot is fine; cut in post. Browser window 1440px wide, light theme, system fonts off (Archivo is vendored). Run `npm run db:seed` before recording so the four obligations are in their starting states. If live mode is set up, the sidebar footer will read "rails: sandbox/testnet"; if not, it reads "mock/mock" and the voiceover at 2:30 says so.
+Updated 12 Oct 2026 for the official rules: under 3:00, public on YouTube, no copyrighted music. Target 2:50.
 
-Pace: speak plainly, one idea per sentence. No music under the voiceover; a quiet bed under the opening and closing only, if any.
+Record in live mode: PayPal sandbox (the funded US business account), Claude reading every request, Stellar simulated. The sidebar footer then reads paypal sandbox, agent Claude. Browser window 1440px wide, light theme. Run `npm run db:seed` before each take so the four requests start in their opening states.
 
-## Shot list
+Pace: plain speech, one idea per sentence. No music under the voiceover.
+
+## The story in one line
+
+Claude reads, policy decides, the agent pays inside your limits, and you sign off at the end of the day in two minutes.
+
+## Shot list (hackathon cut)
 
 | Time | On screen | Action | Voiceover |
 |---|---|---|---|
-| 0:00 to 0:08 | Full-screen crop of the Phuong chat message on the obligation page: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently." | None, hold the crop | "Pay Phuong nine sixty today, he needs it for fuel." I run a tour company and I get this message every week. This one is one hundred and sixty dollars wrong. |
-| 0:08 to 0:18 | Cut to Overview `/`. Cursor rests on the shared check line hero. | Slowly move the cursor across the five stations | Every payment travels one line: read, verified, routed, paid, reconciled. Claude reads the request. It cannot pay. A fixed set of rules decides, and this morning two of four requests are about to fail them. |
-| 0:18 to 0:26 | Overview, "Needs you" list | Hover the Phuong Transport row | The first one is a chat message: pay Phuong Transport nine hundred and sixty dollars, he needs it urgently. |
-| 0:26 to 0:48 | Obligation page `/obligations/<phuong>` | Click the row. Let the page sit. Point at the raw request, then the trip sheet excerpt, then the "Agent tool calls" list, then the red rule row "Requested USD 960.00 but Trip sheet says USD 800.00". | Claude read the request and the two attached records, and it shows its work: the tools it called are listed on the page. The contract says two hundred dollars a day. The trip sheet says four days. Policy compared the request to the evidence and blocked it: one hundred and sixty dollars over. The line is broken at verified, and it says why. |
-| 0:48 to 0:56 | Same page, action panel | Hover "Correct to USD 800.00", do not click | The operator can correct it to eight hundred and it re-enters the flow. Nothing left the account. |
-| 0:56 to 1:04 | Back to Overview, then click the Exceptions link in the hero break, land on `/exceptions` | Click | The second one looks fine. Maria Santos, a job sheet, the right amount. |
-| 1:04 to 1:20 | Obligation page `/obligations/<maria 0914>` | Click the JOB-HG4D-0914 row. Point at the "Reference JOB-HG4D-0914 was already used" rule row, then at the linked settled obligation | Except that reference was already settled seventeen days ago in Checkrail Pay's own ledger. Policy found the duplicate and blocked it. Two errors caught, three hundred and forty dollars kept. |
-| 1:20 to 1:40 | Obligation page `/obligations/<maria 0921>` | Navigate via Inbox. Point at the route comparison: PayPal quote on the left, Stellar on the right, delivered PHP as the big figure. Click "Pay with PayPal". Let the marker travel to paid, then reconciled. | Third: one hundred and eighty dollars to the same guide for last week's trip. Evidence matches, under the threshold, auto-approved. Both rails are quoted, and I compare what the guide gets per dollar I actually spend, since PayPal charges its fee on top. At this size they are within a fraction of a percent, so the tie goes to PayPal. One click. The marker travels to paid, then reconciled. |
-| 1:40 to 2:12 | Obligation page `/obligations/<ana>` | Navigate via Inbox. Point at "awaiting approval". Point at the Stellar quote: more PHP per dollar spent, about fifteen minutes versus one to two days, and the vendor preference reason. Click "Approve", then "Pay with Stellar". Marker travels. In live mode only: click the explorer link in settlement details, show the tab, come back. In mock mode there is no link, and the page says "Simulated, not on chain"; leave it on screen. | Fourth: seven hundred and fifty dollars to Ana Reyes. Above the auto threshold, so a person approves. Here Stellar wins on cost and on speed: a couple of percent more pesos per dollar spent, in about fifteen minutes instead of days, and Ana asked for the faster rail after a slow PayPal withdrawal in August. Approve. Pay with Stellar. PYUSD leaves the treasury with the job reference in the memo. In live mode the transaction link is right there; in mock mode the page says so plainly. |
-| 2:12 to 2:24 | `/accounting` then `/ledger` | Click Accounting, show two pending records and the CSV export link. Click Ledger. | Both settlements are in the ledger with gross, fee and net. The accounting export is ready: bill, payment and fee lines mapped for Xero. |
-| 2:24 to 2:36 | `/audit` | Scroll slowly | Every step is in one audit log: what the agent read, which rule fired, who approved, which rail paid, with the idempotency key. The agent never had spending authority. Policy is a pure function. Execution re-runs it before touching a rail. |
-| 2:36 to 2:45 | Overview `/`, the check line with two dots at reconciled and two breaks. Hold. Fade to the wordmark and one line of text. | Hold on the hero, then cut to a closing card: "2 settled. 2 errors prevented. 2 records exported." | Two settled, two errors prevented, two records exported. Checkrail Pay. Verified supplier payments, routed and reconciled automatically. |
+| 0:00 to 0:10 | Phuong obligation page, crop on the raw request: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently." | Hold | "Pay Phuong nine sixty today, he needs it for fuel." I run a tour company and I get this message every week. This one is one hundred and sixty dollars wrong. |
+| 0:10 to 0:22 | Overview: autopilot strip, the check line, Money out chart | Move the cursor along the five stations, then hover one chart column | This is Checkrail Pay. Every supplier payment travels one line: read, verified, routed, paid, reconciled. Claude reads each request. A fixed set of rules decides. And the agent can pay on its own, inside limits I set. |
+| 0:22 to 0:48 | Phuong obligation page | Point at "What the agent read" and its tool calls, the two evidence records, then the red rule "Requested USD 960.00 but Trip sheet says USD 800.00" | Claude read the message and both attached records, and checked PayPal's own transactions. You can see every tool it used. The contract is two hundred a day, the trip sheet says four days. Policy compared them and blocked it: one hundred and sixty over. Claude advises. It has no way to pay. |
+| 0:48 to 1:02 | Maria JOB-HG4D-0914 obligation page | Point at "Reference JOB-HG4D-0914 was already used" and the linked settled payment | The second looks perfect: right guide, right amount, a signed job sheet. Except that job was paid seventeen days ago. Blocked. Two errors caught before any money moved. |
+| 1:02 to 1:30 | Maria JOB-HG4D-0921 obligation page | Point at the route comparison, click "Pay with PayPal", let the marker travel to paid then reconciled | Third: one hundred and eighty dollars for last week's trip. Evidence matches. Both rails are quoted on what the guide actually receives per dollar I spend. Pay with PayPal. That is a real PayPal sandbox payout. |
+| 1:30 to 1:38 | PayPal sandbox, the payout batch | Hold three seconds on the batch id that the obligation page shows | Here it is on PayPal's side. Same batch id. |
+| 1:38 to 2:05 | Settings, Autonomy panel | Click Autopilot, show the three "who does what" cards and the caps, click "Turn on autopilot", confirm. Back to Overview: a scheduled payment with its countdown and Cancel | Most of my suppliers are boring and correct. So I can hand the routine ones to the agent. Autopilot: up to five hundred per payment, two thousand a day, ten minutes to cancel. Autonomy removes the approval step and nothing else. A wrong amount, a duplicate or changed bank details still stop the payment, and policy runs again the moment money moves. |
+| 2:05 to 2:20 | Ana obligation page | Point at "sent", then the UNCLAIMED status and the plain-language message | One more thing real payments do. Ana's PayPal email does not exist, so the payout came back unclaimed. Checkrail Pay holds it for a person and will not pay twice. |
+| 2:20 to 2:42 | Daily close | Scroll from "Needs a look" through "Sent by autopilot" and "Sent by people" to the cap meter, then click Sign off and confirm | At the end of the day I read one page. What needs a look comes first: the blocks, the unclaimed payout, anything unusual. Then what the agent sent, what people sent, and spend against the cap. Sign off, and that goes in the audit log too. |
+| 2:42 to 2:50 | Closing card | Hold | Checkrail Pay. AI pays your suppliers. Policy decides. You sign off. |
 
-Record in live mode (PayPal sandbox, Stellar testnet, Claude). Then there are no disclaimers to speak and the sidebar footer reads sandbox/testnet/claude on its own. If you must record in mock mode, say so once at 2:30 and nowhere else.
+## The one insert that matters most
 
-## Two cuts from one take
+The PayPal sandbox payout batch id on PayPal's own dashboard, matching the id on the obligation page (1:30 to 1:38). It answers "did a real PayPal call happen" in three seconds. The first one was RGS5PUZPH4CNY on 12 Oct; a fresh take will produce a new id.
 
-- **Hackathon cut (under 3:00):** as above, but trim the Ana shot (1:40 to 2:12) to about 15 seconds: approve, pay, settled, explorer link. Judges want to see PayPal and Claude; Stellar is the second rail, not the story.
-- **SCF cut:** the same footage with the full Ana shot, the explorer tab held for three seconds, and a closing line about the anchor leg being the funded work.
+## SCF cut
 
-## The 20-second insert that matters most
-
-After obligation 3 pays in live mode, switch to the PayPal sandbox dashboard and show the payout batch id that Checkrail Pay printed. Hold for three seconds. This single shot answers "has a real PayPal call ever succeeded".
+Same footage plus a Stellar shot once the testnet treasury is funded: Ana's USD 750 on Stellar PYUSD, the explorer tab held for three seconds, and a closing line that the anchor leg (PYUSD to USDC, SEP-31 off-ramp) is the funded work.
 
 ## Closing card text
 
     Checkrail Pay
-    Verified supplier payments, routed and reconciled automatically.
-    2 settled. 2 errors prevented. 2 records exported.
+    AI pays your suppliers. Policy decides. You sign off.
+    checkrailpay.com
     github.com/<you>/checkrail-pay
 
 ## 20-second social teaser
 
-Cut from the same footage. Vertical or square crop on the obligation page is fine; the check line and the big PHP figure carry it.
-
-| Time | On screen | Voiceover or caption |
+| Time | On screen | Caption |
 |---|---|---|
-| 0:00 to 0:04 | Phuong obligation page, line broken at verified, red rule row | Caption: "Pay Phuong $960 today, urgent." |
-| 0:04 to 0:08 | Zoom on "Requested USD 960.00 but Trip sheet says USD 800.00" | Caption: "The trip sheet says $800." |
-| 0:08 to 0:12 | Ana obligation page, click Pay with Stellar, marker travels | Caption: "The right ones pay in minutes." |
-| 0:12 to 0:16 | Overview hero: two dots reconciled, two breaks | Caption: "2 paid. 2 caught. Books done." |
-| 0:16 to 0:20 | Wordmark and one-liner | Caption: "Checkrail Pay. Verified supplier payments, routed and reconciled automatically." |
+| 0:00 to 0:04 | Phuong page, line broken at verified, red rule row | "Pay Phuong $960 today, urgent." |
+| 0:04 to 0:08 | Zoom on "Trip sheet says USD 800.00" | "The trip sheet says $800." |
+| 0:08 to 0:12 | Autopilot scheduled payment with countdown | "The right ones pay themselves." |
+| 0:12 to 0:16 | Daily close, Sign off | "You sign off in two minutes." |
+| 0:16 to 0:20 | Wordmark | "Checkrail Pay." |
 
 ## Recording checklist
 
-- `npm run db:seed && npm run dev`, open `/demo` once to confirm the four obligations and copy their ids.
-- Close other tabs. Hide bookmarks bar. 1440px window.
-- Live mode only: do the Ana explorer click last in its shot so the tab switch is a clean cut.
-- The single most valuable insert is a 20 second clip of the real PayPal sandbox payout batch id appearing in the sandbox dashboard after obligation 3 pays. Record it if live mode is set up.
-- Record voiceover separately after the screen take; it is easier to match than to speak while clicking.
-- Export at 1080p. Upload to YouTube, public or unlisted, under 3:00.
+- In `.env`: RAIL_MODE=live, STELLAR_RAIL=mock, AI_MODE=live, the US sandbox app keys.
+- In the PayPal app settings: Transaction search and Invoicing on, so Claude's PayPal checks succeed on camera.
+- `npm run db:seed && npm run dev`, open `/demo` once to confirm the four requests.
+- Autonomy starts at Assist after a seed; switch to Autopilot on camera (1:38).
+- Close other tabs, hide the bookmarks bar, 1440px window.
+- Record the voiceover separately after the screen take.
+- No music with lyrics or anything copyrighted; silence is fine.
