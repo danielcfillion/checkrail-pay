@@ -27,7 +27,10 @@ async function main() {
     const sx = db.select().from(settlements).where(eq(settlements.obligationId, id)).get();
     const at = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
     console.log(`   execute: ${execStatus}; state now: ${ob.state}; rail attempt: ${at?.status ?? "none"} / ${at?.externalStatus ?? "-"} ${at?.externalId ? `(id ${at.externalId})` : ""}${at?.errorMessage ? ` error: ${at.errorMessage}` : ""}`);
-    if (sx) console.log(`   ${sx.explorerUrl ?? (railModes()[ob.selectedRail as "paypal" | "stellar"] === "mock" ? "(simulated)" : "")} fee ${fmt(sx.feeMinor, sx.grossCurrency)}; recipient gets ${fmt(sx.receivedMinor!, sx.receivedCurrency!)}`);
+    if (sx) {
+      const tag = sx.explorerUrl ?? (railModes()[ob.selectedRail as "paypal" | "stellar"] === "mock" ? "(simulated)" : /modelled/i.test(sx.note ?? "") ? "(modelled from the published fee schedule)" : "");
+      console.log(`   ${tag} fee ${fmt(sx.feeMinor, sx.grossCurrency)}; recipient gets ${fmt(sx.receivedMinor!, sx.receivedCurrency!)}`);
+    }
     else console.log("   Not settled yet. The provider has not confirmed; check the sandbox dashboard and re-run reconcile later.");
   }
   const get = (id: string) => db.select().from(obligations).where(eq(obligations.id, id)).get()!;
