@@ -10,7 +10,7 @@ Built for the PayPal AI Hackathon (Nov 2026) and submitted to Stellar Community 
 
 ## 60-second overview
 
-A tour operator in the US pays guides, drivers and homestays in the Philippines and Vietnam. Requests arrive as invoices, job sheets and chat messages. Today the owner reconciles them by hand against contracts and a PayPal tab, and still pays duplicates and inflated invoices.
+A tour operator in the US pays guides, drivers and homestays in the Philippines (PayPal or Stellar) and Vietnam (PayPal only: Vietnam has no licensed crypto off-ramp, and the app refuses the Stellar route there). Requests arrive as invoices, job sheets and chat messages. Today the owner reconciles them by hand against contracts and a PayPal tab, and still pays duplicates and inflated invoices.
 
 Checkrail Pay puts five fixed stations between "someone says we owe this" and "it is in the books":
 

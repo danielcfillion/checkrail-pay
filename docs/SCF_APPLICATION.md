@@ -135,7 +135,7 @@ Accountants first. Small businesses adopt payment tooling their bookkeeper recom
 
 1. Xero app marketplace listing once OAuth is live, positioned in the bills and payments category for businesses with overseas contractors.
 2. A practice channel: five accounting firms serving travel, agency and field-service clients in the US, Australia and Singapore, each with a handful of clients paying into the Philippines.
-3. Direct: tour operators and DMCs in the Philippines and Vietnam corridor, starting from the founder's own network.
+3. Direct: tour operators and DMCs paying suppliers in the Philippines, the only Stellar corridor in scope, starting from the founder's own network. Their Vietnamese suppliers stay on PayPal until Vietnam licenses a crypto off-ramp.
 4. Content: the corridor benchmark published and kept current, because honest numbers are rare and travel well.
 
 Pricing hypothesis: flat monthly fee per business plus a small per-obligation fee, no spread on FX, so the routing rule has no incentive to misroute.
