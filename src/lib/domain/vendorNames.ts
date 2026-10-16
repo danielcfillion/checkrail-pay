@@ -1,10 +1,13 @@
 /**
  * Does a piece of text name a vendor? Used by policy to bind a payment to the record that justifies it.
  *
- * A record names a vendor when it contains the vendor's full name, or a word from the name that is distinctive:
- * not a generic business word ("Transport", "Homestay", "Family", "Boats") and not part of any other known
- * vendor's name. "Driver: Phuong" names Phuong Transport; "transport by van" does not; "Maria" names Maria Santos
- * only while no other vendor is called Maria.
+ * Two strengths:
+ *  - namesVendorFully: the vendor's full name appears (accents, case and punctuation normalised). This is the only
+ *    match that binds a payment without a warning.
+ *  - namesVendor (a mention): the full name, or a word of it that is distinctive: not a generic business word
+ *    ("Transport", "Homestay", "Boats") and not part of another vendor's name. "Driver: Phuong" mentions Phuong
+ *    Transport. A mention is not proof: "Tam Son" (a town) mentions Tam Motorbike Rental and "Red Dao" (a people)
+ *    mentions Dao Mountain Lodge. Policy uses mentions only to raise warnings, never to clear a payment.
  */
 
 const GENERIC = new Set(
@@ -42,4 +45,9 @@ export function namesVendor(text: string, name: string, otherNames: string[]): b
   const full = normaliseName(name);
   if (full && t.includes(` ${full} `)) return true;
   return distinctiveWords(name, otherNames).some((w) => t.includes(` ${w} `));
+}
+
+export function namesVendorFully(text: string, name: string): boolean {
+  const full = normaliseName(name);
+  return Boolean(full) && ` ${normaliseName(text)} `.includes(` ${full} `);
 }

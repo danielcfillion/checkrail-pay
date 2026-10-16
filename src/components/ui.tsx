@@ -118,12 +118,13 @@ export function RowLink({ href, children, className = "" }: { href: string; chil
 }
 
 /** Turns "obligation obl_xxx (settled)" in a policy message into a link to that obligation. */
+/** Turns "obligation obl_abc123" in a policy message into a link that reads "an earlier payment": people do not read ids. */
 export function Linkified({ text }: { text: string }): ReactNode {
-  const parts = text.split(/(obl_[a-z0-9]+)/i);
+  const parts = text.replace(/\bobligation (obl_[a-z0-9]+)/gi, "$1").split(/(obl_[a-z0-9]+)/i);
   return parts.map((p, i) =>
     /^obl_[a-z0-9]+$/i.test(p) ? (
-      <Link key={i} href={`/obligations/${p}`} className="link num">
-        {p}
+      <Link key={i} href={`/obligations/${p}`} className="link" title={p}>
+        an earlier payment
       </Link>
     ) : (
       <span key={i}>{p}</span>

@@ -120,6 +120,16 @@ export class StellarRail implements PaymentRail {
     }
   }
 
+  /** A transaction belongs to an attempt when its memo carries the first 8 characters of the attempt's key (see execute). */
+  async externalIdMatchesKey(externalId: string, key: string): Promise<boolean | null> {
+    try {
+      const tx = await this.server.transactions().transaction(externalId).call();
+      return tx.memo_type === "text" && typeof tx.memo === "string" && tx.memo.includes(key.slice(0, 8)) && tx.successful === true;
+    } catch (e) {
+      return /not ?found|404/i.test(String((e as Error).message ?? e)) ? false : null;
+    }
+  }
+
   async getStatus(externalId: string): Promise<SettlementStatus> {
     try {
       const tx = await this.server.transactions().transaction(externalId).call();

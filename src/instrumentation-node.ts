@@ -22,9 +22,13 @@ export function startHeartbeat(): void {
         const last = getDb().select({ at: auditEntries.createdAt }).from(auditEntries).where(like(auditEntries.actor, "user:%")).orderBy(desc(auditEntries.seq)).limit(1).get();
         const touched = last && last.at > (g.__checkrailSeededAt ?? "");
         if (touched && Date.now() - new Date(last!.at).getTime() > idleMinutes * 60_000) {
-          g.__checkrailSeededAt = new Date().toISOString();
+          g.__checkrailSeededAt = "9999"; // no second reset while this one runs
           seedDemo(getDb(), { history: true })
-            .then(() => console.log(`[demo] idle for ${idleMinutes} min after use; demo story restored`))
+            .then(() => {
+              // Stamp after seeding: the seed writes its own entries, which must not count as someone using the demo.
+              g.__checkrailSeededAt = new Date().toISOString();
+              console.log(`[demo] idle for ${idleMinutes} min after use; demo story restored`);
+            })
             .catch((e) => console.error("[demo] auto reset failed:", (e as Error).message));
         }
       } catch (e) {

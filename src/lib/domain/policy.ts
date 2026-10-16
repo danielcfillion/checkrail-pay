@@ -1,6 +1,6 @@
-import { namesVendor as namesVendorIn } from "./vendorNames";
+import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { isValidAmountMinor } from "./money";
-import { effectiveAutonomy } from "./types";
+import { effectiveAutonomy, warningFingerprint } from "./types";
 import type {
   ApprovalPolicy,
   PolicyInput,
@@ -65,21 +65,28 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   }
 
   // R3c: the evidence must name the vendor the agent chose. The agent proposes vendorId; this rule binds it.
-  // Bound only when a record names the vendor: its full name, or a word of it that no other vendor shares and that
-  // is not a generic business word. A matching reference is not enough (the reference comes from the request text),
-  // and "transport" on a trip sheet does not name Phuong Transport.
+  // Only the vendor's full name binds without a warning. A partial mention ("Driver: Phuong") is shown to a person:
+  // single words collide with places and peoples ("Tam Son", "Red Dao"), and a reference alone comes from the request.
   const namesVendor = new Set<string>();
+  const mentions = new Set<string>();
   const others = (input.knownVendorNames ?? []).filter((v) => v.id !== vendor?.id);
   const otherNames = others.map((v) => v.name);
-  const alsoNames = new Map<string, string[]>(); // evidence id -> other known vendors the same record names
+  const alsoNames = new Map<string, string[]>(); // evidence id -> other known vendors the same record mentions
   if (vendor && evidence.length > 0) {
     for (const e of evidence) {
       const text = `${e.label} ${e.excerpt ?? ""}`;
-      if (namesVendorIn(text, vendor.name, otherNames)) namesVendor.add(e.id);
-      const also = others.filter((o) => namesVendorIn(text, o.name, [vendor.name, ...otherNames.filter((n) => n !== o.name)])).map((o) => o.name);
+      if (namesVendorFully(text, vendor.name)) namesVendor.add(e.id);
+      else if (mentionsVendor(text, vendor.name, otherNames)) mentions.add(e.id);
+      const also = others.filter((o) => mentionsVendor(text, o.name, [vendor.name, ...otherNames.filter((n) => n !== o.name)])).map((o) => o.name);
       if (also.length) alsoNames.set(e.id, also);
     }
-    rules.push(namesVendor.size > 0 ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name}; confirm the payee`));
+    rules.push(
+      namesVendor.size > 0
+        ? pass("evidence_names_vendor", `Evidence names ${vendor.name}`)
+        : mentions.size > 0
+          ? warn("evidence_names_vendor", `The attached records mention ${vendor.name} only by part of the name; confirm the payee`)
+          : warn("evidence_names_vendor", `None of the attached records name ${vendor.name}; confirm the payee`),
+    );
   }
 
   // R4: amount matches evidence within tolerance
@@ -122,8 +129,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // R5x: the same job reference already billed by a different payee. Driver and guide on one trip have their own
   // invoice numbers; one reference on two payees is how a job gets paid twice.
   for (const o of input.otherVendorRefs ?? []) {
-    rules.push(warn("reference_other_vendor", `Reference ${o.reference} is also on a payment to ${o.vendorName} (${o.state}); confirm who did this job`));
-    break;
+    rules.push({ ...warn("reference_other_vendor", `Reference ${o.reference} is also on a payment to ${o.vendorName} (${o.state}); confirm who did this job`), key: o.obligationId });
   }
 
   // R5: duplicate job for the same vendor. Three layers:
@@ -188,10 +194,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else {
       rules.push(pass("ai_confidence", `Agent confidence ${ai.confidence}%`));
     }
-    // Flags are concerns. A note that a figure was taken from the attached record is information, and the
-    // amount-matches-evidence rule already checks it, so it is recorded as passing rather than as a warning.
-    // Same for a vendor read from the attached record: evidence_names_vendor checks that record names the payee.
-    for (const f of ai.flags) rules.push(/^(Amount|Reference [A-Z0-9-]+|Vendor .+?) taken from /.test(f) ? pass("ai_flag", f) : warn("ai_flag", f));
+    // Flags are concerns; every one needs a person. Neutral observations travel as notes and never reach policy.
+    for (const f of ai.flags) rules.push(warn("ai_flag", f));
     for (const m of ai.missing) rules.push(warn("ai_missing", `Agent wants: ${m}`));
   } else {
     rules.push(warn("ai_confidence", "No agent interpretation available; human review required"));
@@ -217,9 +221,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // same reference, a changed amount record). A new warning sends the payment back for a fresh look.
   if (input.approvalsCount >= 1 && input.acknowledgedWarnings) {
     const seen = new Set(input.acknowledgedWarnings);
-    const fresh = rules.filter((r) => r.severity === "warn" && !r.passed && !seen.has(r.ruleId));
+    const fresh = rules.filter((r) => r.severity === "warn" && !r.passed && !seen.has(warningFingerprint(r)) && !seen.has(r.ruleId));
     if (fresh.length) {
-      return { decision: "require_approval", reasons: fresh.map((r) => `New since approval: ${r.message}`), rules, unacknowledged: fresh.map((r) => r.ruleId) };
+      return { decision: "require_approval", reasons: fresh.map((r) => `New since approval: ${r.message}`), rules, unacknowledged: fresh.map(warningFingerprint) };
     }
   }
   if (policy.dualApprovalThresholdMinor > 0 && amount > policy.dualApprovalThresholdMinor && input.approvalsCount < 2) {

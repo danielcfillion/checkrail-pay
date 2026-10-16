@@ -187,7 +187,7 @@ export interface PolicyInput {
   }>;
   /** Business-wide committed payments in base currency over the last 24h, excluding this one. Used by the autopilot daily cap. */
   businessRecentMinor?: number;
-  /** Warning rule ids the current approvals were given over. Undefined means unknown (older approvals): every warning counts as seen. */
+  /** Fingerprints (see warningFingerprint) of the warnings the current approvals were given over. A bare rule id, from approvals made before fingerprints, covers every warning of that rule. Undefined means unknown (older approvals): every warning counts as seen. */
   acknowledgedWarnings?: string[];
   /** Every vendor the business knows, for deciding whether a record names the payee or someone else. */
   knownVendorNames?: Array<{ id: string; name: string }>;
@@ -206,6 +206,13 @@ export interface PolicyRuleResult {
   passed: boolean;
   severity: "info" | "warn" | "block";
   message: string;
+  /** What this particular warning is about (another obligation's id, a flag's text). With ruleId it fingerprints the warning for approvals. */
+  key?: string;
+}
+
+/** Stable identity of one warning: an approval covers exactly the warnings with these fingerprints. */
+export function warningFingerprint(r: PolicyRuleResult): string {
+  return `${r.ruleId}|${r.key ?? r.message}`;
 }
 
 export interface PolicyOutcome {

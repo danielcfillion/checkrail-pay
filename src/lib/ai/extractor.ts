@@ -1,4 +1,4 @@
-import { namesVendor } from "../domain/vendorNames";
+import { namesVendorFully } from "../domain/vendorNames";
 import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../domain/types";
 
 /**
@@ -103,11 +103,14 @@ export function interpretWithRules(input: {
   // The covering message often says only "invoice attached, please pay". Then the vendor comes from the attached
   // records, but only when exactly one known vendor is named there. Policy still checks the record names the payee.
   let vendor = matchVendor(rawInput, vendors);
+  // This is a concern, not a note: a document names many people (the guide, the guesthouse, the driver), so a
+  // person confirms who is being paid. Only a full-name match is considered, and only when exactly one vendor matches.
+  const concerns: string[] = [];
   if (!vendor && evidence.length) {
-    const named = vendors.filter((v) => evidence.some((e) => namesVendor(`${e.label} ${e.excerpt ?? ""}`, v.name, vendors.filter((o) => o.id !== v.id).map((o) => o.name))));
+    const named = vendors.filter((v) => evidence.some((e) => namesVendorFully(`${e.label} ${e.excerpt ?? ""}`, v.name)));
     if (named.length === 1) {
       vendor = named[0];
-      adopted.push(`Vendor ${vendor.name} taken from the attached record; the request text names no one`);
+      concerns.push(`The request names no payee; ${vendor.name} was read from the attached record. Confirm this is who is being paid`);
     }
   }
   const dueDate = extractDueDate(rawInput);
@@ -155,8 +158,9 @@ export function interpretWithRules(input: {
     confidence -= 20;
   }
 
-  for (const a of adopted) flags.push(a);
-  if (adopted.length) confidence -= 5;
+  // Figures taken from the attached record are information (policy checks them against that record): notes, not concerns.
+  for (const c of concerns) flags.push(c);
+  if (concerns.length) confidence -= 10;
   confidence = Math.max(5, Math.min(98, confidence));
 
   const descr = describe(rawInput, vendor, money, ref);
@@ -176,6 +180,7 @@ export function interpretWithRules(input: {
     confidence,
     flags,
     missing,
+    notes: adopted,
   };
 }
 

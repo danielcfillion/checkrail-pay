@@ -1,7 +1,7 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
-import { DEFAULT_POLICY, effectiveAutonomy, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
+import { DEFAULT_POLICY, effectiveAutonomy, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
@@ -320,7 +320,7 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
   if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
   // Record exactly which warnings were on screen. A warning that appears later voids this approval (see policy).
   const before = runPolicy(db, obligationId);
-  const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => r.ruleId);
+  const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint);
   db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), createdAt: now() }).run();
   audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null, acknowledged } });
   // Approval does not bypass policy: a blocked obligation stays blocked until the input is fixed.

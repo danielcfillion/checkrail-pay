@@ -50,10 +50,12 @@ export async function readDocument(input: { name: string; mimeType: string; byte
   let text: string | null = null;
   let reader: ReadDocumentResult["reader"] = "none";
 
-  if (TEXT_TYPES.has(mimeType) || /\.(txt|csv|md|json)$/i.test(name)) {
+  // The reader follows the declared type only. A name like "invoice.txt" sent as application/pdf is read as a PDF
+  // (and fails if it is not one), so a typed text file cannot pass as a document by its type.
+  if (TEXT_TYPES.has(mimeType)) {
     text = bytes.toString("utf8");
     reader = "plain";
-  } else if (mimeType === "application/pdf" || /\.pdf$/i.test(name)) {
+  } else if (mimeType === "application/pdf") {
     text = await pdfText(bytes);
     reader = text && text.trim().length > 20 ? "pdf-text" : "none";
   }

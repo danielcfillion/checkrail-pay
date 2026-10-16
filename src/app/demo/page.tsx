@@ -99,7 +99,7 @@ export default function DemoPage() {
             <li>Maria JOB-HG4D-0921: pay with PayPal, marker travels to reconciled.</li>
             <li>Ana: approve, compare rails, pay, open the settlement.</li>
             <li>
-              New request: type &quot;Invoice attached, please pay.&quot; and upload <a href="/demo-documents/invoice-rosa-0942.pdf" className="link" download>Rosa&apos;s invoice (USD 205)</a> or <a href="/demo-documents/tripsheet-hg5d-1005.pdf" className="link" download>Maria&apos;s trip sheet (USD 225)</a>. The vendor, amount and reference are read from the document; it comes out clean and pre-approved.
+              New request: type &quot;Invoice attached from Rosa, please pay.&quot; and upload <a href="/demo-documents/invoice-rosa-0942.pdf" className="link" download>Rosa&apos;s invoice (USD 205)</a>. The amount and reference are read from the document, which names Rosa in full, so it comes out clean and pre-approved. Leave the vendor out of the message and it waits for a person to confirm the payee instead: a document can mention several people.
             </li>
             <li>Settings: turn on Autopilot. Back on the overview it is scheduled with a countdown. Cancel it, or let the window run out and watch the agent send it.</li>
             <li>Try to fool it: upload <a href="/demo-documents/invoice-tam-0834b.pdf" className="link" download>Tam&apos;s re-issued invoice</a> (blocked as a duplicate) or <a href="/demo-documents/invoice-bayan-0944.pdf" className="link" download>Bayan&apos;s USD 640 charter</a> (held for a person, even on Autopilot).</li>
