@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
 import { formatDate, formatDateTime, pluralise } from "@/lib/format";
 import { EmptyState, PageHeader, RailTag } from "@/components/ui";
+import { ExportCsvButton } from "@/components/ExportCsvButton";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,7 @@ export default function AccountingPage() {
           </>
         }
         actions={
-          <a href="/api/accounting/export" className={`btn ${pending.length ? "btn-primary" : ""}`} download>
-            Export CSV{pending.length ? ` (${pending.length})` : ""}
-          </a>
+          <ExportCsvButton pendingCount={pending.length} />
         }
       />
       <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>

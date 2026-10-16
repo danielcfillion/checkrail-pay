@@ -67,14 +67,13 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   const namesVendor = new Set<string>();
   if (vendor && evidence.length > 0) {
     const parts = vendor.name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
-    // Bound when a record names the vendor, or when a record is explicitly the document for this reference.
+    // Bound only when a record names the vendor. A matching reference is not enough: the reference comes from the
+    // request text, so "pay Phuong for JOB-X" against Maria's trip sheet for JOB-X must not clear.
     for (const e of evidence) {
       const text = `${e.label} ${e.excerpt ?? ""}`.toLowerCase();
-      const byName = parts.some((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text));
-      const byRef = Boolean(obligation.sourceRef && e.reference && e.reference.toLowerCase() === obligation.sourceRef.toLowerCase());
-      if (byName || byRef) namesVendor.add(e.id);
+      if (parts.some((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text))) namesVendor.add(e.id);
     }
-    rules.push(namesVendor.size > 0 ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name} or carry this reference; confirm the payee`));
+    rules.push(namesVendor.size > 0 ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name}; confirm the payee`));
   }
 
   // R4: amount matches evidence within tolerance
@@ -109,6 +108,13 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   } else if (hasAmount && evidence.length > 0) {
     // Records are attached but none carries an amount (a booking, a chat message): the figure is unverified.
     rules.push(warn("amount_matches_evidence", "None of the attached records carries an amount; the requested figure has not been checked against anything"));
+  }
+
+  // R5x: the same job reference already billed by a different payee. Driver and guide on one trip have their own
+  // invoice numbers; one reference on two payees is how a job gets paid twice.
+  for (const o of input.otherVendorRefs ?? []) {
+    rules.push(warn("reference_other_vendor", `Reference ${o.reference} is also on a payment to ${o.vendorName} (${o.state}); confirm who did this job`));
+    break;
   }
 
   // R5: duplicate job for the same vendor. Three layers:
@@ -182,7 +188,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   }
 
   // Decide
-  const reasons = rules.filter((r) => !r.passed).map((r) => r.message);
+  // Blocking reasons first, so the headline of a blocked payment is what blocked it, not a warning that happened to run earlier.
+  const failing = rules.filter((r) => !r.passed);
+  const reasons = [...failing.filter((r) => r.severity === "block"), ...failing.filter((r) => r.severity !== "block")].map((r) => r.message);
   if (rules.some((r) => r.severity === "block" && !r.passed)) {
     return { decision: "block", reasons, rules };
   }

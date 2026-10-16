@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, basicAuthSetting } from "@/lib/basicAuth";
 import { isLiveRails } from "@/lib/config";
 import { exportPendingCsv } from "@/lib/accounting/record";
@@ -88,6 +88,19 @@ export async function reconcileAction(id: string): Promise<ActionResult> {
     return { ok: true, message: "Found the original payment on the rail. Recorded as sent." };
   } catch (e) {
     done([`/obligations/${id}`]);
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** A person checked the provider dashboard for a payment with an unclear outcome. */
+export async function resolveManuallyAction(id: string, found: string | null): Promise<ActionResult> {
+  try {
+    const who = await actor();
+    const state = await resolveManually(getDb(), id, who, found ? { kind: "found", externalId: found } : { kind: "nothing_moved" });
+    done([`/obligations/${id}`]);
+    done();
+    return { ok: true, message: state === "failed" ? "Recorded that nothing moved. You can retry the payment." : "Recorded the payout id. Checking settlement." };
+  } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
 }

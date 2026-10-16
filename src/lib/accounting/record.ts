@@ -104,12 +104,20 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
 
 export function toCsv(rows: AccountingPayload[]): string {
   const esc = (v: unknown) => {
-    const s = v == null ? "" : String(v);
+    let s = v == null ? "" : String(v);
+    // Vendor-written text must not run as a spreadsheet formula. Numbers like -12.50 stay numbers.
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [CSV_COLUMNS.join(",")];
   for (const r of rows) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
   return lines.join("\n") + "\n";
+}
+
+/** Every accounting record as CSV, changing nothing. Safe for a plain link or a second click. */
+export function allRecordsCsv(db: Db): { csv: string; count: number } {
+  const rows = db.select().from(accountingSyncs).all().map((p) => JSON.parse(p.payloadJson ?? "{}") as AccountingPayload);
+  return { csv: toCsv(rows), count: rows.length };
 }
 
 /** Mark every pending CSV sync as exported and return the file contents. */

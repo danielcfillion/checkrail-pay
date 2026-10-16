@@ -187,6 +187,8 @@ export interface PolicyInput {
   }>;
   /** Business-wide committed payments in base currency over the last 24h, excluding this one. Used by the autopilot daily cap. */
   businessRecentMinor?: number;
+  /** Obligations for OTHER vendors (not cancelled or failed) that use this obligation's exact reference. One job reference billed by two payees needs a person. */
+  otherVendorRefs?: Array<{ obligationId: string; vendorName: string; reference: string; state: string }>;
   /** Identifiers naming THIS obligation's job (same construction as priorSourceRefs[].keys). */
   jobKeys?: string[];
   /** Number of DISTINCT people who approved. */

@@ -25,6 +25,12 @@ Claude reads, policy decides, the agent pays inside your limits, and you sign of
 | 2:20 to 2:42 | Daily close | Scroll from "Needs a look" through "Sent by autopilot" and "Sent by people" to the cap meter, then click Sign off and confirm | At the end of the day I read one page. What needs a look comes first: the blocks, the unclaimed payout, anything unusual. Then what the agent sent, what people sent, and spend against the cap. Sign off, and that goes in the audit log too. |
 | 2:42 to 2:50 | Closing card | Hold | Checkrail Pay. AI pays your suppliers. Policy decides. You sign off. |
 
+## Off-camera prep (do this before the take, or the 1:38 and 2:05 shots have nothing to show)
+
+1. **Before 1:38, set up the autopilot shot.** After paying Maria at 1:02, nothing else in the seed is eligible for autopilot: Ana is USD 750, above the threshold and the USD 500 cap. So, with autonomy still on Assist, open New request, type "Trip sheet attached, please pay Maria.", upload `docs/demo-documents/tripsheet-hg5d-1005.pdf` (USD 225) and create it. It comes out pre-approved. When you switch to Autopilot on camera, it is scheduled with a ten-minute countdown.
+2. **Before 2:05, set up the unclaimed shot.** In live mode Ana has no Stellar wallet, so PayPal is her only route. Open Ana's payment, approve it, click Pay with PayPal, and wait a minute. Then press Check settlement until the page shows UNCLAIMED and the "Payout needs attention" panel. Do this in a separate take before recording; the shot itself only points at the result.
+3. Do not press Reset demo after step 2: Ana's payout is real sandbox state and resetting is disabled in live mode anyway.
+
 ## The one insert that matters most
 
 The PayPal sandbox payout batch id on PayPal's own dashboard, matching the id on the obligation page (1:30 to 1:38). It answers "did a real PayPal call happen" in three seconds. The first one was RGS5PUZPH4CNY on 12 Oct; a fresh take will produce a new id.
@@ -55,7 +61,7 @@ Same footage plus a Stellar shot once the testnet treasury is funded: Ana's USD 
 - In `.env`: RAIL_MODE=live, STELLAR_RAIL=mock, AI_MODE=live, the US sandbox app keys.
 - In the PayPal app settings: Transaction search and Invoicing on, so Claude's PayPal checks succeed on camera.
 - `npm run db:seed && npm run dev`, open `/demo` once to confirm the four requests.
-- Autonomy starts at Assist after a seed; switch to Autopilot on camera (1:38).
+- Autonomy starts at Assist after a seed; do the two off-camera prep steps above, then switch to Autopilot on camera (1:38).
 - Close other tabs, hide the bookmarks bar, 1440px window.
 - Record the voiceover separately after the screen take.
 - No music with lyrics or anything copyrighted; silence is fine.

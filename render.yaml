@@ -16,10 +16,14 @@ services:
         value: "22"
       - key: DATABASE_PATH
         value: ./data/checkrail-pay.sqlite
-      # One shared demo database. Basic auth (user:password) keeps two judges from resetting each other's
-      # walkthrough; put the same credential in the Devpost testing instructions.
+      # One shared demo database. Basic auth keeps the open internet out (put the credential in the Devpost
+      # testing instructions). It does not separate judges from each other: that is what the idle reset is for.
       - key: CHECKRAIL_BASIC_AUTH
         sync: false
+      # After 30 minutes with no one clicking, the heartbeat restores the four opening requests, so a judge who
+      # arrives later starts clean. Two judges in the same half hour still share state; Reset demo puts it back.
+      - key: DEMO_AUTO_RESET_MINUTES
+        value: "30"
       # mock = runs with zero credentials; live = real PayPal sandbox (set the keys below).
       - key: RAIL_MODE
         value: mock

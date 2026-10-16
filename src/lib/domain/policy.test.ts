@@ -21,7 +21,7 @@ function base(overrides: Partial<PolicyInput> = {}): PolicyInput {
     obligation: { id: "o1", amountMinor: 18_000, currency: "USD", sourceRef: "JOB-0921", vendorId: "v1" },
     vendor,
     evidence: [
-      { id: "e1", kind: "job_sheet", label: "Job sheet JOB-0921", amountMinor: 18_000, currency: "USD", reference: "JOB-0921", excerpt: null },
+      { id: "e1", kind: "job_sheet", label: "Job sheet JOB-0921", amountMinor: 18_000, currency: "USD", reference: "JOB-0921", excerpt: "Guide Maria Santos" },
     ],
     ai: { vendorName: "Maria Santos", vendorId: "v1", amountMinor: 18_000, currency: "USD", description: "Guide fee", sourceRef: "JOB-0921", dueDate: null, summary: "", confidence: 92, flags: [], missing: [] },
     businessCountry: "US",
@@ -64,7 +64,7 @@ describe("evaluatePolicy", () => {
   it("requires approval above auto threshold", () => {
     const out = evaluatePolicy(DEFAULT_POLICY, base({
       obligation: { id: "o1", amountMinor: 120_000, currency: "USD", sourceRef: "INV-9", vendorId: "v1" },
-      evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-9", amountMinor: 120_000, currency: "USD", reference: "INV-9", excerpt: null }],
+      evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-9", amountMinor: 120_000, currency: "USD", reference: "INV-9", excerpt: "Maria Santos" }],
     }));
     expect(out.decision).toBe("require_approval");
   });
@@ -72,7 +72,7 @@ describe("evaluatePolicy", () => {
   it("auto-executes above threshold once approved", () => {
     const out = evaluatePolicy(DEFAULT_POLICY, base({
       obligation: { id: "o1", amountMinor: 120_000, currency: "USD", sourceRef: "INV-9", vendorId: "v1" },
-      evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-9", amountMinor: 120_000, currency: "USD", reference: "INV-9", excerpt: null }],
+      evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-9", amountMinor: 120_000, currency: "USD", reference: "INV-9", excerpt: "Maria Santos" }],
       approvalsCount: 1,
     }));
     expect(out.decision).toBe("auto_execute");
@@ -80,7 +80,7 @@ describe("evaluatePolicy", () => {
 
   it("requires two approvals above dual threshold", () => {
     const big = { id: "o1", amountMinor: 900_000, currency: "USD", sourceRef: "INV-10", vendorId: "v1" };
-    const ev = [{ id: "e1", kind: "invoice", label: "Invoice INV-10", amountMinor: 900_000, currency: "USD", reference: "INV-10", excerpt: null }];
+    const ev = [{ id: "e1", kind: "invoice", label: "Invoice INV-10", amountMinor: 900_000, currency: "USD", reference: "INV-10", excerpt: "Maria Santos" }];
     expect(evaluatePolicy(DEFAULT_POLICY, base({ obligation: big, evidence: ev, approvalsCount: 1 })).decision).toBe("require_approval");
     expect(evaluatePolicy(DEFAULT_POLICY, base({ obligation: big, evidence: ev, approvalsCount: 2 })).decision).toBe("auto_execute");
   });
@@ -205,6 +205,17 @@ describe("the agent's vendor choice is bound to the evidence", () => {
     const o = run([{ label: "Trip sheet HG-4D-0921", excerpt: "Lead guide Maria Santos, 4 days", reference: "JOB-HG4D-0921" }]);
     const r = o.rules.find((x) => x.ruleId === "evidence_names_vendor")!;
     expect(r.passed).toBe(false);
+    expect(o.decision).toBe("require_approval");
+  });
+  it("a matching reference does not stand in for the payee's name", () => {
+    // The request says "pay Jake for INV-77"; the only record is Maria's trip sheet, which carries INV-77.
+    const o = run([{ label: "Trip sheet INV-77", excerpt: "Lead guide Maria Santos, USD 180", reference: "INV-77" }]);
+    expect(o.rules.find((x) => x.ruleId === "evidence_names_vendor")!.passed).toBe(false);
+    expect(o.decision).toBe("require_approval");
+  });
+  it("warns when the same reference is already on another payee's payment", () => {
+    const o = evaluatePolicy(DEFAULT_POLICY, { ...base(), otherVendorRefs: [{ obligationId: "o9", vendorName: "Phuong Transport", reference: "JOB-0921", state: "settled" }] });
+    expect(o.rules.find((x) => x.ruleId === "reference_other_vendor")?.passed).toBe(false);
     expect(o.decision).toBe("require_approval");
   });
   it("passes when the record names the vendor", () => {

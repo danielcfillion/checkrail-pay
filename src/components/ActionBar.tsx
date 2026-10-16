@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, executeAction, reconcileAction, rejectAction, retryFailedAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -159,6 +159,21 @@ export function ActionBar(p: Props) {
           <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
             {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
           </button>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-ink-soft hover:text-ink">Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
+            <div className="mt-3 space-y-3">
+              <p className="text-ink-soft">Look the payment up in the dashboard. Both choices are recorded in the audit log under your name.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input className="field w-56" placeholder="Payout batch id" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Payout batch id found in the dashboard" />
+                <button type="button" className="btn" disabled={pending || note.trim().length < 6} onClick={() => run("found", () => resolveManuallyAction(p.id, note.trim()))}>
+                  {busy === "found" ? "Recording" : "I found it: record this id"}
+                </button>
+              </div>
+              <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("nothing", () => resolveManuallyAction(p.id, null))}>
+                {busy === "nothing" ? "Recording" : "I checked: nothing was paid"}
+              </button>
+            </div>
+          </details>
         </div>
       );
 

@@ -38,7 +38,7 @@ Checkrail Pay is an AI payables agent for small businesses that pay contractors 
 
 **The Daily close.** One page to read before signing out: what needs a look comes first (unclear outcomes, failures, last-moment refusals, new blocks, first payments to a new vendor, amounts far above a vendor's usual, payments approved over warnings), then what the agent sent, what people sent, spend against the cap, and an audited sign-off.
 
-**The demo.** A US tour operator. A USD 960 invoice that the trip sheet says should be USD 800: blocked. A job already paid 17 days earlier: blocked. A USD 180 guide fee: paid through the real PayPal sandbox (payout batch RGS5PUZPH4CNY, settled). A USD 750 fee to a guide whose PayPal email does not exist: sent, comes back UNCLAIMED, and is held for a person instead of being paid again.
+**The demo.** A US tour operator. A USD 960 invoice that the trip sheet says should be USD 800: blocked. A job already paid 17 days earlier: blocked. A USD 180 guide fee: paid through the real PayPal sandbox (payout batch RGS5PUZPH4CNY, settled). A USD 750 fee to a guide whose PayPal email does not exist: sent, comes back UNCLAIMED, and is held for a person instead of being paid again. (That is the live sandbox run shown in the video. The hosted demo judges try runs on simulated rails with no keys, so there Ana's fee settles on simulated Stellar; the presenter page at /demo lists both, plus documents to upload to try autopilot and the duplicate check.)
 
 ## How we built it
 

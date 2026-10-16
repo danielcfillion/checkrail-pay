@@ -41,6 +41,16 @@ export function isDuplicateBatchError(body: unknown): boolean {
   return /SENDER_BATCH_ID_ALREADY_EXISTS|DUPLICATE_REQUEST_ID|already exists|duplicate/i.test(text);
 }
 
+/** A payout batch id from the HATEOAS links in a PayPal error body, if one is there. */
+export function batchIdFromLinks(body: unknown): string | null {
+  const links = (body as { links?: Array<{ href?: string }> } | null)?.links ?? [];
+  for (const l of links) {
+    const m = l.href?.match(/\/v1\/payments\/payouts\/([A-Z0-9_-]+)(?:[/?]|$)/i);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 export class PayPalRail implements PaymentRail {
   readonly rail = "paypal" as const;
   readonly mode: "sandbox" | "live";
@@ -101,6 +111,16 @@ export class PayPalRail implements PaymentRail {
       // the original batch exists. Find it by key and report it as submitted. If the lookup cannot confirm it,
       // the outcome stays unknown so nobody re-sends under a new key.
       if (isDuplicateBatchError(res.json)) {
+        // The rejection normally links to the original batch. Use that first; the key lookup is a fallback.
+        const linked = batchIdFromLinks(res.json);
+        if (linked) {
+          const st = await this.call("GET", `/v1/payments/payouts/${encodeURIComponent(linked)}`);
+          const h = (st.json as { batch_header?: { payout_batch_id?: string; batch_status?: string; sender_batch_header?: { sender_batch_id?: string } } } | null)?.batch_header;
+          // Only trust the link if PayPal confirms that batch carries OUR key.
+          if (st.ok && h?.payout_batch_id && (!h.sender_batch_header?.sender_batch_id || h.sender_batch_header.sender_batch_id === req.idempotencyKey)) {
+            return this.submitted(h.payout_batch_id, h.batch_status ?? null, req, res.json);
+          }
+        }
         const found = await this.findByIdempotencyKey(req.idempotencyKey);
         if (found) return this.submitted(found.batchId, found.batchStatus, req, res.json);
         return unknown(`PayPal reports this batch already exists but the lookup by sender_batch_id did not return it (${message})`, res.json);

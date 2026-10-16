@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
 import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, settlements, vendors, accountingSyncs } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, runPolicy } from "./orchestrator";
+import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, resolveManually, runPolicy } from "./orchestrator";
 import { IllegalTransition, transition } from "../domain/stateMachine";
 import { DEFAULT_POLICY, type ExecutionRequest, type ExecutionResult, type PaymentRail, type Rail, type SettlementStatus } from "../domain/types";
 import { hashPayoutDetails } from "../domain/ids";
@@ -142,6 +142,27 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     expect(actionsOf(story.paypal)).toContain("execution.retry_requested");
     expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("submitted");
     expect(attemptsOf(story.paypal)).toHaveLength(2);
+  });
+
+  it("a person can resolve a stuck payment from the dashboard: found records the id, nothing moved allows a retry", async () => {
+    installRails(new ScriptedRail("paypal", [unknown()]));
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    await expect(resolveManually(db, story.paypal, "agent:autopilot", { kind: "nothing_moved" })).rejects.toThrow(/person/);
+    expect(await resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved", note: "no batch in dashboard" })).toBe("failed");
+    expect(attemptsOf(story.paypal)[0].status).toBe("failed");
+    expect(actionsOf(story.paypal)).toContain("execution.resolved_by_hand");
+    retryFailed(db, story.paypal, "user:daniel");
+    expect(get(story.paypal).state).toBe("approved");
+  });
+
+  it("a stuck payment found in the dashboard is recorded as sent under that id, without calling the rail to pay", async () => {
+    const pp = new ScriptedRail("paypal", [unknown()]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    await resolveManually(db, story.paypal, "user:daniel", { kind: "found", externalId: "PB-DASH-123" });
+    expect(pp.requests).toHaveLength(1);
+    expect(attemptsOf(story.paypal)[0].externalId).toBe("PB-DASH-123");
+    expect(["sent", "settled"]).toContain(get(story.paypal).state);
   });
 
   it("retryFailed refuses when the vendor's payout details changed after approval", async () => {
@@ -369,7 +390,7 @@ describe("H7: velocity cap and untrusted evidence", () => {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
       rawInput: `Invoice ${ref} from Kalaw Trekking Collective: porters for trip KAL-2D-${ref.replace(/\D/g, "").padStart(4, "0")}, total USD 250.`,
-      evidence: [{ kind: "invoice", label: `Invoice ${ref}`, amountMinor: 25_000, currency: "USD", reference: ref, excerpt: "USD 250.00" }],
+      evidence: [{ kind: "invoice", label: `Invoice ${ref}`, amountMinor: 25_000, currency: "USD", reference: ref, excerpt: "Kalaw Trekking Collective, porters, USD 250.00" }],
       evidenceSource: source,
       actor: "system:email-ingest",
     });

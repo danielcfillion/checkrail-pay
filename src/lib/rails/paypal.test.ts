@@ -84,6 +84,17 @@ describe("PayPalRail.execute outcome classification", () => {
     expect(calls.some((c) => c.url.includes(`sender_batch_id=${"k".repeat(32)}`))).toBe(true);
   });
 
+  it("a duplicate rejection that links to the original batch is resolved from the link", async () => {
+    stubFetch((url, init) => {
+      if (init.method === "POST") return json(400, { name: "USER_BUSINESS_ERROR", message: "Batch with given sender_batch_id already exists", links: [{ href: "https://api-m.sandbox.paypal.com/v1/payments/payouts/PB-LINKED", rel: "self", method: "GET" }] });
+      if (url.endsWith("/v1/payments/payouts/PB-LINKED")) return json(200, { batch_header: { payout_batch_id: "PB-LINKED", batch_status: "SUCCESS", sender_batch_header: { sender_batch_id: "k".repeat(32) } } });
+      return json(404, {});
+    });
+    const r = await new PayPalRail(creds).execute(req);
+    expect(r.status).toBe("submitted");
+    expect(r.externalId).toBe("PB-LINKED");
+  });
+
   it("a duplicate rejection whose lookup finds nothing stays unknown, never failed", async () => {
     stubFetch((url, init) => {
       if (init.method === "POST") return json(400, { name: "USER_BUSINESS_ERROR", message: "sender_batch_id already exists" });

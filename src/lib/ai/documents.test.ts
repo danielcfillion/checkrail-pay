@@ -57,15 +57,44 @@ describe("uploaded document to obligation", () => {
     expect(ob.amountMinor).toBe(42_000);
     expect(ob.policyReasonsJson ?? "[]").not.toMatch(/operator/);
 
+    // The same upload cannot back a second payment, and nothing is written when it is refused.
+    const before = db.select().from(obligations).all().length;
+    await expect(ingestObligation(db, { businessId: "biz_ridgeline", sourceType: "invoice", rawInput: "again", evidence: [{ ...row, attachmentId: up.attachmentId }], evidenceSource: "operator", actor: "user:daniel" })).rejects.toThrow(/already attached/);
+    expect(db.select().from(obligations).all().length).toBe(before);
+
+    const up2 = await uploadDocument(db, { businessId: "biz_ridgeline", name: "invoice-kalaw.pdf", mimeType: "application/pdf", bytes: pdf(), actor: "user:daniel" });
     const edited = await ingestObligation(db, {
       businessId: "biz_ridgeline",
       sourceType: "invoice",
       rawInput: "Kalaw Trekking Collective invoice for KAL-2D-1003, USD 500.",
-      evidence: [{ ...row, amountMinor: 50_000, reference: "INV-KTC-0211", attachmentId: up.attachmentId }],
+      evidence: [{ ...row, amountMinor: 50_000, reference: "INV-KTC-0211", attachmentId: up2.attachmentId }],
       evidenceSource: "operator",
       actor: "user:daniel",
     });
     const ev2 = db.select().from(evidence).where(eq(evidence.obligationId, edited)).get()!;
     expect(ev2.provenance).toBe("operator");
+
+    // Same figures, but the excerpt was edited to name a different payee: that is the operator's claim, not the document's.
+    const up3 = await uploadDocument(db, { businessId: "biz_ridgeline", name: "invoice-kalaw.pdf", mimeType: "application/pdf", bytes: pdf(), actor: "user:daniel" });
+    const relabelled = await ingestObligation(db, {
+      businessId: "biz_ridgeline",
+      sourceType: "invoice",
+      rawInput: "Pay Phuong Transport for this.",
+      evidence: [{ ...row, excerpt: `Driver: Phuong Transport. ${row.excerpt ?? ""}`, attachmentId: up3.attachmentId }],
+      evidenceSource: "operator",
+      actor: "user:daniel",
+    });
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, relabelled)).get()!.provenance).toBe("operator");
+    expect(db.select().from(obligations).where(eq(obligations.id, relabelled)).get()!.state).not.toBe("approved");
+  });
+});
+
+describe("upload safety", () => {
+  it("refuses HTML and SVG, which could run script on the app's origin", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: false });
+    for (const mimeType of ["text/html", "image/svg+xml", "application/javascript"]) {
+      await expect(uploadDocument(db, { businessId: "biz_ridgeline", name: "x", mimeType, bytes: Buffer.from("<script>alert(1)</script>"), actor: "user:daniel" })).rejects.toThrow(/not accepted/);
+    }
   });
 });

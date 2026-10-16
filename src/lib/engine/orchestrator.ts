@@ -37,6 +37,13 @@ export interface IngestInput {
 export async function ingestObligation(db: Db, input: IngestInput): Promise<string> {
   const id = newId("obl");
   const ts = now();
+  // One document backs one payment. Re-using it would move it off the first obligation and erase the text that
+  // obligation's duplicate check reads. Checked before anything is written, so a refusal leaves no half-made draft.
+  for (const e of input.evidence ?? []) {
+    if (!e.attachmentId) continue;
+    const att = db.select({ name: attachments.name, obligationId: attachments.obligationId }).from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
+    if (att?.obligationId) throw new Error(`Document ${att.name} is already attached to another payment; upload it again if it really backs this one too`);
+  }
   db.insert(obligations)
     .values({
       id,
@@ -57,10 +64,13 @@ export async function ingestObligation(db: Db, input: IngestInput): Promise<stri
     if (e.attachmentId) {
       const att = db.select().from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
       if (att) {
+        // One document backs one payment. Re-using it would move it off the first obligation and erase the text its duplicate check reads.
         attachmentId = att.id;
-        // "document" only when the figures are the ones the reader extracted. An edited figure is the operator's claim.
-        const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null }>;
-        const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase());
+        // "document" only when every field is what the reader extracted: figures, reference, label and excerpt. Policy reads the
+        // label and excerpt to bind the payee, so an edited excerpt is the operator's claim, not the document's.
+        const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null; label?: string; excerpt?: string | null }>;
+        const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? "").replace(/\s+/g, " ").trim() === (b ?? "").replace(/\s+/g, " ").trim();
+        const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase() && same(p.label, e.label) && same(p.excerpt, e.excerpt));
         provenance = untouched ? "document" : "operator";
         db.update(attachments).set({ obligationId: id }).where(eq(attachments.id, att.id)).run();
       }
@@ -204,6 +214,18 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
         })
     : [];
   const myEvidence = listEvidence(db, obligationId);
+  // Exact references on this obligation (its own and its evidence's), checked against other payees' obligations.
+  const myRefs = new Set([ob.sourceRef, ...myEvidence.map((e) => e.reference)].filter((r): r is string => Boolean(r)).map((r) => r.toUpperCase()));
+  const otherVendorRefs = ob.vendorId && myRefs.size
+    ? db
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, state: obligations.state, vendorName: vendors.name })
+        .from(obligations)
+        .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
+        .where(and(eq(obligations.businessId, ob.businessId), ne(obligations.vendorId, ob.vendorId), ne(obligations.id, obligationId)))
+        .all()
+        .filter((o) => o.state !== "cancelled" && o.state !== "failed" && o.sourceRef && myRefs.has(o.sourceRef.toUpperCase()))
+        .map((o) => ({ obligationId: o.obligationId, vendorName: o.vendorName, reference: o.sourceRef!, state: o.state }))
+    : [];
   const myDocTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
   const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label, e.excerpt]), ...myDocTexts.map((d) => d.text?.slice(0, 4000)));
   // Distinct people, not rows: one person approving twice is still one approval.
@@ -230,6 +252,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     baseCurrency: biz.baseCurrency,
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt })),
     jobKeys: myJobKeys,
+    otherVendorRefs,
     approvalsCount,
     vendorRecentMinor,
     businessRecentMinor,
@@ -293,8 +316,11 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
 }
 
 export function rejectObligation(db: Db, obligationId: string, actor: string, note?: string): void {
-  db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "rejected", note: note ?? null, createdAt: now() }).run();
-  transition(db, obligationId, "cancelled", actor, "approval.rejected", { note: note ?? null });
+  // Transition first and in one transaction with the row: an illegal cancel leaves no stray rejection behind.
+  db.transaction((tx) => {
+    transition(tx as unknown as Db, obligationId, "cancelled", actor, "approval.rejected", { note: note ?? null });
+    tx.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "rejected", note: note ?? null, createdAt: now() }).run();
+  });
 }
 
 export interface AmendPatch {
@@ -548,6 +574,34 @@ export async function retryAmbiguousExecution(db: Db, obligationId: string, opts
     return finishAttempt(db, obligationId, attempt.id, rail, adapter.mode, still);
   }
   return finishAttempt(db, obligationId, attempt.id, rail, adapter.mode, result);
+}
+
+/**
+ * Last resort for a payment stuck in execution_pending: a person has checked the provider dashboard.
+ *  - found: they found the payout; record its id and poll it like any submitted payment.
+ *  - nothing_moved: they confirmed no payout exists for this attempt; mark it failed so it can be retried.
+ * Audited with the person's name and what they saw. Never mints a key or calls the rail to pay.
+ */
+export async function resolveManually(db: Db, obligationId: string, actor: string, resolution: { kind: "found"; externalId: string } | { kind: "nothing_moved"; note?: string }): Promise<ObligationState> {
+  const ob = mustGet(db, obligationId);
+  if (ob.state !== "execution_pending") throw new Error(`Only a payment with an unclear outcome can be resolved by hand (state: ${ob.state})`);
+  if (!actor.startsWith("user:")) throw new Error("Only a person can resolve a payment by hand");
+  const attempt = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).orderBy(desc(paymentAttempts.createdAt)).all().find((a) => a.status === "unknown" || a.status === "pending");
+  if (!attempt) throw new Error("No unresolved payment attempt found");
+  if (resolution.kind === "found") {
+    const id = resolution.externalId.trim();
+    if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) throw new Error("That does not look like a payout or transaction id");
+    db.update(paymentAttempts).set({ status: "submitted", externalId: id, externalStatus: "found by hand", updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
+    transition(db, obligationId, "sent", actor, "execution.resolved_by_hand", { attemptId: attempt.id, externalId: id });
+    try {
+      return await confirmSettlement(db, obligationId, "manual-resolution");
+    } catch {
+      return "sent";
+    }
+  }
+  db.update(paymentAttempts).set({ status: "failed", errorMessage: `Confirmed by ${actor} that nothing moved${resolution.note ? `: ${resolution.note}` : ""}`, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
+  transition(db, obligationId, "failed", actor, "execution.resolved_by_hand", { attemptId: attempt.id, nothingMoved: true, note: resolution.note ?? null });
+  return "failed";
 }
 
 /**

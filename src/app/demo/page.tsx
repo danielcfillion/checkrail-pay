@@ -97,9 +97,18 @@ export default function DemoPage() {
             <li>Phuong: the mismatch, the rule that caught it, correct to $800.</li>
             <li>Maria duplicate: the reference was paid 17 days ago; cancel it.</li>
             <li>Maria JOB-HG4D-0921: pay with PayPal, marker travels to reconciled.</li>
-            <li>Ana: approve, compare rails, pay with Stellar, open the settlement.</li>
+            <li>Ana: approve, compare rails, pay, open the settlement.</li>
+            <li>
+              New request: upload <a href="/demo-documents/tripsheet-hg5d-1005.pdf" className="link" download>Maria&apos;s trip sheet (USD 225)</a> with a line like &quot;Trip sheet attached, please pay Maria.&quot; It comes out clean and pre-approved.
+            </li>
+            <li>Settings: turn on Autopilot. Back on the overview the trip sheet is scheduled with a countdown. Cancel it, or let the window run out and watch the agent send it.</li>
+            <li>Try to fool it: upload <a href="/demo-documents/invoice-tam-0834b.pdf" className="link" download>Tam&apos;s re-issued invoice</a> (blocked as a duplicate) or <a href="/demo-documents/invoice-bayan-0944.pdf" className="link" download>Bayan&apos;s USD 640 charter</a> (held for a person, even on Autopilot).</li>
+            <li>Daily close: what needs a look, what the agent sent, what people sent. Sign off.</li>
             <li>Ledger and accounting: the same records, ready for Xero.</li>
           </ol>
+          <p className="mt-3 text-sm text-ink-soft">
+            This demo runs on simulated rails and the rule-based reader, so it works with no keys. Ana settles on simulated Stellar here; in the live PayPal sandbox run her payout came back UNCLAIMED instead. The hosted copy restores the opening requests after 30 minutes without use, or press Reset demo.
+          </p>
         </div>
         <div className="panel p-4">
           <h2 className="font-medium">Links</h2>
