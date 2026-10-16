@@ -1,3 +1,4 @@
+import { warningFingerprint, type PolicyRuleResult } from "@/lib/domain/types";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getObligationDetail } from "@/lib/queries";
@@ -241,7 +242,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </Panel>
           ) : null}
           <Panel title="Actions" aside={stateLabel(o.state)}>
-            <ActionBar id={o.id} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
+            <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
           </Panel>
 
           {d.settlement ? (

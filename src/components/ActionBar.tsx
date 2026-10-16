@@ -13,6 +13,8 @@ import { CopyButton } from "./CopyButton";
 
 type Props = {
   id: string;
+  /** Fingerprints of the warnings this page rendered. Approving sends them, so an approval covers what this person saw. */
+  shownWarnings?: string[];
   /** Idempotency key of the attempt whose outcome is unclear: what to search for in the provider dashboard. */
   pendingKey?: string | null;
   state: string;
@@ -67,7 +69,7 @@ export function ActionBar(p: Props) {
             <input id="approval-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Checked against the trip sheet" />
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined))}>
+            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
               {busy === "approve" ? "Approving" : "Approve"}
             </button>
             <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, note || undefined))}>

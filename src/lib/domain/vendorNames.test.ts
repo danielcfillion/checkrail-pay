@@ -54,3 +54,23 @@ describe("a trip sheet cannot pay a vendor it does not name (critic round 3)", (
     expect(o.decision).toBe("auto_execute");
   });
 });
+
+describe("request_names_vendor", () => {
+  const run = (requestText: string) =>
+    evaluatePolicy(DEFAULT_POLICY, {
+      obligation: { id: "o", amountMinor: 18_000, currency: "USD", sourceRef: "JOB-1", vendorId: "ven_maria" },
+      vendor: { id: "ven_maria", name: "Maria Santos", country: "PH", preferredRail: null, paypalEmail: "m@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "x", verifiedAt: "2026-08-14T00:00:00.000Z", detailsHash: "h" } as never,
+      evidence: [{ id: "e1", kind: "job_sheet", label: "Trip sheet JOB-1", amountMinor: 18_000, currency: "USD", reference: "JOB-1", excerpt: "Lead guide Maria Santos, USD 180", provenance: "system" }],
+      ai: { vendorName: "Maria Santos", vendorId: "ven_maria", amountMinor: 18_000, currency: "USD", description: "", sourceRef: "JOB-1", dueDate: null, summary: "", confidence: 92, flags: [], missing: [] },
+      businessCountry: "US", baseCurrency: "USD", priorSourceRefs: [], approvalsCount: 0, knownVendorNames: VENDORS, requestText,
+    });
+  const fired = (t: string) => run(t).rules.some((r) => r.ruleId === "request_names_vendor" && !r.passed);
+  it("passes when the request names the payee in full or by a distinctive part", () => {
+    expect(fired("Please pay Maria Santos for JOB-1.")).toBe(false);
+    expect(fired("Trip sheet attached from Maria, please pay.")).toBe(false);
+  });
+  it("warns when the request names no one", () => {
+    expect(fired("Invoice attached, please pay.")).toBe(true);
+    expect(run("Invoice attached, please pay.").decision).toBe("require_approval");
+  });
+});

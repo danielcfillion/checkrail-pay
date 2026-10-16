@@ -89,3 +89,53 @@ describe("an approval covers each warning it saw, not every warning of that kind
     expect(out.reasons.join(" ")).toMatch(/New since approval: .*Bayan/);
   });
 });
+
+describe("two payees approved on one reference do not void each other forever (critic round 6)", () => {
+  it("approve Ana, approve Bayan, pay Ana, pay Bayan: each needs at most one fresh look", async () => {
+    const db = openTestDb();
+    const { story } = await seedDemo(db, { history: false });
+    const { runPolicy, executeObligation } = await import("./orchestrator");
+    const bayan = await invoice(db, "Invoice from Bayan Island Boats for JOB-PAL3D-0927, USD 300.", "Bayan Island Boats, JOB-PAL3D-0927, USD 300", 30_000, "JOB-PAL3D-0927");
+    runPolicy(db, story.stellar);
+    approveObligation(db, story.stellar, "user:daniel", "separate cost");
+    runPolicy(db, bayan);
+    approveObligation(db, bayan, "user:daniel", "charter confirmed");
+    let refusals = 0;
+    for (let round = 0; round < 3; round++) {
+      for (const id of [story.stellar, bayan]) {
+        if (["sent", "settled"].includes(state(db, id).state)) continue;
+        if (state(db, id).state !== "approved") {
+          runPolicy(db, id);
+          approveObligation(db, id, "user:daniel", "looked again");
+        }
+        try {
+          await executeObligation(db, id, { actor: "user:daniel" });
+        } catch {
+          refusals++;
+        }
+      }
+    }
+    expect(["sent", "settled"]).toContain(state(db, story.stellar).state);
+    expect(["sent", "settled"]).toContain(state(db, bayan).state);
+    expect(refusals).toBeLessThanOrEqual(2);
+  });
+
+  it("a refused approval is audited with who tried", async () => {
+    const db = openTestDb();
+    const { story } = await seedDemo(db, { history: false });
+    await invoice(db, "Invoice from Kalaw Trekking Collective for JOB-PAL3D-0927, USD 200.", "Kalaw Trekking Collective, JOB-PAL3D-0927, USD 200", 20_000, "JOB-PAL3D-0927");
+    expect(() => approveObligation(db, story.stellar, "user:daniel", undefined, [])).toThrow(/Something changed/);
+    const { auditEntries } = await import("../db/schema");
+    const rows = db.select().from(auditEntries).where(eq(auditEntries.obligationId, story.stellar)).all();
+    expect(rows.some((r) => r.action === "approval.refused" && r.actor === "user:daniel")).toBe(true);
+  });
+
+  it("the page's own fingerprints are what an approval is checked against", async () => {
+    const db = openTestDb();
+    const { story } = await seedDemo(db, { history: false });
+    const { runPolicy } = await import("./orchestrator");
+    await invoice(db, "Invoice from Kalaw Trekking Collective for JOB-PAL3D-0927, USD 200.", "Kalaw Trekking Collective, JOB-PAL3D-0927, USD 200", 20_000, "JOB-PAL3D-0927");
+    runPolicy(db, story.stellar); // another tab refreshed; this viewer's page still shows no warnings
+    expect(() => approveObligation(db, story.stellar, "user:daniel", undefined, [])).toThrow(/Something changed/);
+  });
+});

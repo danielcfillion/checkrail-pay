@@ -17,7 +17,7 @@ Checkrail Pay puts five fixed stations between "someone says we owe this" and "i
     read ──── verified ──── routed ──── paid ──── reconciled
 
 1. **Read.** An agent reads the raw request and the attached evidence: Claude when `AI_MODE=live` and an API key is set, a rule-based extractor otherwise (the default, so the app runs with no keys). Claude has read the full demo live (`claude-sonnet-5-5`). In live mode Claude also has read-only PayPal Agent Toolkit tools (`list_transactions`, `list_invoices`, `get_invoice`, `get_merchant_insights`) so it can check PayPal's own records. It returns a structured interpretation, a confidence score and plain-language flags. It cannot pay anyone.
-2. **Verified.** A deterministic policy engine (a pure function, no network, no model) runs fifteen checks: known vendor; amount, currency and reference present; evidence attached, who supplied it, and that it names the payee; amount matches a record that names the payee; the reference not already billed by another payee; no duplicate job for this payee; recipient details verified; corridor allowed; and the agent's confidence, concerns and missing items. Every check is listed on the payment page. It returns block, hold, require approval or auto-execute.
+2. **Verified.** A deterministic policy engine (a pure function, no network, no model) runs sixteen checks: known vendor; the request names the payee; amount, currency and reference present; evidence attached, who supplied it, and that it names the payee in full; amount matches a record that names the payee; the reference not already billed by another payee; no duplicate job for this payee; recipient details verified; corridor allowed; and the agent's confidence, concerns and missing items. Every check is listed on the payment page. It returns block, hold, require approval or auto-execute.
 3. **Routed.** Both rails are quoted. A static rule picks the default: vendor preference first, then the rail that delivers more to the recipient per dollar the sender actually spends (PayPal's fee is charged on top, Stellar's comes out of the amount). A gap under 0.5% is a tie, and ties go to PayPal because its whole path is executed end to end today. Both quotes are shown to the operator.
 4. **Paid.** Execution re-runs policy, then calls PayPal Payouts or signs a Stellar PYUSD payment. Every attempt carries an idempotency key.
 5. **Reconciled.** Settlement is confirmed by polling the rail. The record lands in an audit log and exports as CSV with a Xero bill, payment and fee mapping ready for OAuth.
@@ -182,7 +182,7 @@ PayPal sandbox and Claude have both been run live this way (see Honest status). 
     npm run lint
     npm run build
 
-208 tests in 18 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+213 tests in 18 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
 
 ## Project layout
 

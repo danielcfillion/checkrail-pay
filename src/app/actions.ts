@@ -37,9 +37,10 @@ function done(paths: string[] = ["/", "/obligations", "/ledger", "/accounting", 
 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string };
 
-export async function approveAction(id: string, note?: string): Promise<ActionResult> {
+export async function approveAction(id: string, note?: string, shownFingerprints?: string[]): Promise<ActionResult> {
   try {
-    const out = approveObligation(getDb(), id, await actor(), note);
+    if (shownFingerprints && (!Array.isArray(shownFingerprints) || shownFingerprints.some((f) => typeof f !== "string" || f.length > 600))) throw new Error("Invalid page state");
+    const out = approveObligation(getDb(), id, await actor(), note, shownFingerprints);
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: out.decision === "auto_execute" ? "Approved and ready to pay." : `Approval recorded. Policy says: ${out.decision.replace("_", " ")}.` };

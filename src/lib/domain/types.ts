@@ -217,6 +217,16 @@ export function warningFingerprint(r: PolicyRuleResult): string {
   return `${r.ruleId}|${r.key ?? r.message}`;
 }
 
+/**
+ * Does a set of acknowledged fingerprints cover this one? Exact match, a bare rule id (approvals made before
+ * fingerprints), or a seen "other payment committed" covering the same payment now "open": only open to committed
+ * is new information. Without that last case two payees approved on one reference would void each other forever.
+ */
+export function fingerprintCovered(seen: Set<string>, fp: string): boolean {
+  if (seen.has(fp) || seen.has(fp.split("|")[0])) return true;
+  return fp.endsWith(":open") && seen.has(fp.replace(/:open$/, ":committed"));
+}
+
 export interface PolicyOutcome {
   decision: PolicyDecision;
   reasons: string[];

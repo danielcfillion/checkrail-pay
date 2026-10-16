@@ -1,6 +1,6 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { isValidAmountMinor } from "./money";
-import { effectiveAutonomy, warningFingerprint } from "./types";
+import { effectiveAutonomy, fingerprintCovered, warningFingerprint } from "./types";
 import type {
   ApprovalPolicy,
   PolicyInput,
@@ -233,7 +233,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // same reference, a changed amount record). A new warning sends the payment back for a fresh look.
   if (input.approvalsCount >= 1 && input.acknowledgedWarnings) {
     const seen = new Set(input.acknowledgedWarnings);
-    const fresh = rules.filter((r) => r.severity === "warn" && !r.passed && !seen.has(warningFingerprint(r)) && !seen.has(r.ruleId));
+    const fresh = rules.filter((r) => r.severity === "warn" && !r.passed && !fingerprintCovered(seen, warningFingerprint(r)));
     if (fresh.length) {
       return { decision: "require_approval", reasons: fresh.map((r) => `New since approval: ${r.message}`), rules, unacknowledged: fresh.map(warningFingerprint) };
     }
