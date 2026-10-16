@@ -1,7 +1,7 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
-import { DEFAULT_POLICY, effectiveAutonomy, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
+import { DEFAULT_POLICY, effectiveAutonomy, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
@@ -258,6 +258,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,
+    requestText: ob.rawInput,
     knownVendorNames: db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, ob.businessId)).all(),
     approvalsCount,
     vendorRecentMinor,
@@ -318,8 +319,14 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
   // One approval per person per version of the obligation.
   const already = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"), eq(approvals.actor, actor))).get();
   if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
-  // Record exactly which warnings were on screen. A warning that appears later voids this approval (see policy).
+  // What the page showed: the last policy evaluation on record. Policy is then run fresh. If the fresh run has a
+  // warning the page did not show (another payee billed this reference since the page was evaluated), the person
+  // approved something they did not see: refuse, and the refreshed page shows the new warning.
+  const shownEntry = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "policy.evaluated"))).orderBy(desc(auditEntries.seq)).get();
+  const shown = new Set(((shownEntry?.detail ? (JSON.parse(shownEntry.detail) as { rules?: PolicyRuleResult[] }).rules : []) ?? []).filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint));
   const before = runPolicy(db, obligationId);
+  const unseen = before.rules.filter((r) => r.severity === "warn" && !r.passed && !shown.has(warningFingerprint(r)));
+  if (unseen.length) throw new Error(`Something changed since this page was checked: ${unseen.map((r) => r.message).join("; ")}. Read it, then approve again.`);
   const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint);
   db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), createdAt: now() }).run();
   audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null, acknowledged } });

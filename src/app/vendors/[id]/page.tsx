@@ -50,7 +50,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
         </dl>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div className="space-y-6">
           <Panel title="Payout details" aside={v.verifiedAt ? <span className="text-settled">verified {formatDate(v.verifiedAt)}</span> : <span className="text-attention">not verified</span>}>
             <KeyValue

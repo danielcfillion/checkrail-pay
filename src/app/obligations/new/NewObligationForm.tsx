@@ -130,7 +130,7 @@ export function NewObligationForm() {
   };
 
   return (
-    <form onSubmit={submit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
       <div className="space-y-6">
         <section className="panel p-4">
           <div className="grid gap-4 sm:grid-cols-[200px_1fr]">

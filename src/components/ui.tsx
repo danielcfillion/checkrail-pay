@@ -93,7 +93,7 @@ export function KeyValue({ rows }: { rows: Array<[ReactNode, ReactNode]> }) {
       {rows.map(([k, v], i) => (
         <div key={i} className="contents">
           <dt className="text-ink-soft">{k}</dt>
-          <dd className="min-w-0 break-words">{v}</dd>
+          <dd className="min-w-0 break-words [overflow-wrap:anywhere]">{v}</dd>
         </div>
       ))}
     </dl>

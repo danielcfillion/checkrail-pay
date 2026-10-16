@@ -189,6 +189,8 @@ export interface PolicyInput {
   businessRecentMinor?: number;
   /** Fingerprints (see warningFingerprint) of the warnings the current approvals were given over. A bare rule id, from approvals made before fingerprints, covers every warning of that rule. Undefined means unknown (older approvals): every warning counts as seen. */
   acknowledgedWarnings?: string[];
+  /** The raw request text (message, email body). Used to check the request names the payee. */
+  requestText?: string;
   /** Every vendor the business knows, for deciding whether a record names the payee or someone else. */
   knownVendorNames?: Array<{ id: string; name: string }>;
   /** Obligations for OTHER vendors (not cancelled or failed) that use this obligation's exact reference. One job reference billed by two payees needs a person. */

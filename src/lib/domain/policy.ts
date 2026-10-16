@@ -64,6 +64,15 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     rules.push(warn("evidence_provenance", "Evidence supplied by operator, not system; check it against the source documents"));
   }
 
+  // R3a: the request itself should name the payee. Without this a reader (rules or Claude) that picked a vendor
+  // from the documents alone could pay whoever a supplier's invoice happens to name.
+  if (vendor && input.requestText != null) {
+    const otherNamesForReq = (input.knownVendorNames ?? []).filter((v) => v.id !== vendor.id).map((v) => v.name);
+    if (!mentionsVendor(input.requestText, vendor.name, otherNamesForReq)) {
+      rules.push(warn("request_names_vendor", `The request does not name ${vendor.name}; the payee was chosen from the attached records. Confirm who is being paid`));
+    }
+  }
+
   // R3c: the evidence must name the vendor the agent chose. The agent proposes vendorId; this rule binds it.
   // Only the vendor's full name binds without a warning. A partial mention ("Driver: Phuong") is shown to a person:
   // single words collide with places and peoples ("Tam Son", "Red Dao"), and a reference alone comes from the request.
@@ -129,7 +138,10 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // R5x: the same job reference already billed by a different payee. Driver and guide on one trip have their own
   // invoice numbers; one reference on two payees is how a job gets paid twice.
   for (const o of input.otherVendorRefs ?? []) {
-    rules.push({ ...warn("reference_other_vendor", `Reference ${o.reference} is also on a payment to ${o.vendorName} (${o.state}); confirm who did this job`), key: o.obligationId });
+    // The key changes when the other payment moves from open to committed (approved, sending or paid), so an
+    // approval given while it was still open does not cover it once it is being paid.
+    const committed = ["approved", "execution_pending", "sent", "settled"].includes(o.state);
+    rules.push({ ...warn("reference_other_vendor", `Reference ${o.reference} is also on a payment to ${o.vendorName} (${o.state}); confirm who did this job`), key: `${o.obligationId}:${committed ? "committed" : "open"}` });
   }
 
   // R5: duplicate job for the same vendor. Three layers:

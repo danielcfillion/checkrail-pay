@@ -61,12 +61,31 @@ describe("an approval covers each warning it saw, not every warning of that kind
     const { story } = await seedDemo(db, { history: false });
     const bill = (who: string, amount: number) => invoice(db, `Invoice from ${who} for JOB-PAL3D-0927, USD ${amount / 100}.`, `${who}, JOB-PAL3D-0927, USD ${amount / 100}`, amount, "JOB-PAL3D-0927");
     await bill("Bayan Island Boats", 30_000);
+    // Ana's page was evaluated before Bayan billed her reference: approving without having seen that is refused,
+    // and the refusal records a fresh evaluation, so the second attempt is an informed one.
+    expect(() => approveObligation(db, story.stellar, "user:daniel")).toThrow(/Something changed since this page was checked: .*Bayan/);
     approveObligation(db, story.stellar, "user:daniel", "Bayan's charter is a separate cost");
     expect(state(db, story.stellar).state).toBe("approved");
     await bill("Tam Motorbike Rental", 20_000);
     const { runPolicy } = await import("./orchestrator");
     const out = runPolicy(db, story.stellar);
     expect(out.decision).toBe("require_approval");
-    expect(out.reasons.join(" ")).toMatch(/New since approval: .*Bayan|New since approval: .*Tam/);
+    expect(out.reasons.join(" ")).toMatch(/New since approval: .*Tam/);
+  });
+
+  it("an approval given while the other payee's payment was open does not cover it once that one is being paid", async () => {
+    const db = openTestDb();
+    const { story } = await seedDemo(db, { history: false });
+    const bayan = await invoice(db, "Invoice from Bayan Island Boats for JOB-PAL3D-0927, USD 300.", "Bayan Island Boats, JOB-PAL3D-0927, USD 300", 30_000, "JOB-PAL3D-0927");
+    expect(state(db, bayan).state).toBe("awaiting_approval");
+    const { runPolicy } = await import("./orchestrator");
+    runPolicy(db, story.stellar); // the page is evaluated and shows Bayan's open payment
+    approveObligation(db, story.stellar, "user:daniel", "Separate cost");
+    expect(state(db, story.stellar).state).toBe("approved");
+    runPolicy(db, bayan); // Bayan's page loads and shows that Ana's payment is now approved
+    approveObligation(db, bayan, "user:daniel", "Charter confirmed"); // Bayan's payment is now committed
+    const out = runPolicy(db, story.stellar);
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons.join(" ")).toMatch(/New since approval: .*Bayan/);
   });
 });
