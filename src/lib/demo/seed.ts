@@ -28,6 +28,9 @@ export const DEMO_VENDORS = [
   { id: "ven_jake", name: "Jake Morrison", role: "creator", country: "US", email: "jake@example.com", preferredRail: null, paypalEmail: "jake@example.com", stellarAccount: "GBJAKE4Y2ZQ6QLPB3HQ5N3TBKX5TNFBN2V4ZL2RLJMK6UJCDEMONSTR", bankCountry: "US", bankCurrency: "USD", bankLabel: "Chase ****1180", notes: "Video content for departures. Invoices monthly." },
   { id: "ven_kalaw", name: "Kalaw Trekking Collective", role: "guide", country: "PH", email: "kalaw@example.com", preferredRail: null, paypalEmail: "kalaw@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BPI ****3350", notes: "Porter and guide collective, three to six people per trip." },
   { id: "ven_dao", name: "Dao Mountain Lodge", role: "hotel", country: "VN", email: "dao.lodge@example.com", preferredRail: null, paypalEmail: "dao.lodge@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****5519", notes: "Cao Bang. Invoices per departure." },
+  { id: "ven_rosa", name: "Rosa Villanueva", role: "guide", country: "PH", email: "rosa.v@example.com", preferredRail: null, paypalEmail: "rosa.v@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BPI ****2210", notes: "Cebu and Bohol day trips. Paid per departure." },
+  { id: "ven_bayan", name: "Bayan Island Boats", role: "driver", country: "PH", email: "bayan.boats@example.com", preferredRail: null, paypalEmail: "bayan.boats@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "Landbank ****7704", notes: "Bangka charters, El Nido. Invoices monthly." },
+  { id: "ven_tam", name: "Tam Motorbike Rental", role: "driver", country: "VN", email: "tam.rental@example.com", preferredRail: null, paypalEmail: "tam.rental@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****3391", notes: "Ha Giang bike fleet. Weekly rental invoices." },
 ] as const;
 
 export function resetDemo(db: Db): void {
@@ -117,6 +120,29 @@ async function seedHistoryRows(db: Db): Promise<void> {
     { vendor: "Dao Mountain Lodge", ref: "INV-DML-0919", amount: 68_000, text: "Invoice INV-DML-0919 Dao Mountain Lodge: 8 rooms, 2 nights, USD 680.", days: 8, sourceType: "invoice" },
     { vendor: "Maria Santos", ref: "JOB-HG3D-0907", amount: 13_500, text: "Trip HG-3D-0907 closed. Lead guide Maria Santos, 3 days, USD 135 (JOB-HG3D-0907).", days: 24, sourceType: "job_completion" },
     { vendor: "Kalaw Trekking Collective", ref: "JOB-KAL3D-0901", amount: 63_000, text: "Trip KAL-3D-0901 closed. Kalaw Trekking Collective, 6 porters 3 days, USD 630 (JOB-KAL3D-0901).", days: 29, sourceType: "job_completion" },
+    // Older history: 30 to 90 days back, so the chart, vendor pages and medians have texture.
+    { vendor: "Maria Santos", ref: "JOB-HG4D-0831", amount: 18_000, text: "Trip HG-4D-0831 closed. Lead guide Maria Santos, 4 days, USD 180 (JOB-HG4D-0831).", days: 34, sourceType: "job_completion" },
+    { vendor: "Rosa Villanueva", ref: "JOB-CEB1D-0830", amount: 9_500, text: "Trip CEB-1D-0830 closed. Guide Rosa Villanueva, Cebu day trip, USD 95 (JOB-CEB1D-0830).", days: 36, sourceType: "job_completion" },
+    { vendor: "Tam Motorbike Rental", ref: "INV-TAM-0834", amount: 36_000, text: "Invoice INV-TAM-0834 Tam Motorbike Rental: 6 bikes x 4 days x USD 15 = USD 360.", days: 38, sourceType: "invoice" },
+    { vendor: "Phuong Transport", ref: "INV-2026-0129", amount: 40_000, text: "Invoice INV-2026-0129 from Phuong Transport: van hire 5 days at USD 80, total USD 400.", days: 41, sourceType: "invoice" },
+    { vendor: "Bayan Island Boats", ref: "INV-BAYAN-0826", amount: 52_000, text: "Invoice INV-BAYAN-0826 Bayan Island Boats: 4 bangka charters, USD 130 each, USD 520.", days: 43, sourceType: "invoice" },
+    { vendor: "Ana Reyes", ref: "JOB-PAL3D-0822", amount: 75_000, text: "Trip PAL-3D-0822 closed. Guide Ana Reyes, 3-day Palawan private, USD 750 (JOB-PAL3D-0822).", days: 46, sourceType: "job_completion" },
+    { vendor: "Linh Family Homestay", ref: "INV-2026-0121", amount: 28_800, text: "Invoice INV-2026-0121 Linh Family Homestay: 8 guests x 2 nights x USD 18 = USD 288.", days: 48, sourceType: "invoice" },
+    { vendor: "Maria Santos", ref: "JOB-HG3D-0815", amount: 13_500, text: "Trip HG-3D-0815 closed. Lead guide Maria Santos, 3 days, USD 135 (JOB-HG3D-0815).", days: 51, sourceType: "job_completion" },
+    { vendor: "Kalaw Trekking Collective", ref: "JOB-KAL2D-0812", amount: 42_000, text: "Trip KAL-2D-0812 closed. Kalaw Trekking Collective, 4 porters 2 days, USD 420 (JOB-KAL2D-0812).", days: 53, sourceType: "job_completion" },
+    { vendor: "Rosa Villanueva", ref: "JOB-BOH1D-0810", amount: 11_000, text: "Trip BOH-1D-0810 closed. Guide Rosa Villanueva, Bohol day trip, USD 110 (JOB-BOH1D-0810).", days: 56, sourceType: "job_completion" },
+    { vendor: "Jake Morrison", ref: "INV-JM-0088", amount: 45_000, text: "Invoice INV-JM-0088 Jake Morrison: August content package, USD 450.", days: 58, sourceType: "invoice" },
+    { vendor: "Tam Motorbike Rental", ref: "INV-TAM-0806", amount: 30_000, text: "Invoice INV-TAM-0806 Tam Motorbike Rental: 5 bikes x 4 days x USD 15 = USD 300.", days: 61, sourceType: "invoice" },
+    { vendor: "Dao Mountain Lodge", ref: "INV-DML-0803", amount: 51_000, text: "Invoice INV-DML-0803 Dao Mountain Lodge: 6 rooms, 2 nights, USD 510.", days: 63, sourceType: "invoice" },
+    { vendor: "Maria Santos", ref: "JOB-HG4D-0728", amount: 18_000, text: "Trip HG-4D-0728 closed. Lead guide Maria Santos, 4 days, USD 180 (JOB-HG4D-0728).", days: 66, sourceType: "job_completion" },
+    { vendor: "Bayan Island Boats", ref: "INV-BAYAN-0726", amount: 39_000, text: "Invoice INV-BAYAN-0726 Bayan Island Boats: 3 bangka charters, USD 130 each, USD 390.", days: 69, sourceType: "invoice" },
+    { vendor: "Phuong Transport", ref: "INV-2026-0117", amount: 32_000, text: "Invoice INV-2026-0117 from Phuong Transport: van hire 4 days at USD 80, total USD 320.", days: 71, sourceType: "invoice" },
+    { vendor: "Ana Reyes", ref: "JOB-PAL2D-0718", amount: 50_000, text: "Trip PAL-2D-0718 closed. Guide Ana Reyes, 2-day Palawan private, USD 500 (JOB-PAL2D-0718).", days: 74, sourceType: "job_completion" },
+    { vendor: "Rosa Villanueva", ref: "JOB-CEB1D-0715", amount: 9_500, text: "Trip CEB-1D-0715 closed. Guide Rosa Villanueva, Cebu day trip, USD 95 (JOB-CEB1D-0715).", days: 77, sourceType: "job_completion" },
+    { vendor: "Linh Family Homestay", ref: "INV-2026-0112", amount: 36_000, text: "Invoice INV-2026-0112 Linh Family Homestay: 10 guests x 2 nights x USD 18 = USD 360.", days: 79, sourceType: "invoice" },
+    { vendor: "Kalaw Trekking Collective", ref: "JOB-KAL3D-0708", amount: 63_000, text: "Trip KAL-3D-0708 closed. Kalaw Trekking Collective, 6 porters 3 days, USD 630 (JOB-KAL3D-0708).", days: 82, sourceType: "job_completion" },
+    { vendor: "Maria Santos", ref: "JOB-HG3D-0704", amount: 13_500, text: "Trip HG-3D-0704 closed. Lead guide Maria Santos, 3 days, USD 135 (JOB-HG3D-0704).", days: 86, sourceType: "job_completion" },
+    { vendor: "Tam Motorbike Rental", ref: "INV-TAM-0701", amount: 24_000, text: "Invoice INV-TAM-0701 Tam Motorbike Rental: 4 bikes x 4 days x USD 15 = USD 240.", days: 89, sourceType: "invoice" },
   ];
   for (const it of items) {
     const id = await ingestObligation(db, {

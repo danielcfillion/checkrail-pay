@@ -211,3 +211,14 @@ describe("the agent's vendor choice is bound to the evidence", () => {
     expect(run([{ label: "Invoice", excerpt: "Jake Morrison: recap video", reference: null }]).rules.find((x) => x.ruleId === "evidence_names_vendor")!.passed).toBe(true);
   });
 });
+
+describe("jobKeys ignores cut-off identifiers", () => {
+  it("a truncated description does not create a key that matches a different trip", async () => {
+    const { jobKeys } = await import("./ids");
+    const truncated = "Kalaw Trekking Collective (JOB-KAL2D-0915): Trip KAL-2D-0915 closed, USD 420 (JOB-KAL2...";
+    const keys = jobKeys(truncated);
+    expect(keys).toContain("job-kal2d-0915");
+    expect(keys).not.toContain("job-kal2");
+    expect(jobKeys("Trip KAL-2D-0812 closed (JOB-KAL2D-0812).").some((k) => keys.includes(k))).toBe(false);
+  });
+});

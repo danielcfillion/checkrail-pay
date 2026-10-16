@@ -29,6 +29,9 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
   for (const t of texts) {
     if (!t) continue;
     for (const m of t.matchAll(re)) {
+      // A match that runs into a truncation mark ("JOB-KAL2...") is a cut-off identifier, not a job. Skip it.
+      const after = t.slice(m.index! + m[0].length, m.index! + m[0].length + 3);
+      if (after.startsWith("...") || after.startsWith("…")) continue;
       const k = m[0].toUpperCase();
       out.add(k);
       // JOB-HG4D-0914 and trip sheet HG-4D-0914 name the same departure: normalise by stripping the prefix and dashes.
