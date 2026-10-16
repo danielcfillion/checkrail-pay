@@ -36,8 +36,9 @@ export default function OverviewPage() {
 
       <BookLine rows={all} />
 
-      <dl className="mt-6 grid grid-cols-1 gap-y-4 border-y hairline py-4 sm:grid-cols-3 sm:divide-x sm:divide-[color:var(--rule)]">
+      <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-4 sm:divide-x sm:divide-[color:var(--rule)]">
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
+        <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
         <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open obligation")}, ${o.counts.blocked} blocked held back`} />
         <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpayments and duplicates</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
       </dl>

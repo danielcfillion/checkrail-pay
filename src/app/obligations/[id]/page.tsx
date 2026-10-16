@@ -186,6 +186,17 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
           </Panel>
 
+          {["awaiting_approval", "blocked", "needs_evidence"].includes(o.state) ? (
+            <Panel title="What you are deciding" aside="at a glance">
+              <ApprovalContext
+                ask={formatMoney(o.amountMinor, o.currency)}
+                evidence={d.evidence.filter((e) => e.amountMinor !== null).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
+                destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
+                route={(() => { const q = d.quotes.find((x) => x.rail === o.selectedRail && x.available); return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
+                why={o.blockedReason ?? d.policyReasons[0] ?? (o.state === "needs_evidence" ? "No evidence attached" : "")}
+              />
+            </Panel>
+          ) : null}
           <Panel title="Policy" aside={o.policyDecision ? decisionText(o.policyDecision) : null}>
             <RuleChecklist rules={d.policyRules} />
             {o.blockedReason ? (
@@ -352,4 +363,23 @@ function shortReason(reason: string): string {
   const m = reason.match(/says ([A-Z]{3} [\d,]+\.\d{2})/);
   if (m) return `evidence says ${m[1]}`;
   return reason.length > 48 ? reason.slice(0, 45) + "…" : reason;
+}
+
+/** The four facts an approver needs side by side: what was asked, what the evidence says, where the money goes, and what it costs. */
+function ApprovalContext({ ask, evidence, destination, route, why }: { ask: string; evidence: string[]; destination: string; route: string; why: string }) {
+  return (
+    <div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+        <dt className="dense text-ink-soft">Asked for</dt>
+        <dd className="num font-medium">{ask}</dd>
+        <dt className="dense text-ink-soft">Evidence says</dt>
+        <dd className="num">{evidence.length ? evidence.join("; ") : <span className="text-attention">nothing with an amount</span>}</dd>
+        <dt className="dense text-ink-soft">Goes to</dt>
+        <dd>{destination}</dd>
+        <dt className="dense text-ink-soft">Route</dt>
+        <dd>{route}</dd>
+      </dl>
+      {why ? <p className="mt-3 border-t pt-3 text-attention hairline">{why}</p> : null}
+    </div>
+  );
 }

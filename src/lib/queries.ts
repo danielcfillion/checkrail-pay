@@ -161,6 +161,8 @@ export function getOverview(db: Db = getDb()) {
   const thirtyDays = now - 30 * 86_400_000;
   const settled = listSettlements(db);
   const settledRecent = settled.filter((s) => new Date(s.settledAt).getTime() >= thirtyDays);
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const settledToday = settled.filter((s) => new Date(s.settledAt).getTime() >= startOfToday.getTime());
   const blocked = all.filter((r) => r.state === "blocked");
   const byRail = (rail: Rail) => settledRecent.filter((s) => s.rail === rail);
   const feesByRail = (rail: Rail) => byRail(rail).reduce((a, s) => a + s.feeMinor, 0);
@@ -194,6 +196,8 @@ export function getOverview(db: Db = getDb()) {
       outstandingMinor: sum(all.filter((r) => openStates.includes(r.state as ObligationState))),
       dueSoonMinor: sum(all.filter((r) => openStates.includes(r.state as ObligationState) && r.dueDate && new Date(r.dueDate).getTime() <= now + 7 * 86_400_000)),
       paid30dMinor: settledRecent.reduce((a, s) => a + s.grossMinor, 0),
+      paidTodayMinor: settledToday.reduce((a, s) => a + s.grossMinor, 0),
+      paidTodayCount: settledToday.length,
       fees30dMinor: settledRecent.reduce((a, s) => a + s.feeMinor, 0),
       blockedMinor: sum(blocked),
       preventedMinor: blocked.reduce((a, r) => a + mismatchDelta(r), 0),

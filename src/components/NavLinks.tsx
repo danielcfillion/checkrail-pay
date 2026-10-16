@@ -10,7 +10,7 @@ export function NavLinks({ items, mobile = false }: { items: readonly Item[]; mo
   const isActive = (href: string) => (href === "/" ? path === "/" : path === href || path.startsWith(href + "/"));
 
   if (mobile) {
-    const shown = items.filter((i) => ["/", "/obligations", "/vendors", "/ledger", "/exceptions"].includes(i.href));
+    const shown = items.filter((i) => ["/", "/obligations", "/close", "/exceptions", "/settings"].includes(i.href));
     return (
       <ul className="grid grid-cols-5">
         {shown.map((it) => {
