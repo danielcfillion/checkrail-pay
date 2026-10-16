@@ -409,8 +409,11 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   // Start: state check + attempt row + CAS transition, atomically.
   const started = db.transaction(
     (tx) => {
-      const cur = tx.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, obligationId)).get();
+      const cur = tx.select({ state: obligations.state, payoutHash: obligations.payoutHash }).from(obligations).where(eq(obligations.id, obligationId)).get();
       if (cur?.state !== "approved") throw new Error(`Obligation must be approved before execution (state: ${cur?.state})`);
+      // Re-check the destination inside the lock: an edit between the check above and this point must not slip through.
+      const vendorNow = tx.select().from(vendors).where(eq(vendors.id, vendorRow.id)).get();
+      if (!vendorNow || !cur.payoutHash || payoutHashOf(vendorNow) !== cur.payoutHash) throw new Error("Execution refused: vendor payout details changed at the moment of release");
       const attempts = tx.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all();
       const open = attempts.filter((a) => OPEN_ATTEMPT.includes(a.status));
       if (open.length > 0) {
@@ -524,10 +527,46 @@ export async function retryAmbiguousExecution(db: Db, obligationId: string, opts
       return { attemptId: attempt.id, status: "confirmed" };
     }
   }
+  // Ask the provider whether it already knows this key. PayPal answers with the original batch when it does.
+  if (!attempt.externalId && adapter.findByIdempotencyKey) {
+    const found = await adapter.findByIdempotencyKey(attempt.idempotencyKey);
+    if (found) {
+      db.update(paymentAttempts).set({ status: "submitted", externalId: found.batchId, externalStatus: found.batchStatus, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
+      transition(db, obligationId, "sent", `rail:${rail}`, "execution.resolved", { attemptId: attempt.id, externalId: found.batchId, how: "found by idempotency key" });
+      const st = await adapter.getStatus(found.batchId);
+      settleFromRail(db, ob, attempt.id, rail, found.batchId, adapter.mode, st);
+      return { attemptId: attempt.id, status: st.status === "confirmed" ? "confirmed" : "submitted" };
+    }
+  }
   const req = JSON.parse(attempt.requestJson ?? "{}") as { memo?: string };
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
   const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: ob.amountMinor!, currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country });
+  if (result.status === "failed" && adapter.mode !== "mock") {
+    // A rejected replay proves nothing about the first submission. Only a provider lookup that finds no batch does,
+    // and that happened above (or the rail has no lookup). Keep the attempt unknown and leave it for a person.
+    const still: ExecutionResult = { ...result, status: "unknown", errorMessage: `Replay was rejected (${result.errorMessage ?? "no detail"}); the first submission is unconfirmed. Check the provider dashboard for key ${attempt.idempotencyKey.slice(0, 8)}.` };
+    return finishAttempt(db, obligationId, attempt.id, rail, adapter.mode, still);
+  }
   return finishAttempt(db, obligationId, attempt.id, rail, adapter.mode, result);
+}
+
+/**
+ * Give a definitively failed payment another go. The rail said nothing moved, so a fresh idempotency key is safe.
+ * The obligation returns to approved with the payout destination re-pinned to what the vendor record says now; the
+ * execute step then re-runs policy and the payout check before any rail is called.
+ */
+export function retryFailed(db: Db, obligationId: string, actor: string): void {
+  const ob = mustGet(db, obligationId);
+  if (ob.state !== "failed") throw new Error(`Only a failed payment can be retried (state: ${ob.state})`);
+  const open = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all().filter((a) => OPEN_ATTEMPT.includes(a.status));
+  if (open.length > 0) throw new Error("A payment attempt is still unresolved; reconcile it before retrying");
+  const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId!)).get();
+  if (!vendorRow) throw new Error("Obligation has no vendor");
+  const current = payoutHashOf(vendorRow);
+  if (current !== vendorRow.detailsHash) throw new Error("Vendor payout details were edited without re-verification; verify the vendor first");
+  if (ob.payoutHash && ob.payoutHash !== current) throw new Error("Vendor payout details changed since approval; review and approve this payment again");
+  db.update(obligations).set({ payoutHash: current, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  transition(db, obligationId, "approved", actor, "execution.retry_requested", { payoutHash: current });
 }
 
 /** Poll the rail for the latest attempt and settle or fail accordingly. Webhooks call the same function. */
@@ -620,7 +659,7 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
     .from(evidenceTable)
     .where(eq(evidenceTable.obligationId, obligationId))
     .all()
-    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : ("system" as const) }));
+    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : e.provenance === "document" ? ("document" as const) : ("system" as const) }));
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {

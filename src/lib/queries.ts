@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb, type Db } from "./db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "./db/schema";
 import type { ObligationState, Rail } from "./domain/types";
@@ -141,12 +141,13 @@ export function listAccountingSyncs(db: Db = getDb()) {
     .map((r) => ({ ...r.a, obligation: r.o, vendorName: r.vendorName, payload: JSON.parse(r.a.payloadJson ?? "{}") as Record<string, string | null> }));
 }
 
-export function listAudit(limit = 100, db: Db = getDb()) {
+export function listAudit(limit = 100, db: Db = getDb(), beforeSeq?: number) {
   return db
     .select({ a: auditEntries, sourceRef: obligations.sourceRef, vendorName: vendors.name })
     .from(auditEntries)
     .leftJoin(obligations, eq(obligations.id, auditEntries.obligationId))
     .leftJoin(vendors, eq(vendors.id, obligations.vendorId))
+    .where(beforeSeq ? lt(auditEntries.seq, beforeSeq) : undefined)
     .orderBy(desc(auditEntries.seq))
     .limit(limit)
     .all()

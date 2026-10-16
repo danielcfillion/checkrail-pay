@@ -16,6 +16,10 @@ services:
         value: "22"
       - key: DATABASE_PATH
         value: ./data/checkrail-pay.sqlite
+      # One shared demo database. Basic auth (user:password) keeps two judges from resetting each other's
+      # walkthrough; put the same credential in the Devpost testing instructions.
+      - key: CHECKRAIL_BASIC_AUTH
+        sync: false
       # mock = runs with zero credentials; live = real PayPal sandbox (set the keys below).
       - key: RAIL_MODE
         value: mock

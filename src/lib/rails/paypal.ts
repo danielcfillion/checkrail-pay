@@ -34,6 +34,13 @@ const ATTENTION_ITEM: Record<string, string> = {
   ONHOLD: "Payout is ON HOLD at PayPal (compliance or recipient review). Check the PayPal dashboard; do not pay again.",
 };
 
+/** PayPal rejects a reused sender_batch_id from the last 30 days with HTTP 400 and a body naming the duplicate. */
+export function isDuplicateBatchError(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const text = JSON.stringify(body);
+  return /SENDER_BATCH_ID_ALREADY_EXISTS|DUPLICATE_REQUEST_ID|already exists|duplicate/i.test(text);
+}
+
 export class PayPalRail implements PaymentRail {
   readonly rail = "paypal" as const;
   readonly mode: "sandbox" | "live";
@@ -90,24 +97,54 @@ export class PayPalRail implements PaymentRail {
       const message = `${err.name ?? res.status}: ${err.message ?? "payout request rejected"}`;
       // 5xx, 408 and bodies we cannot read are ambiguous: PayPal may have processed the request.
       if (res.status >= 500 || res.status === 408 || res.json === null) return unknown(message, res.json);
+      // A reused sender_batch_id (the engine replaying an attempt whose outcome was unknown) is not a failure:
+      // the original batch exists. Find it by key and report it as submitted. If the lookup cannot confirm it,
+      // the outcome stays unknown so nobody re-sends under a new key.
+      if (isDuplicateBatchError(res.json)) {
+        const found = await this.findByIdempotencyKey(req.idempotencyKey);
+        if (found) return this.submitted(found.batchId, found.batchStatus, req, res.json);
+        return unknown(`PayPal reports this batch already exists but the lookup by sender_batch_id did not return it (${message})`, res.json);
+      }
       return fail(message, res.json);
     }
     const header = (res.json as { batch_header?: { payout_batch_id?: string; batch_status?: string } } | null)?.batch_header ?? {};
     if (!header.payout_batch_id) {
       return unknown("PayPal accepted the request but returned no batch id", res.json);
     }
+    return this.submitted(header.payout_batch_id, header.batch_status ?? null, req, res.json);
+  }
+
+  private submitted(batchId: string, batchStatus: string | null, req: ExecutionRequest, raw: unknown): ExecutionResult {
     const q = quotePayPal(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
     return {
       status: "submitted",
-      externalId: header.payout_batch_id,
-      externalStatus: header.batch_status ?? null,
+      externalId: batchId,
+      externalStatus: batchStatus,
       feeMinor: q.feeMinor,
       receivedMinor: q.receiveAmountMinor,
       receivedCurrency: q.receiveCurrency,
       fxRate: q.fxRate,
-      raw: res.json,
+      raw,
       note: "Fee and recipient figures are modelled from PayPal's published fee schedule; PayPal reports the actual amounts after settlement.",
     };
+  }
+
+  /**
+   * Ask PayPal whether a batch with this sender_batch_id already exists. Used before any replay of an
+   * attempt whose outcome was unknown, and when a submission is rejected as a duplicate. Returns null
+   * when PayPal has no such batch or did not answer; the caller treats null as "still unknown".
+   */
+  async findByIdempotencyKey(key: string): Promise<{ batchId: string; batchStatus: string | null } | null> {
+    try {
+      await this.accessToken();
+    } catch {
+      return null;
+    }
+    const res = await this.call("GET", `/v1/payments/payouts?sender_batch_id=${encodeURIComponent(key)}`);
+    if (res.transportError || !res.ok) return null;
+    const header = (res.json as { batch_header?: { payout_batch_id?: string; batch_status?: string } } | null)?.batch_header;
+    if (!header?.payout_batch_id) return null;
+    return { batchId: header.payout_batch_id, batchStatus: header.batch_status ?? null };
   }
 
   async getStatus(externalId: string): Promise<SettlementStatus> {

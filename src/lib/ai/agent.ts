@@ -5,6 +5,9 @@ import { MAX_AMOUNT_MINOR, isValidSourceRef } from "../domain/money";
 import { interpretWithRules } from "./extractor";
 import { loadPayPalTools, type AgentTool } from "./paypalTools";
 
+/** Longest tool result the agent is allowed to read, in characters. */
+const TOOL_OUTPUT_MAX = 6000;
+
 export interface AgentInput {
   rawInput: string;
   /** Extracted text of uploaded source documents, so the model can read the record itself rather than a typed summary. */
@@ -143,7 +146,9 @@ async function runClaude(input: AgentInput): Promise<AgentRun> {
         return { interpretation: normalise(i, input), engine: "claude", model: config.ai.model, toolCalls };
       }
       const tool = toolMap.get(u.name);
-      const out = tool ? await tool.run(u.input as Record<string, unknown>) : `Unknown tool ${u.name}`;
+      const full = tool ? await tool.run(u.input as Record<string, unknown>) : `Unknown tool ${u.name}`;
+      // Tool output is third-party text (PayPal memos, vendor notes). Cap it so one record cannot flood the context.
+      const out = full.length > TOOL_OUTPUT_MAX ? `${full.slice(0, TOOL_OUTPUT_MAX)}\n[truncated ${full.length - TOOL_OUTPUT_MAX} characters]` : full;
       toolCalls.push({ name: u.name, input: u.input, resultPreview: out.slice(0, 200) });
       results.push({ type: "tool_result", tool_use_id: u.id, content: out });
     }

@@ -5,8 +5,15 @@ import { EmptyState, PageHeader, RelativeTime } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-export default function AuditPage() {
-  const rows = listAudit(300);
+const PAGE = 100;
+
+export default async function AuditPage({ searchParams }: { searchParams: Promise<{ before?: string }> }) {
+  const sp = await searchParams;
+  const before = Number(sp.before);
+  const rows = listAudit(PAGE + 1, undefined, Number.isFinite(before) && before > 0 ? before : undefined);
+  const more = rows.length > PAGE;
+  if (more) rows.pop();
+  const oldest = rows.at(-1)?.seq;
   return (
     <>
       <PageHeader title="Audit log" lede="Every step every actor took, newest first. The agent, the policy engine, the router, the rails and people all write here; nothing is edited after the fact." />
@@ -74,6 +81,20 @@ export default function AuditPage() {
           </table>
         </div>
       )}
+      {(more || Number.isFinite(before)) && rows.length > 0 ? (
+        <p className="mt-4 flex gap-4 text-sm">
+          {Number.isFinite(before) && before > 0 ? (
+            <Link href="/audit" className="link">
+              Newest
+            </Link>
+          ) : null}
+          {more ? (
+            <Link href={`/audit?before=${oldest}`} className="link">
+              Older entries
+            </Link>
+          ) : null}
+        </p>
+      ) : null}
     </>
   );
 }

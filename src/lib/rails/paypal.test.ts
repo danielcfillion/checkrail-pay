@@ -72,6 +72,32 @@ describe("PayPalRail.execute outcome classification", () => {
     expect(r.errorMessage).toMatch(/INSUFFICIENT_FUNDS/);
   });
 
+  it("a reused sender_batch_id is not a failure: the original batch is looked up and reported as submitted", async () => {
+    const calls = stubFetch((url, init) => {
+      if (init.method === "POST") return json(400, { name: "USER_BUSINESS_ERROR", message: "Request rejected", details: [{ issue: "SENDER_BATCH_ID_ALREADY_EXISTS" }] });
+      if (url.includes("/v1/payments/payouts?sender_batch_id=")) return json(200, { batch_header: { payout_batch_id: "PB-ORIGINAL", batch_status: "SUCCESS" } });
+      return json(404, {});
+    });
+    const r = await new PayPalRail(creds).execute(req);
+    expect(r.status).toBe("submitted");
+    expect(r.externalId).toBe("PB-ORIGINAL");
+    expect(calls.some((c) => c.url.includes(`sender_batch_id=${"k".repeat(32)}`))).toBe(true);
+  });
+
+  it("a duplicate rejection whose lookup finds nothing stays unknown, never failed", async () => {
+    stubFetch((url, init) => {
+      if (init.method === "POST") return json(400, { name: "USER_BUSINESS_ERROR", message: "sender_batch_id already exists" });
+      return new Response("", { status: 503 });
+    });
+    const r = await new PayPalRail(creds).execute(req);
+    expect(r.status).toBe("unknown");
+  });
+
+  it("findByIdempotencyKey returns null when PayPal has no such batch", async () => {
+    stubFetch(() => json(404, { name: "RESOURCE_NOT_FOUND" }));
+    expect(await new PayPalRail(creds).findByIdempotencyKey("abc")).toBeNull();
+  });
+
   it("an authentication failure is definitive and nothing is posted", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {

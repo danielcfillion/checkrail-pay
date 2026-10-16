@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // An in-memory database for the route's getDb() singleton. Must be set before config loads.
 const h = vi.hoisted(() => {
   process.env.DATABASE_PATH = ":memory:";
+  process.env.CHECKRAIL_ALLOW_MOCK_WEBHOOK = "1";
   return { failNext: false };
 });
 vi.mock("@/lib/engine/orchestrator", async (orig) => {
@@ -93,6 +94,16 @@ describe("PayPal webhook (H9)", () => {
     const res = await post(event("WH-F", "NOT-A-BATCH"));
     expect(res.status).toBe(200);
     expect(state()).toBe("sent");
+  });
+
+  it("does not exist in mock mode unless a test asks for it", async () => {
+    delete process.env.CHECKRAIL_ALLOW_MOCK_WEBHOOK;
+    try {
+      expect((await post(event("WH-M"))).status).toBe(404);
+      expect(db().select().from(events).all().some((e) => e.externalEventId === "WH-M")).toBe(false);
+    } finally {
+      process.env.CHECKRAIL_ALLOW_MOCK_WEBHOOK = "1";
+    }
   });
 
   it("rejects invalid JSON", async () => {

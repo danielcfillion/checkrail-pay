@@ -56,7 +56,7 @@ export default function DailyClosePage() {
         <Figure label="Needs a look" value={String(c.attention.length)} note={c.attention.length ? "listed below, most serious first" : "nothing unusual"} tone={c.attention.length ? "attention" : undefined} />
         <Figure label="Sent by autopilot" value={formatMoneySymbol(c.totals.agentMinor, cur)} note={pluralise(c.totals.agentCount, "payment")} tone={c.totals.agentCount ? "settled" : undefined} />
         <Figure label="Sent by people" value={formatMoneySymbol(c.totals.peopleMinor, cur)} note={pluralise(c.totals.peopleCount, "payment")} />
-        <Figure label="Stopped" value={formatMoneySymbol(c.totals.stoppedMinor, cur)} note={`${pluralise(c.totals.stoppedCount, "request")} blocked or refused`} tone={c.totals.stoppedCount ? "blocked" : undefined} />
+        <Figure label="Held back" value={formatMoneySymbol(c.totals.stoppedMinor, cur)} note={`requested in ${pluralise(c.totals.stoppedCount, "request")} blocked or refused`} tone={c.totals.stoppedCount ? "blocked" : undefined} />
       </dl>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">

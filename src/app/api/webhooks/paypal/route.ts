@@ -18,10 +18,12 @@ import { config } from "@/lib/config";
  * failed, the stored row stays unprocessed, we answer 500, and PayPal's retry is
  * processed again instead of being swallowed as a duplicate.
  *
- * In mock mode there is no signature to check. The mock rail confirms anything it is
- * asked about, so do not expose this route to the internet with RAIL_MODE=mock.
+ * In mock mode there is no signature to check and nothing real to confirm, so the route
+ * does not exist: a hosted demo running on mocks must not carry an open write endpoint.
  */
 export async function POST(req: Request) {
+  // Tests set CHECKRAIL_ALLOW_MOCK_WEBHOOK=1 to exercise the route against the mock rail. Never set it on a hosted demo.
+  if (config.rails.mode !== "live" && process.env.CHECKRAIL_ALLOW_MOCK_WEBHOOK !== "1") return NextResponse.json({ error: "not found" }, { status: 404 });
   const raw = await req.text();
   const headers: Record<string, string> = {};
   req.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));

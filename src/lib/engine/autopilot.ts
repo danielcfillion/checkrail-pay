@@ -1,6 +1,6 @@
-import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "../db";
-import { businesses, obligations, vendors } from "../db/schema";
+import { approvals, businesses, obligations, vendors } from "../db/schema";
 import { DEFAULT_POLICY, effectiveAutonomy, type ApprovalPolicy } from "../domain/types";
 import { audit } from "../domain/stateMachine";
 import { now } from "../domain/ids";
@@ -12,6 +12,8 @@ import { confirmSettlement, executeObligation, mustGet, scheduleAutopilotRelease
  * Autonomy only removes the approval step. A payment reaches this file only if policy already said
  * "auto_execute" (so no block, hold, warning, mismatch, duplicate or changed payout destination),
  * and executeObligation re-runs policy again before it touches a rail. Caps are enforced in policy.
+ * A payment a person approved is never sent by autopilot: approving over a warning or over a cap is a
+ * person's decision, and the person sends it.
  * What this file adds is time (a cancel window), a pause switch, and an audit trail naming the agent.
  */
 
@@ -49,6 +51,11 @@ export function runAutopilot(db: Db, opts: { businessId?: string } = {}): Promis
   return running;
 }
 
+/** True when any human approval is on record for this obligation. */
+function humanApproved(db: Db, obligationId: string): boolean {
+  return db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().length > 0;
+}
+
 async function tick(db: Db, opts: { businessId?: string }): Promise<TickResult> {
   const result: TickResult = { released: [], refused: [], scheduled: [], confirmed: [] };
   const bizRows = db.select().from(businesses).all().filter((b) => !opts.businessId || b.id === opts.businessId);
@@ -61,6 +68,8 @@ async function tick(db: Db, opts: { businessId?: string }): Promise<TickResult> 
     if (active) {
       const waiting = db.select().from(obligations).where(and(eq(obligations.businessId, biz.id), eq(obligations.state, "approved"), eq(obligations.policyDecision, "auto_execute"))).all();
       for (const w of waiting) {
+        // A payment a person approved (over a warning, over a cap) is theirs to send. Autopilot only takes the ones policy cleared on its own.
+        if (humanApproved(db, w.id)) continue;
         if (!w.releaseAt && !w.autopilotCancelledAt) {
           scheduleAutopilotRelease(db, w.id);
           result.scheduled.push(w.id);
@@ -75,15 +84,28 @@ async function tick(db: Db, opts: { businessId?: string }): Promise<TickResult> 
       .where(and(eq(obligations.businessId, biz.id), eq(obligations.state, "approved"), isNotNull(obligations.releaseAt), lte(obligations.releaseAt, now())))
       .all();
     for (const o of due) {
-      if (o.autopilotCancelledAt) continue;
-      if (!active) {
+      // Re-read the setting for every release: a Pause clicked while an earlier payment in this pass was executing must hold.
+      const policyNow = readPolicy(db, biz.id);
+      if (effectiveAutonomy(policyNow) !== "autopilot") {
         // Paused or switched down while the payment waited: it stays approved for a person to send.
-        db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(eq(obligations.id, o.id)).run();
-        audit(db, { obligationId: o.id, actor: AGENT_ACTOR, action: "autopilot.stood_down", detail: { reason: policy.autopilotPaused ? "paused" : "autonomy lowered" } });
+        const stood = db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(and(eq(obligations.id, o.id), isNotNull(obligations.releaseAt))).run();
+        if (stood.changes > 0) audit(db, { obligationId: o.id, actor: AGENT_ACTOR, action: "autopilot.stood_down", detail: { reason: policyNow.autopilotPaused ? "paused" : "autonomy lowered" } });
         continue;
       }
-      // Clear first: a failed attempt that is later retried must not fire again on its own.
-      db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(eq(obligations.id, o.id)).run();
+      if (humanApproved(db, o.id)) {
+        db.update(obligations).set({ releaseAt: null, updatedAt: now() }).where(eq(obligations.id, o.id)).run();
+        audit(db, { obligationId: o.id, actor: AGENT_ACTOR, action: "autopilot.stood_down", detail: { reason: "a person approved this payment; a person sends it" } });
+        continue;
+      }
+      // Claim first, conditionally: the row as it is NOW must still be scheduled and not cancelled. A Cancel clicked
+      // while an earlier payment in this pass was executing makes changes() zero and the payment stays put.
+      // Clearing releaseAt here also means a failed attempt that is later retried cannot fire again on its own.
+      const claimed = db
+        .update(obligations)
+        .set({ releaseAt: null, updatedAt: now() })
+        .where(and(eq(obligations.id, o.id), eq(obligations.state, "approved"), isNotNull(obligations.releaseAt), isNull(obligations.autopilotCancelledAt)))
+        .run();
+      if (claimed.changes === 0) continue;
       try {
         audit(db, { obligationId: o.id, actor: AGENT_ACTOR, action: "autopilot.releasing", detail: { amountMinor: o.amountMinor, currency: o.currency } });
         await executeObligation(db, o.id, { actor: AGENT_ACTOR });

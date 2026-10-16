@@ -141,7 +141,7 @@ export interface EvidenceItem {
   reference: string | null;
   excerpt: string | null;
   /** Who supplied this record. Operator-supplied evidence is untrusted; system evidence comes from an integration. Unset means system. */
-  provenance?: "system" | "operator";
+  provenance?: "system" | "operator" | "document";
 }
 
 /** Output of the AI obligation agent. The agent has no spending authority; it only produces this. */
@@ -288,4 +288,6 @@ export interface PaymentRail {
   }): Promise<RouteQuote>;
   execute(req: ExecutionRequest): Promise<ExecutionResult>;
   getStatus(externalId: string): Promise<SettlementStatus>;
+  /** Optional: does the provider already know this idempotency key? Used to reconcile an attempt whose outcome was unknown before replaying it. */
+  findByIdempotencyKey?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
 }

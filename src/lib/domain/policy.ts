@@ -64,16 +64,17 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   }
 
   // R3c: the evidence must name the vendor the agent chose. The agent proposes vendorId; this rule binds it.
+  const namesVendor = new Set<string>();
   if (vendor && evidence.length > 0) {
     const parts = vendor.name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
     // Bound when a record names the vendor, or when a record is explicitly the document for this reference.
-    const named = evidence.some((e) => {
+    for (const e of evidence) {
       const text = `${e.label} ${e.excerpt ?? ""}`.toLowerCase();
       const byName = parts.some((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text));
       const byRef = Boolean(obligation.sourceRef && e.reference && e.reference.toLowerCase() === obligation.sourceRef.toLowerCase());
-      return byName || byRef;
-    });
-    rules.push(named ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name} or carry this reference; confirm the payee`));
+      if (byName || byRef) namesVendor.add(e.id);
+    }
+    rules.push(namesVendor.size > 0 ? pass("evidence_names_vendor", `Evidence is tied to ${vendor.name}`) : warn("evidence_names_vendor", `None of the attached records name ${vendor.name} or carry this reference; confirm the payee`));
   }
 
   // R4: amount matches evidence within tolerance
@@ -87,7 +88,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else {
       const matches = sameCurrency.filter((e) => withinTolerance(obligation.amountMinor!, e.amountMinor!, policy.amountToleranceBps));
       if (matches.length > 0) {
-        rules.push(pass("amount_matches_evidence", `Amount matches ${matches[0].label}`));
+        // The record that carries the matching amount must be one that names the payee. A trip sheet naming the driver
+        // with the guide's fee on it must not clear a payment to the driver.
+        const bound = matches.find((e) => namesVendor.has(e.id)) ?? (namesVendor.size === 0 ? matches[0] : undefined);
+        if (bound) rules.push(pass("amount_matches_evidence", `Amount matches ${bound.label}`));
+        else rules.push(warn("amount_matches_evidence", `Amount matches ${matches[0].label}, but the record that names ${vendor?.name ?? "the vendor"} carries a different amount; confirm which record this payment is for`));
       } else {
         // Compare against the most relevant record: same reference first, else the closest amount.
         const byRef = obligation.sourceRef ? sameCurrency.find((e) => e.reference && e.reference.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
@@ -101,6 +106,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
         );
       }
     }
+  } else if (hasAmount && evidence.length > 0) {
+    // Records are attached but none carries an amount (a booking, a chat message): the figure is unverified.
+    rules.push(warn("amount_matches_evidence", "None of the attached records carries an amount; the requested figure has not been checked against anything"));
   }
 
   // R5: duplicate job for the same vendor. Three layers:

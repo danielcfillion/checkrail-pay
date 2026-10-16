@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
 import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, settlements, vendors, accountingSyncs } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, runPolicy } from "./orchestrator";
+import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, runPolicy } from "./orchestrator";
 import { IllegalTransition, transition } from "../domain/stateMachine";
 import { DEFAULT_POLICY, type ExecutionRequest, type ExecutionResult, type PaymentRail, type Rail, type SettlementStatus } from "../domain/types";
 import { hashPayoutDetails } from "../domain/ids";
@@ -105,6 +105,52 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     expect(pp.requests[1].memo).toBe(pp.requests[0].memo);
     expect(attemptsOf(story.paypal)).toHaveLength(1);
     expect(get(story.paypal).state).toBe("sent");
+  });
+
+  it("a replay that the rail rejects does not become a failure: the first submission is still unconfirmed", async () => {
+    const pp = new ScriptedRail("paypal", [unknown(), failed("sender_batch_id already exists")]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    const r = await retryAmbiguousExecution(db, story.paypal, { actor: "user:daniel" });
+    expect(r.status).toBe("unknown");
+    expect(get(story.paypal).state).toBe("execution_pending");
+    expect(attemptsOf(story.paypal)[0].status).toBe("unknown");
+    // And still nothing can mint a second key.
+    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow();
+    expect(attemptsOf(story.paypal)).toHaveLength(1);
+  });
+
+  it("reconciliation asks the rail about the key before replaying, and settles from what it finds", async () => {
+    const pp = new ScriptedRail("paypal", [unknown()]);
+    (pp as PaymentRail).findByIdempotencyKey = async () => ({ batchId: "BATCH-FOUND", batchStatus: "SUCCESS" });
+    pp.status = { status: "confirmed", externalStatus: "SUCCESS/SUCCESS", raw: null };
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    const r = await retryAmbiguousExecution(db, story.paypal, { actor: "user:daniel" });
+    expect(r.status).toBe("confirmed");
+    expect(pp.requests).toHaveLength(1); // no replay was needed
+    expect(attemptsOf(story.paypal)[0].externalId).toBe("BATCH-FOUND");
+    expect(get(story.paypal).state).toBe("settled");
+  });
+
+  it("retryFailed moves a failed payment back to approved, re-pins the destination, and refuses if details changed", async () => {
+    const pp = new ScriptedRail("paypal", [failed("INSUFFICIENT_FUNDS"), submitted("BATCH-2")]);
+    installRails(pp);
+    expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("failed");
+    retryFailed(db, story.paypal, "user:daniel");
+    expect(get(story.paypal).state).toBe("approved");
+    expect(actionsOf(story.paypal)).toContain("execution.retry_requested");
+    expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("submitted");
+    expect(attemptsOf(story.paypal)).toHaveLength(2);
+  });
+
+  it("retryFailed refuses when the vendor's payout details changed after approval", async () => {
+    installRails(new ScriptedRail("paypal", [failed("INSUFFICIENT_FUNDS")]));
+    expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("failed");
+    const ob = get(story.paypal);
+    db.update(vendors).set({ paypalEmail: "someone-else@example.com" }).where(eq(vendors.id, ob.vendorId!)).run();
+    expect(() => retryFailed(db, story.paypal, "user:daniel")).toThrow(/payout details/);
+    expect(get(story.paypal).state).toBe("failed");
   });
 
   it("only a definitive failure allows a retry, and the retry gets a fresh key", async () => {

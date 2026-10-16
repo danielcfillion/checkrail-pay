@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, executeAction, rejectAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, executeAction, reconcileAction, rejectAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -109,10 +109,22 @@ export function ActionBar(p: Props) {
     case "failed":
       return (
         <div className="space-y-3">
-          <p className="text-ink-soft">The rail rejected the payment. Retry on the same rail, try the other, or cancel.</p>
+          <p className="text-ink-soft">The rail rejected the payment and nothing moved. Retry on the same rail, try the other, or cancel. A retry re-checks the payout destination and runs policy again before any rail is called.</p>
           <div className="flex flex-wrap gap-2">
             {p.availableRails.map((r) => (
-              <button key={r} type="button" className={`btn ${r === p.selectedRail ? "btn-primary" : ""}`} disabled={pending} onClick={() => pay(r)}>
+              <button
+                key={r}
+                type="button"
+                className={`btn ${r === p.selectedRail ? "btn-primary" : ""}`}
+                disabled={pending}
+                onClick={() =>
+                  run(`pay-${r}`, async () => {
+                    const back = await retryFailedAction(p.id);
+                    if (!back.ok) return back;
+                    return executeAction(p.id, r);
+                  }, (res) => res.ok && travel(3))
+                }
+              >
                 {busy === `pay-${r}` ? `Retrying with ${railLabel(r)}` : `Retry with ${railLabel(r)}`}
               </button>
             ))}
@@ -138,8 +150,19 @@ export function ActionBar(p: Props) {
         </div>
       );
 
-    case "sent":
     case "execution_pending":
+      return (
+        <div className="space-y-3">
+          <p className="text-ink-soft">
+            {railLabel(p.selectedRail) || "The rail"} did not give a clear answer, so this payment may or may not have gone through. Nothing here will pay it again: Reconcile asks {railLabel(p.selectedRail) || "the rail"} about the same payment under the same idempotency key and records what it finds.
+          </p>
+          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
+            {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
+          </button>
+        </div>
+      );
+
+    case "sent":
       return (
         <div className="space-y-3">
           <p className="text-ink-soft">The payment has been handed to {railLabel(p.selectedRail) || "the rail"}. Check for settlement to pull the latest status.</p>

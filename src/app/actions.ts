@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, basicAuthSetting } from "@/lib/basicAuth";
 import { isLiveRails } from "@/lib/config";
 import { exportPendingCsv } from "@/lib/accounting/record";
@@ -71,6 +71,34 @@ export async function executeAction(id: string, rail?: Rail): Promise<ActionResu
   } catch (e) {
     done([`/obligations/${id}`]);
     done();
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Resolve a payment whose rail outcome was unknown. Same key, never a new one. */
+export async function reconcileAction(id: string): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const r = await retryAmbiguousExecution(db, id, { actor: await actor() });
+    if (r.status === "submitted") await confirmSettlement(db, id, "post-reconcile");
+    done([`/obligations/${id}`]);
+    done();
+    if (r.status === "unknown") return { ok: false, message: "Still no clear answer from the rail. Do not pay again; check the provider dashboard for this attempt's key." };
+    if (r.status === "failed") return { ok: true, message: "The rail confirms nothing moved. The payment is marked failed and can be retried." };
+    return { ok: true, message: "Found the original payment on the rail. Recorded as sent." };
+  } catch (e) {
+    done([`/obligations/${id}`]);
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Move a definitively failed payment back to approved so it can be sent again. */
+export async function retryFailedAction(id: string): Promise<ActionResult> {
+  try {
+    retryFailed(getDb(), id, await actor());
+    done([`/obligations/${id}`]);
+    return { ok: true, message: "Ready to retry." };
+  } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
 }

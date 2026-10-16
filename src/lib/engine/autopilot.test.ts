@@ -3,8 +3,11 @@ import { and, eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
 import { auditEntries, obligations, paymentAttempts, vendors } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { executeObligation, ingestObligation } from "./orchestrator";
+import { approveObligation, executeObligation, ingestObligation } from "./orchestrator";
 import { autopilotStatus, cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused } from "./autopilot";
+import { resetRails, setRailsForTest } from "../rails";
+import { MockPayPalRail, MockStellarRail } from "../rails/mock";
+import type { PaymentRail } from "../domain/types";
 
 /**
  * Autonomy removes the approval step and nothing else. These tests pin that down:
@@ -142,6 +145,62 @@ describe("caps", () => {
     expect(ob.state).toBe("awaiting_approval");
     expect(ob.policyReasonsJson).toMatch(/daily cap/);
     expect(autopilotStatus(db, DEMO_BUSINESS_ID).committed24hMinor).toBeGreaterThanOrEqual(25_000);
+  });
+});
+
+describe("a person's approval is a person's payment", () => {
+  it("autopilot does not send a payment that a person approved over the cap", async () => {
+    const db = await fresh("autopilot", { autopilotPerPaymentCapMinor: 50_000 });
+    const id = await clean(db, { amountUsd: 640 });
+    expect(get(db, id).state).toBe("awaiting_approval");
+    approveObligation(db, id, "user:daniel", "Boat charter, agreed");
+    expect(get(db, id).state).toBe("approved");
+    const r = await runAutopilot(db);
+    expect(r.scheduled).not.toContain(id);
+    expect(r.released).not.toContain(id);
+    expect(get(db, id).state).toBe("approved");
+    expect(get(db, id).releaseAt).toBeNull();
+    // A person can still send it by hand.
+    await executeObligation(db, id, { actor: "user:daniel" });
+    expect(["sent", "settled"]).toContain(get(db, id).state);
+  });
+
+  it("a cancel that lands while an earlier payment is executing still holds", async () => {
+    const db = await fresh("autopilot", { autopilotCancelWindowSeconds: 1 });
+    const a = await clean(db, { amountUsd: 120 });
+    const b = await clean(db, { amountUsd: 130 });
+    expect(get(db, a).releaseAt).not.toBeNull();
+    expect(get(db, b).releaseAt).not.toBeNull();
+    // Make both due now, then race: while the rail is paying the first one, a person cancels the other.
+    const past = new Date(Date.now() - 1000).toISOString();
+    db.update(obligations).set({ releaseAt: past }).where(and(eq(obligations.businessId, DEMO_BUSINESS_ID), eq(obligations.state, "approved"))).run();
+    const inner = new MockPayPalRail();
+    let cancelled = false;
+    const racing: PaymentRail = {
+      rail: "paypal",
+      mode: inner.mode,
+      quote: (i) => inner.quote(i),
+      getStatus: (id) => inner.getStatus(id),
+      execute: async (req) => {
+        if (!cancelled && req.obligationId !== b) {
+          cancelled = true;
+          cancelAutopilotRelease(db, b, "user:daniel");
+        }
+        return inner.execute(req);
+      },
+    };
+    setRailsForTest({ paypal: racing, stellar: new MockStellarRail() });
+    try {
+      const r = await runAutopilot(db);
+      expect(cancelled).toBe(true);
+      expect(r.released).toContain(a);
+      expect(r.released).not.toContain(b);
+      expect(get(db, b).state).toBe("approved");
+      expect(get(db, b).releaseAt).toBeNull();
+      expect(db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, b)).all()).toHaveLength(0);
+    } finally {
+      resetRails();
+    }
   });
 });
 
