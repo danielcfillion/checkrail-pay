@@ -30,7 +30,7 @@ const STORY: Array<{ ref: string; title: string; line: string; pick: (rows: Obli
   {
     ref: "JOB-PAL3D-0927",
     title: "Above threshold, paid over Stellar",
-    line: "Ana's $750 needs a person. Approve, then pay with Stellar: she asked for the faster rail and sees a PHP bank deposit in about 15 minutes.",
+    line: "Ana's $750 needs a person. Approve, then pay with Stellar, the rail she asked for. Here the Stellar leg is simulated; with the anchor leg built she would see a PHP bank deposit in about 15 minutes.",
     pick: (rows) => rows.find((r) => r.sourceRef === "JOB-PAL3D-0927"),
   },
 ];
@@ -99,9 +99,9 @@ export default function DemoPage() {
             <li>Maria JOB-HG4D-0921: pay with PayPal, marker travels to reconciled.</li>
             <li>Ana: approve, compare rails, pay, open the settlement.</li>
             <li>
-              New request: upload <a href="/demo-documents/tripsheet-hg5d-1005.pdf" className="link" download>Maria&apos;s trip sheet (USD 225)</a> with a line like &quot;Trip sheet attached, please pay Maria.&quot; It comes out clean and pre-approved.
+              New request: type &quot;Invoice attached, please pay.&quot; and upload <a href="/demo-documents/invoice-rosa-0942.pdf" className="link" download>Rosa&apos;s invoice (USD 205)</a> or <a href="/demo-documents/tripsheet-hg5d-1005.pdf" className="link" download>Maria&apos;s trip sheet (USD 225)</a>. The vendor, amount and reference are read from the document; it comes out clean and pre-approved.
             </li>
-            <li>Settings: turn on Autopilot. Back on the overview the trip sheet is scheduled with a countdown. Cancel it, or let the window run out and watch the agent send it.</li>
+            <li>Settings: turn on Autopilot. Back on the overview it is scheduled with a countdown. Cancel it, or let the window run out and watch the agent send it.</li>
             <li>Try to fool it: upload <a href="/demo-documents/invoice-tam-0834b.pdf" className="link" download>Tam&apos;s re-issued invoice</a> (blocked as a duplicate) or <a href="/demo-documents/invoice-bayan-0944.pdf" className="link" download>Bayan&apos;s USD 640 charter</a> (held for a person, even on Autopilot).</li>
             <li>Daily close: what needs a look, what the agent sent, what people sent. Sign off.</li>
             <li>Ledger and accounting: the same records, ready for Xero.</li>

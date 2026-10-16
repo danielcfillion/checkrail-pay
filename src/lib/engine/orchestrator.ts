@@ -71,7 +71,8 @@ export async function ingestObligation(db: Db, input: IngestInput): Promise<stri
         const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null; label?: string; excerpt?: string | null }>;
         const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? "").replace(/\s+/g, " ").trim() === (b ?? "").replace(/\s+/g, " ").trim();
         const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase() && same(p.label, e.label) && same(p.excerpt, e.excerpt));
-        provenance = untouched ? "document" : "operator";
+        // A .txt file is as easy to type as the form itself, so it never counts as an independent document.
+        provenance = untouched && att.mimeType !== "text/plain" ? "document" : "operator";
         db.update(attachments).set({ obligationId: id }).where(eq(attachments.id, att.id)).run();
       }
     }
@@ -229,7 +230,10 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const myDocTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
   const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label, e.excerpt]), ...myDocTexts.map((d) => d.text?.slice(0, 4000)));
   // Distinct people, not rows: one person approving twice is still one approval.
-  const approvalsCount = new Set(db.select({ actor: approvals.actor }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().map((a) => a.actor)).size;
+  const approvedRows = db.select({ actor: approvals.actor, ack: approvals.acknowledgedJson }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
+  const approvalsCount = new Set(approvedRows.map((a) => a.actor)).size;
+  // Union of what the approvers saw. A row from before acknowledgements were recorded means "unknown": do not second-guess it.
+  const acknowledgedWarnings = approvedRows.some((a) => a.ack == null) ? undefined : [...new Set(approvedRows.flatMap((a) => JSON.parse(a.ack!) as string[]))];
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const vendorRecentMinor = prior.filter((p) => ["approved", "execution_pending", "sent", "settled"].includes(p.state) && p.updatedAt >= since).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
   // Business-wide committed money in the last 24h (base currency), for the autopilot daily cap. Pre-approved payments only count once autopilot has scheduled them.
@@ -253,10 +257,17 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt })),
     jobKeys: myJobKeys,
     otherVendorRefs,
+    acknowledgedWarnings,
+    knownVendorNames: db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, ob.businessId)).all(),
     approvalsCount,
     vendorRecentMinor,
     businessRecentMinor,
   });
+  if (outcome.unacknowledged?.length) {
+    // The approvals were given over a different set of warnings. They no longer count; a person looks again.
+    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
+    audit(db, { obligationId, actor: "policy", action: "approval.superseded", detail: { reason: "new warnings since approval", rules: outcome.unacknowledged } });
+  }
   db.update(obligations)
     .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
     .where(eq(obligations.id, obligationId))
@@ -307,8 +318,11 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
   // One approval per person per version of the obligation.
   const already = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"), eq(approvals.actor, actor))).get();
   if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
-  db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, createdAt: now() }).run();
-  audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null } });
+  // Record exactly which warnings were on screen. A warning that appears later voids this approval (see policy).
+  const before = runPolicy(db, obligationId);
+  const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => r.ruleId);
+  db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), createdAt: now() }).run();
+  audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null, acknowledged } });
   // Approval does not bypass policy: a blocked obligation stays blocked until the input is fixed.
   const outcome = runPolicy(db, obligationId);
   moveTo(db, obligationId, targetState(outcome, ob.state as ObligationState), outcome);
@@ -591,6 +605,14 @@ export async function resolveManually(db: Db, obligationId: string, actor: strin
   if (resolution.kind === "found") {
     const id = resolution.externalId.trim();
     if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) throw new Error("That does not look like a payout or transaction id");
+    const taken = db.select({ id: paymentAttempts.id }).from(paymentAttempts).where(eq(paymentAttempts.externalId, id)).all().filter((a) => a.id !== attempt.id);
+    if (taken.length) throw new Error("That id already belongs to another payment in Checkrail Pay; check you copied the right one");
+    const adapter = getRails()[attempt.rail as Rail];
+    if (adapter.externalIdMatchesKey) {
+      const ok = await adapter.externalIdMatchesKey(id, attempt.idempotencyKey);
+      if (ok === false) throw new Error(`That batch was not created by this attempt (its sender_batch_id is not ${attempt.idempotencyKey}); nothing was changed`);
+      if (ok === null) throw new Error("Could not confirm that id with the provider just now; try again in a minute. Nothing was changed");
+    }
     db.update(paymentAttempts).set({ status: "submitted", externalId: id, externalStatus: "found by hand", updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
     transition(db, obligationId, "sent", actor, "execution.resolved_by_hand", { attemptId: attempt.id, externalId: id });
     try {

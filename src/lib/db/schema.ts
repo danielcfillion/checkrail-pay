@@ -111,8 +111,9 @@ export const approvals = sqliteTable("approvals", {
   id: text("id").primaryKey(),
   obligationId: text("obligation_id").notNull(),
   actor: text("actor").notNull(), // user id or "policy:auto"
-  decision: text("decision").notNull(), // approved | rejected
+  decision: text("decision").notNull(), // approved | rejected | superseded
   note: text("note"),
+  acknowledgedJson: text("acknowledged_json"), // warning rule ids on screen when the person approved; null on rows from before 0004
   createdAt: text("created_at").notNull(),
 });
 

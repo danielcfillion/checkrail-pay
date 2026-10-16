@@ -165,6 +165,42 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     expect(["sent", "settled"]).toContain(get(story.paypal).state);
   });
 
+  it("an approval does not cover a warning that appears after it: a second payee billing the same reference sends it back", async () => {
+    // Ana's USD 750 needs a person (above the auto threshold). Daniel approves it with no warnings on screen.
+    approveObligation(db, story.stellar, "user:daniel");
+    expect(get(story.stellar).state).toBe("approved");
+    // Then Bayan bills the same job reference.
+    await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice from Bayan Island Boats for JOB-PAL3D-0927, USD 300.",
+      sourceRef: "JOB-PAL3D-0927",
+      evidence: [{ kind: "invoice", label: "Invoice JOB-PAL3D-0927", amountMinor: 30_000, currency: "USD", reference: "JOB-PAL3D-0927", excerpt: "Bayan Island Boats, charter, USD 300" }],
+      actor: "system:email-ingest",
+    });
+    await expect(executeObligation(db, story.stellar, { actor: "user:daniel" })).rejects.toThrow(/refused/i);
+    expect(get(story.stellar).state).toBe("awaiting_approval");
+    expect(get(story.stellar).policyReasonsJson).toMatch(/New since approval/);
+    expect(actionsOf(story.stellar)).toContain("approval.superseded");
+    // The same person can look again and approve over the new warning.
+    approveObligation(db, story.stellar, "user:daniel", "Bayan's charter is a separate cost on the same trip");
+    expect(get(story.stellar).state).toBe("approved");
+  });
+
+  it("'I found it' refuses an id that belongs to another payment, or that the rail says is not this attempt's", async () => {
+    const pp = new ScriptedRail("paypal", [unknown()]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    // Another payment already owns this id.
+    db.insert(paymentAttempts).values({ id: "pay_other", obligationId: story.blockedDuplicate, rail: "paypal", idempotencyKey: "z".repeat(32), status: "submitted", mode: "sandbox", externalId: "PB-OTHER-1", createdAt: "x", updatedAt: "x" }).run();
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "found", externalId: "PB-OTHER-1" })).rejects.toThrow(/another payment/);
+    (pp as PaymentRail).externalIdMatchesKey = async () => false;
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "found", externalId: "PB-WRONG-9" })).rejects.toThrow(/not created by this attempt/);
+    (pp as PaymentRail).externalIdMatchesKey = async () => null;
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "found", externalId: "PB-MAYBE-9" })).rejects.toThrow(/Could not confirm/);
+    expect(get(story.paypal).state).toBe("execution_pending");
+  });
+
   it("retryFailed refuses when the vendor's payout details changed after approval", async () => {
     installRails(new ScriptedRail("paypal", [failed("INSUFFICIENT_FUNDS")]));
     expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("failed");

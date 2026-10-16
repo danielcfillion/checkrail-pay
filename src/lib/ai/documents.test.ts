@@ -90,6 +90,14 @@ describe("uploaded document to obligation", () => {
 });
 
 describe("upload safety", () => {
+  it("a plain-text upload is the operator's claim, not a document", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: false });
+    const up = await uploadDocument(db, { businessId: "biz_ridgeline", name: "invoice.txt", mimeType: "text/plain", bytes: Buffer.from("Invoice INV-KTC-0300 Kalaw Trekking Collective porters total USD 200.00"), actor: "user:daniel" });
+    const id = await ingestObligation(db, { businessId: "biz_ridgeline", sourceType: "invoice", rawInput: "Kalaw invoice attached.", evidence: up.proposed.map((p) => ({ ...p, attachmentId: up.attachmentId })), evidenceSource: "operator", actor: "user:daniel" });
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, id)).all().every((e) => e.provenance === "operator")).toBe(true);
+  });
+
   it("refuses HTML and SVG, which could run script on the app's origin", async () => {
     const db = openTestDb();
     await seedDemo(db, { history: false });

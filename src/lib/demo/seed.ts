@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { hashPayoutDetails, newId } from "../domain/ids";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation } from "../engine/orchestrator";
@@ -18,6 +18,8 @@ export const DEMO_BUSINESS_ID = "biz_ridgeline";
 /** In live mode, point the Stellar demo recipient at a real funded testnet account (see scripts/stellar-setup.ts). */
 /** Live PayPal test: set DEMO_PAYPAL_RECIPIENT to a sandbox Personal account email so Maria's payout lands somewhere real. */
 const MARIA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT || "maria.santos@example.com";
+/** Rosa is the autopilot shot in the video (PayPal only, under the cap), so in a live take her payout must land somewhere real too. */
+const ROSA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT || "rosa.v@example.com";
 const STELLAR_DEMO_RECIPIENT = process.env.DEMO_STELLAR_RECIPIENT ?? "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYM9F3H6VCC4DEMONSTRATION";
 
 export const DEMO_VENDORS = [
@@ -28,13 +30,13 @@ export const DEMO_VENDORS = [
   { id: "ven_jake", name: "Jake Morrison", role: "creator", country: "US", email: "jake@example.com", preferredRail: null, paypalEmail: "jake@example.com", stellarAccount: "GBJAKE4Y2ZQ6QLPB3HQ5N3TBKX5TNFBN2V4ZL2RLJMK6UJCDEMONSTR", bankCountry: "US", bankCurrency: "USD", bankLabel: "Chase ****1180", notes: "Video content for departures. Invoices monthly." },
   { id: "ven_kalaw", name: "Kalaw Trekking Collective", role: "guide", country: "PH", email: "kalaw@example.com", preferredRail: null, paypalEmail: "kalaw@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BPI ****3350", notes: "Porter and guide collective, three to six people per trip." },
   { id: "ven_dao", name: "Dao Mountain Lodge", role: "hotel", country: "VN", email: "dao.lodge@example.com", preferredRail: null, paypalEmail: "dao.lodge@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****5519", notes: "Cao Bang. Invoices per departure." },
-  { id: "ven_rosa", name: "Rosa Villanueva", role: "guide", country: "PH", email: "rosa.v@example.com", preferredRail: null, paypalEmail: "rosa.v@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BPI ****2210", notes: "Cebu and Bohol day trips. Paid per departure." },
+  { id: "ven_rosa", name: "Rosa Villanueva", role: "guide", country: "PH", email: "rosa.v@example.com", preferredRail: null, paypalEmail: ROSA_PAYPAL, stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "BPI ****2210", notes: "Cebu and Bohol day trips. Paid per departure." },
   { id: "ven_bayan", name: "Bayan Island Boats", role: "driver", country: "PH", email: "bayan.boats@example.com", preferredRail: null, paypalEmail: "bayan.boats@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "Landbank ****7704", notes: "Bangka charters, El Nido. Invoices monthly." },
   { id: "ven_tam", name: "Tam Motorbike Rental", role: "driver", country: "VN", email: "tam.rental@example.com", preferredRail: null, paypalEmail: "tam.rental@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****3391", notes: "Ha Giang bike fleet. Weekly rental invoices." },
 ] as const;
 
 export function resetDemo(db: Db): void {
-  for (const t of [auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, obligations, vendors, businesses]) {
+  for (const t of [auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendors, businesses]) {
     db.delete(t).run();
   }
 }

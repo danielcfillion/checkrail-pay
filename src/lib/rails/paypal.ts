@@ -37,8 +37,11 @@ const ATTENTION_ITEM: Record<string, string> = {
 /** PayPal rejects a reused sender_batch_id from the last 30 days with HTTP 400 and a body naming the duplicate. */
 export function isDuplicateBatchError(body: unknown): boolean {
   if (!body || typeof body !== "object") return false;
-  const text = JSON.stringify(body);
-  return /SENDER_BATCH_ID_ALREADY_EXISTS|DUPLICATE_REQUEST_ID|already exists|duplicate/i.test(text);
+  const b = body as { name?: string; message?: string; details?: Array<{ field?: string; issue?: string; description?: string }> };
+  if (/SENDER_BATCH_ID_ALREADY_EXISTS|DUPLICATE_REQUEST_ID/i.test(JSON.stringify(body))) return true;
+  // Only a duplicate of the batch id itself, never "duplicate receiver in batch" or other duplicates.
+  if ((b.details ?? []).some((d) => /sender_batch_id/i.test(`${d.field ?? ""} ${d.issue ?? ""} ${d.description ?? ""}`) && /exist|duplicate|used/i.test(`${d.issue ?? ""} ${d.description ?? ""}`))) return true;
+  return /sender_batch_id/i.test(b.message ?? "") && /already exists|already been used/i.test(b.message ?? "");
 }
 
 /** A payout batch id from the HATEOAS links in a PayPal error body, if one is there. */
@@ -117,7 +120,7 @@ export class PayPalRail implements PaymentRail {
           const st = await this.call("GET", `/v1/payments/payouts/${encodeURIComponent(linked)}`);
           const h = (st.json as { batch_header?: { payout_batch_id?: string; batch_status?: string; sender_batch_header?: { sender_batch_id?: string } } } | null)?.batch_header;
           // Only trust the link if PayPal confirms that batch carries OUR key.
-          if (st.ok && h?.payout_batch_id && (!h.sender_batch_header?.sender_batch_id || h.sender_batch_header.sender_batch_id === req.idempotencyKey)) {
+          if (st.ok && h?.payout_batch_id && h.sender_batch_header?.sender_batch_id === req.idempotencyKey) {
             return this.submitted(h.payout_batch_id, h.batch_status ?? null, req, res.json);
           }
         }
@@ -147,6 +150,19 @@ export class PayPalRail implements PaymentRail {
       raw,
       note: "Fee and recipient figures are modelled from PayPal's published fee schedule; PayPal reports the actual amounts after settlement.",
     };
+  }
+
+  async externalIdMatchesKey(externalId: string, key: string): Promise<boolean | null> {
+    try {
+      await this.accessToken();
+    } catch {
+      return null;
+    }
+    const res = await this.call("GET", `/v1/payments/payouts/${encodeURIComponent(externalId)}`);
+    if (res.transportError || res.status >= 500) return null;
+    if (!res.ok) return false;
+    const sid = (res.json as { batch_header?: { sender_batch_header?: { sender_batch_id?: string } } } | null)?.batch_header?.sender_batch_header?.sender_batch_id;
+    return sid ? sid === key : null;
   }
 
   /**

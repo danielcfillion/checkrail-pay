@@ -16,7 +16,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     headers: {
       "Content-Type": !inline ? "application/octet-stream" : a.mimeType === "text/plain" ? "text/plain; charset=utf-8" : a.mimeType,
       "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${safeName}"`,
-      "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+      // Images and text get a sandboxed, script-free CSP. PDFs get none: any CSP can blank Chromium's built-in viewer,
+      // and a PDF served as application/pdf with nosniff cannot run script on this origin.
+      ...(a.mimeType === "application/pdf" ? {} : { "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'" }),
       "Content-Length": String(a.sizeBytes),
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "private, no-store",

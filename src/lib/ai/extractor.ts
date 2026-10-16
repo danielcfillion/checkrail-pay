@@ -1,3 +1,4 @@
+import { namesVendor } from "../domain/vendorNames";
 import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../domain/types";
 
 /**
@@ -99,7 +100,16 @@ export function interpretWithRules(input: {
       adopted.push(`Reference ${ref} taken from ${evidence.find((e) => e.reference?.toUpperCase() === ref)!.label}`);
     }
   }
-  const vendor = matchVendor(rawInput, vendors);
+  // The covering message often says only "invoice attached, please pay". Then the vendor comes from the attached
+  // records, but only when exactly one known vendor is named there. Policy still checks the record names the payee.
+  let vendor = matchVendor(rawInput, vendors);
+  if (!vendor && evidence.length) {
+    const named = vendors.filter((v) => evidence.some((e) => namesVendor(`${e.label} ${e.excerpt ?? ""}`, v.name, vendors.filter((o) => o.id !== v.id).map((o) => o.name))));
+    if (named.length === 1) {
+      vendor = named[0];
+      adopted.push(`Vendor ${vendor.name} taken from the attached record; the request text names no one`);
+    }
+  }
   const dueDate = extractDueDate(rawInput);
   const flags: string[] = [];
   const missing: string[] = [];

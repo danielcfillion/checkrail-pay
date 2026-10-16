@@ -7,7 +7,7 @@ Honourable mention to select first: **Best Use of Agentic Commerce** (with autop
 Rules checklist before submitting:
 - Public repo with the MIT licence visible in the repo's About section.
 - Video under 3 minutes, public on YouTube, no copyrighted music.
-- Judges can test free until Dec 15, 2026: hosted demo URL (Render) plus the run instructions in the README. The hosted demo runs in mock mode behind Basic auth (one shared database; the credential goes in the "testing instructions" field so two judges do not reset each other's walkthrough). If it uses live sandbox, the sandbox credentials stay on the server; judges never need their own.
+- Judges can test free until Dec 15, 2026: hosted demo URL (Render) plus the run instructions in the README. The hosted demo runs in mock mode behind Basic auth (put the credential in the "testing instructions" field). It is one shared database: after 30 minutes without use it restores the four opening requests, so each judge who arrives later starts clean, and Reset demo on /demo does the same at any time. If it uses live sandbox, the sandbox credentials stay on the server; judges never need their own.
 - Say the project was started on Oct 3, 2026, after the submission period opened on Oct 1.
 
 ## Project name
@@ -50,7 +50,7 @@ The agent is Claude via the Anthropic SDK with a small tool set: look up vendor,
 
 Autopilot is a timer over policy, not the model deciding to pay: a payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as "unknown" (never retried under a new key), and live mode that fails closed instead of falling back to mocks. 182 tests.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as "unknown" (never retried under a new key), and live mode that fails closed instead of falling back to mocks. 200 tests.
 
 ## Challenges we ran into
 

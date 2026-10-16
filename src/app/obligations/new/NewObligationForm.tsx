@@ -165,9 +165,9 @@ export function NewObligationForm() {
               <label className="lbl" htmlFor="docs">
                 Upload the document itself
               </label>
-              <input id="docs" type="file" className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.md,application/pdf,image/*,text/plain,text/csv" multiple disabled={uploading} onChange={(e) => void onFiles(e.target.files)} />
+              <input id="docs" type="file" className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain" multiple disabled={uploading} onChange={(e) => void onFiles(e.target.files)} />
               <p className="mt-1.5 text-xs text-ink-soft">
-                {uploading ? "Reading the file." : "PDF invoices and job sheets are read from their text. Photos and scans need the Claude reader (AI_MODE=live). The figures it reads are marked as document evidence; anything you type or change is marked as operator-supplied."}
+                {uploading ? "Reading the file." : "PDF invoices and job sheets are read from their text. Photos and scans need the Claude reader (AI_MODE=live). Figures read from a PDF or photo are marked as document evidence. A plain-text file, and anything you type or change, is marked as operator-supplied and needs a look."}
               </p>
               {uploadNote ? <p className="mt-1.5 text-xs">{uploadNote}</p> : null}
             </div>

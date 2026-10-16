@@ -187,6 +187,10 @@ export interface PolicyInput {
   }>;
   /** Business-wide committed payments in base currency over the last 24h, excluding this one. Used by the autopilot daily cap. */
   businessRecentMinor?: number;
+  /** Warning rule ids the current approvals were given over. Undefined means unknown (older approvals): every warning counts as seen. */
+  acknowledgedWarnings?: string[];
+  /** Every vendor the business knows, for deciding whether a record names the payee or someone else. */
+  knownVendorNames?: Array<{ id: string; name: string }>;
   /** Obligations for OTHER vendors (not cancelled or failed) that use this obligation's exact reference. One job reference billed by two payees needs a person. */
   otherVendorRefs?: Array<{ obligationId: string; vendorName: string; reference: string; state: string }>;
   /** Identifiers naming THIS obligation's job (same construction as priorSourceRefs[].keys). */
@@ -208,6 +212,8 @@ export interface PolicyOutcome {
   decision: PolicyDecision;
   reasons: string[];
   rules: PolicyRuleResult[];
+  /** Warnings that were not on screen when the existing approval was given. Their presence voids that approval. */
+  unacknowledged?: string[];
 }
 
 export interface RouteQuote {
@@ -292,4 +298,6 @@ export interface PaymentRail {
   getStatus(externalId: string): Promise<SettlementStatus>;
   /** Optional: does the provider already know this idempotency key? Used to reconcile an attempt whose outcome was unknown before replaying it. */
   findByIdempotencyKey?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
+  /** Optional: does this provider id belong to the attempt with this idempotency key? null when the provider could not be asked. */
+  externalIdMatchesKey?(externalId: string, key: string): Promise<boolean | null>;
 }

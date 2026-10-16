@@ -241,7 +241,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </Panel>
           ) : null}
           <Panel title="Actions" aside={stateLabel(o.state)}>
-            <ActionBar id={o.id} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
+            <ActionBar id={o.id} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
           </Panel>
 
           {d.settlement ? (

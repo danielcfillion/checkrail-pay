@@ -104,6 +104,20 @@ describe("PayPalRail.execute outcome classification", () => {
     expect(r.status).toBe("unknown");
   });
 
+  it("an unrelated duplicate (same receiver twice) is a plain failure, not a duplicate batch", async () => {
+    stubFetch(() => json(400, { name: "VALIDATION_ERROR", message: "Duplicate receiver in batch", details: [{ field: "items[1].receiver", issue: "DUPLICATE_RECEIVER" }] }));
+    expect((await new PayPalRail(creds).execute(req)).status).toBe("failed");
+  });
+
+  it("a linked batch without our key is not trusted", async () => {
+    stubFetch((url, init) => {
+      if (init.method === "POST") return json(400, { name: "USER_BUSINESS_ERROR", message: "Batch with given sender_batch_id already exists", links: [{ href: "https://api-m.sandbox.paypal.com/v1/payments/payouts/PB-NOKEY" }] });
+      if (url.endsWith("/v1/payments/payouts/PB-NOKEY")) return json(200, { batch_header: { payout_batch_id: "PB-NOKEY", batch_status: "SUCCESS" } });
+      return json(404, {});
+    });
+    expect((await new PayPalRail(creds).execute(req)).status).toBe("unknown");
+  });
+
   it("findByIdempotencyKey returns null when PayPal has no such batch", async () => {
     stubFetch(() => json(404, { name: "RESOURCE_NOT_FOUND" }));
     expect(await new PayPalRail(creds).findByIdempotencyKey("abc")).toBeNull();

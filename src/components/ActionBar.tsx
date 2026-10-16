@@ -8,9 +8,13 @@ import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
 import { useStage } from "./ObligationStage";
+import { ConfirmButton } from "./ConfirmButton";
+import { CopyButton } from "./CopyButton";
 
 type Props = {
   id: string;
+  /** Idempotency key of the attempt whose outcome is unclear: what to search for in the provider dashboard. */
+  pendingKey?: string | null;
   state: string;
   amountMinor: number | null;
   currency: string | null;
@@ -162,16 +166,26 @@ export function ActionBar(p: Props) {
           <details className="text-sm">
             <summary className="cursor-pointer text-ink-soft hover:text-ink">Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
             <div className="mt-3 space-y-3">
-              <p className="text-ink-soft">Look the payment up in the dashboard. Both choices are recorded in the audit log under your name.</p>
+              <p className="text-ink-soft">Search the dashboard for this attempt&apos;s sender batch id. Both choices are recorded in the audit log under your name.</p>
+              {p.pendingKey ? (
+                <p className="flex flex-wrap items-center gap-2">
+                  <code className="num break-all text-xs">{p.pendingKey}</code>
+                  <CopyButton value={p.pendingKey} label="Copy sender batch id" />
+                </p>
+              ) : null}
               <div className="flex flex-wrap items-center gap-2">
                 <input className="field w-56" placeholder="Payout batch id" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Payout batch id found in the dashboard" />
                 <button type="button" className="btn" disabled={pending || note.trim().length < 6} onClick={() => run("found", () => resolveManuallyAction(p.id, note.trim()))}>
                   {busy === "found" ? "Recording" : "I found it: record this id"}
                 </button>
               </div>
-              <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("nothing", () => resolveManuallyAction(p.id, null))}>
-                {busy === "nothing" ? "Recording" : "I checked: nothing was paid"}
-              </button>
+              <ConfirmButton
+                label="I checked: nothing was paid"
+                busyLabel="Recording"
+                tone="danger"
+                confirmText="This marks the attempt failed, which allows a new payment under a fresh key. Only confirm if the dashboard shows no batch with the id above."
+                action={() => resolveManuallyAction(p.id, null)}
+              />
             </div>
           </details>
         </div>

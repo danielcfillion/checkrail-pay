@@ -65,7 +65,7 @@ export default function DailyClosePage() {
             {c.attention.length ? (
               <ul className="divide-y hairline">
                 {c.attention.map((a) => (
-                  <li key={`${a.kind}-${a.id}`} className="px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${KIND[a.kind].tone}` }}>
+                  <li key={`${a.kind}-${a.id}`} className="min-w-0 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${KIND[a.kind].tone}` }}>
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                       <p>
                         <span className="dense mr-2" style={{ color: KIND[a.kind].tone }}>
@@ -79,7 +79,7 @@ export default function DailyClosePage() {
                       <span className="num font-medium">{formatMoney(a.amountMinor, a.currency)}</span>
                     </div>
                     {a.note ? (
-                      <p className="mt-1">
+                      <p className="mt-1 break-words [overflow-wrap:anywhere]">
                         <Linkified text={a.note} />
                       </p>
                     ) : null}
