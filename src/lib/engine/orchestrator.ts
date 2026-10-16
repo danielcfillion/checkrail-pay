@@ -84,7 +84,17 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
 
   // 1. AI interpretation
   const docs = db.select({ name: attachments.name, reader: attachments.reader, text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
-  const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, documents: docs, businessName: biz.name, baseCurrency: biz.baseCurrency });
+  const vendorHistory = (vendorId: string) =>
+    db
+      .select({ sourceRef: obligations.sourceRef, amountMinor: settlements.grossMinor, currency: settlements.grossCurrency, settledAt: settlements.settledAt, description: obligations.description })
+      .from(settlements)
+      .innerJoin(obligations, eq(obligations.id, settlements.obligationId))
+      .where(and(eq(obligations.vendorId, vendorId), ne(obligations.id, obligationId)))
+      .orderBy(desc(settlements.settledAt))
+      .limit(12)
+      .all()
+      .map((r) => ({ ...r, description: (r.description ?? "").slice(0, 120) }));
+  const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, documents: docs, businessName: biz.name, baseCurrency: biz.baseCurrency, vendorHistory });
   const ai = run.interpretation;
   // Approvals were given for specific numbers. If re-interpretation changes who is paid, how much or what for, they no longer count.
   const approved = db.select().from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
@@ -186,12 +196,16 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
         .map((p) => {
-          const ev = db.select({ reference: evidenceTable.reference, label: evidenceTable.label }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
-          return { ...p, keys: jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label])) };
+          // Identity of the underlying job comes from everything that names it, including the document text:
+          // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
+          const ev = db.select({ reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
+          const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
+          return { ...p, keys: jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))) };
         })
     : [];
   const myEvidence = listEvidence(db, obligationId);
-  const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label]));
+  const myDocTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
+  const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label, e.excerpt]), ...myDocTexts.map((d) => d.text?.slice(0, 4000)));
   // Distinct people, not rows: one person approving twice is still one approval.
   const approvalsCount = new Set(db.select({ actor: approvals.actor }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().map((a) => a.actor)).size;
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();

@@ -222,3 +222,13 @@ describe("jobKeys ignores cut-off identifiers", () => {
     expect(jobKeys("Trip KAL-2D-0812 closed (JOB-KAL2D-0812).").some((k) => keys.includes(k))).toBe(false);
   });
 });
+
+describe("jobKeys catches a re-issued invoice", () => {
+  it("INV-TAM-0834-B shares a key with INV-TAM-0834", async () => {
+    const { jobKeys } = await import("./ids");
+    const original = jobKeys("INV-TAM-0834", "Invoice INV-TAM-0834 Tam Motorbike Rental: 6 bikes x 4 days x USD 15 = USD 360.");
+    const reissued = jobKeys("INV-TAM-0834-B", "Invoice INV-TAM-0834-B (re-issued)");
+    expect(reissued.some((k) => original.includes(k))).toBe(true);
+    expect(jobKeys("INV-TAM-0835").some((k) => original.includes(k))).toBe(false);
+  });
+});

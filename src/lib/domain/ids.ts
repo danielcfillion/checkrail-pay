@@ -37,6 +37,12 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       // JOB-HG4D-0914 and trip sheet HG-4D-0914 name the same departure: normalise by stripping the prefix and dashes.
       const core = k.replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)-/, "").replace(/-/g, "");
       if (core.length >= 6) out.add(`~${core}`);
+      // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
+      const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
+      if (reissue) {
+        const base = reissue[1].replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)-/, "").replace(/-/g, "");
+        if (base.length >= 6) out.add(`~${base}`);
+      }
     }
   }
   return [...out].map((k) => k.toLowerCase());

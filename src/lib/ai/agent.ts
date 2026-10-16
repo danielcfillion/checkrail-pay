@@ -14,6 +14,8 @@ export interface AgentInput {
   evidence: EvidenceItem[];
   businessName: string;
   baseCurrency: string;
+  /** Recent settled payments per vendor, so the model can compare this request with what the vendor was paid before. */
+  vendorHistory?: (vendorId: string) => Array<{ sourceRef: string | null; amountMinor: number; currency: string; settledAt: string; description: string }>;
 }
 
 export interface AgentRun {
@@ -30,6 +32,7 @@ You do NOT have the authority to pay anyone. A deterministic policy engine decid
 Rules:
 - Use lookup_vendor to resolve names to known vendors. Never invent a vendor.
 - Use read_evidence to see every attached record before judging.
+- Use vendor_history to see what this vendor was paid before. A rate or amount well above their usual is a flag; a job or invoice that already appears there is a flag.
 - Use paypal_list_transactions to check whether this vendor or reference was already paid through PayPal recently.
 - Amounts: integer minor units (cents). Currency: ISO code.
 - Confidence: 0 to 100, your honest confidence that the structured fields are correct AND the obligation is legitimate.
@@ -78,6 +81,17 @@ async function runClaude(input: AgentInput): Promise<AgentRun> {
       run: async () => JSON.stringify({ records: input.evidence, documents: (input.documents ?? []).map((d) => ({ name: d.name, readBy: d.reader, text: d.text?.slice(0, 6000) ?? null })) }),
     },
   ];
+  if (input.vendorHistory) {
+    const history = input.vendorHistory;
+    localTools.push({
+      definition: {
+        name: "vendor_history",
+        description: "Recent settled payments to a known vendor (by vendor id from lookup_vendor): reference, amount in minor units, currency, date, description. Use it to spot an unusual amount or an already-paid job.",
+        input_schema: { type: "object", properties: { vendorId: { type: "string" } }, required: ["vendorId"] },
+      },
+      run: async (args) => JSON.stringify(history(String(args.vendorId ?? "")).slice(0, 12)),
+    });
+  }
   const submitTool: Anthropic.Tool = {
     name: "submit_interpretation",
     description: "Submit the final structured interpretation. Call exactly once.",

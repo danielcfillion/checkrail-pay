@@ -4,9 +4,11 @@ Fictional paperwork from Ridgeline Expeditions' vendors, for uploading on camera
 
 | File | What happens when uploaded | Why |
 |---|---|---|
-| `tripsheet-hg4d-1005.pdf` | Clean. Maria Santos, USD 180, matches her rate. Pre-approved on Assist, sent by autopilot on Autopilot. | The happy path. |
+| `tripsheet-hg5d-1005.pdf` | Clean. Maria Santos, 5 days at her USD 45 rate, USD 225. Pre-approved on Assist, sent by autopilot on Autopilot. | The happy path. |
 | `invoice-rosa-0942.pdf` | Clean. Rosa Villanueva, two day trips, USD 205. | A second clean one from a different vendor. |
-| `invoice-bayan-0944.pdf` | Held. Bayan Island Boats bills USD 160 per charter; their history is USD 130. Amount is 23% above the vendor's usual, and above the auto threshold. | Shows the agent reading a rate change and a person deciding. |
-| `invoice-tam-0834b.pdf` | Blocked. A re-issued copy of INV-TAM-0834, which was paid 38 days ago. The job identifiers match even though the invoice number is new. | Duplicate caught across a renamed invoice. |
+| `invoice-bayan-0944.pdf` | Held for a person: USD 640 is above the auto threshold. With Claude live, the agent's vendor_history tool shows earlier charters at USD 130 and it flags the USD 160 rate. | A real rate change, read by the agent, decided by a person. |
+| `invoice-tam-0834b.pdf` | Blocked. A re-issued copy of INV-TAM-0834 (paid 38 days ago) under the new number INV-TAM-0834-B. The document text and the re-issue suffix both tie it to the paid job. | Duplicate caught across a renamed invoice. |
 
 Type the covering message in the request box, for example: "Invoice attached from Bayan for last week's charters, please pay." Then upload the file and create the obligation.
+
+Verified 16 Oct 2026 by running all four through the pipeline with the rule-based reader: approved, approved, awaiting approval, blocked.
