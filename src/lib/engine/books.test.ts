@@ -63,3 +63,25 @@ describe("books", () => {
     expect(a.rows.some((r) => r.id === story.blockedMismatch)).toBe(false);
   });
 });
+
+describe("returned payouts", () => {
+  it("marks a payout PayPal returned as refunded, so the vendor shows as owed again, and flags a fee that differs", async () => {
+    const db2 = openTestDb();
+    const { story: s2 } = await seedDemo(db2, { history: false });
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    await executeObligation(db2, s2.paypal, { actor: "user:lan" });
+    await confirmSettlement(db2, s2.paypal);
+    const st = db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!;
+    const email = db2.select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!.paypalEmail!.toLowerCase();
+    const [y, m, d] = st.settledAt.slice(0, 10).split("-");
+    const csv = [
+      '"Date","Name","Type","Status","Currency","Gross","Fee","To Email Address","Transaction ID","Subject","Note"',
+      `"${m}/${d}/${y}","Maria Santos","Mass Pay Payment","Completed","USD","-180.00","-2.50","${email}","9AB1","",""`,
+      `"${m}/${d}/${y}","Maria Santos","Payout Reversal","Completed","USD","180.00","0.00","${email}","9AB2","","Unclaimed payout returned"`,
+    ].join("\n");
+    const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv(csv));
+    expect(result.returned).toHaveLength(1);
+    expect(result.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+  });
+});

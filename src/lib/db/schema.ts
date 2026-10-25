@@ -45,6 +45,9 @@ export const vendors = sqliteTable("vendors", {
   bankCode: text("bank_code"), // e.g. VCB, TCB, BIDV, BDO
   accountHolder: text("account_holder"), // name on the bank account, as the bank has it
   taxType: text("tax_type"), // individual | business
+  paymentTermsDays: integer("payment_terms_days"), // default terms when an invoice states none
+  phone: text("phone"), // the number a verifier calls back on; changing it needs an approver
+  taxId: text("tax_id"), // MST (VN), TIN (PH, US): for the books and tax reports
   taxForm: text("tax_form"), // w9 | w8ben | w8bene | vn_08 | none: which form is on file (the form itself, never an ID number)
   taxFormAt: text("tax_form_at"),
   withholdingBps: integer("withholding_bps"), // Philippine EWT rate for this payee, set by the accountant
@@ -124,6 +127,7 @@ export const obligations = sqliteTable(
     amountMinor: integer("amount_minor"),
     currency: text("currency"),
     dueDate: text("due_date"),
+    invoiceDate: text("invoice_date"), // the date on the invoice, read from it or set by a person
     // AI interpretation output
     aiSummary: text("ai_summary"),
     aiConfidence: integer("ai_confidence"), // 0..100

@@ -35,6 +35,7 @@ export default async function RunsPage() {
             <div className="p-4">
               <RunBuilder
                 defaultName={`Week of ${localDateString()}`}
+                today={localDateString()}
                 rows={candidates.map((c) => ({ id: c.id, vendorName: c.vendorName, sourceRef: c.sourceRef, amountMinor: c.amountMinor!, currency: c.currency!, dueDate: c.dueDate, state: c.state, rail: c.selectedRail, scheduled: Boolean(c.releaseAt) }))}
               />
             </div>

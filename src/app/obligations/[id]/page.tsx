@@ -8,6 +8,7 @@ import { bills as billsTable } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate, dualControlGap } from "@/lib/engine/orchestrator";
+import { InvoiceDates } from "@/components/InvoiceDates";
 import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
 import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, stateLabel, truncateMiddle } from "@/lib/format";
@@ -95,12 +96,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             <dl className="num mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t pt-3 text-xs hairline">
               <dt className="text-ink-soft">Created</dt>
               <dd>{formatDateTime(o.createdAt)}</dd>
-              {o.dueDate ? (
-                <>
-                  <dt className="text-ink-soft">Due</dt>
-                  <dd>{formatDate(o.dueDate)}</dd>
-                </>
-              ) : null}
+              <InvoiceDates id={o.id} invoiceDate={o.invoiceDate} dueDate={o.dueDate} editable={Boolean(viewer?.can("amend")) && !["settled", "cancelled", "refunded"].includes(o.state)} />
               <dt className="text-ink-soft">Obligation</dt>
               <dd className="flex items-center gap-1">
                 {o.id}

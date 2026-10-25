@@ -1,3 +1,4 @@
+import { formatDate } from "@/lib/format";
 import { getDb } from "@/lib/db";
 import { lookupInvite } from "@/lib/engine/vendors";
 import { VendorForm } from "@/components/VendorForm";
@@ -18,7 +19,7 @@ export default async function OnboardPage({ params }: { params: Promise<{ token:
       {view.ok ? (
         <>
           <p className="mt-2 text-ink-soft">
-            {view.vendorName ? `${view.vendorName}, tell us where you want to be paid.` : "Tell us who you are and where you want to be paid."} The business will confirm these details with you before sending any money. This link works once and expires on {view.expiresAt.slice(0, 10)}.
+            {view.vendorName ? `${view.vendorName}, tell us where you want to be paid.` : "Tell us who you are and where you want to be paid."} The business will confirm these details with you before sending any money. This link works once and expires on {formatDate(view.expiresAt)}.
           </p>
           <div className="mt-6">
             <VendorForm mode={view.vendorName ? "onboard-existing" : "onboard-new"} token={token} />

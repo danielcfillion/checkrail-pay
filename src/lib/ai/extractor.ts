@@ -99,17 +99,57 @@ export function extractReference(text: string): string | null {
   return m ? m[1].toUpperCase() : null;
 }
 
-export function extractDueDate(text: string): string | null {
-  const iso = text.match(/\b(20[0-9]{2}-[01][0-9]-[0-3][0-9])\b/);
-  if (iso) return iso[1];
-  if (/\b(today|asap|immediately)\b/i.test(text)) return new Date().toISOString().slice(0, 10);
-  const m = text.match(/\bnet\s?(\d{1,3})\b/i);
-  if (m) {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() + Number(m[1]));
-    return d.toISOString().slice(0, 10);
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+const month = (w: string): number | undefined => MONTHS[w.slice(0, 4).toLowerCase()] ?? MONTHS[w.slice(0, 3).toLowerCase()];
+const pad = (n: number) => String(n).padStart(2, "0");
+function ymd(y: number, m: number, d: number): string | null {
+  if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCMonth() === m - 1 ? `${y}-${pad(m)}-${pad(d)}` : null;
+}
+/** One date at the start of `s`: 2026-10-22, 22 October 2026, October 22, 2026, 22/10/2026 (day first), ngay 22 thang 10 nam 2026. */
+function dateAt(s: string): string | null {
+  let m = s.match(/^(20\d{2})-(\d{2})-(\d{2})/);
+  if (m) return ymd(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?,?\s+(20\d{2})/);
+  if (m && month(m[2])) return ymd(+m[3], month(m[2])!, +m[1]);
+  m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2})/);
+  if (m && month(m[1])) return ymd(+m[3], month(m[1])!, +m[2]);
+  m = s.match(/^(\d{1,2})[/.](\d{1,2})[/.](20\d{2})/);
+  if (m) return ymd(+m[3], +m[2], +m[1]);
+  m = s.match(/^(?:ng[aà]y\s+)?(\d{1,2})\s+th[aá]ng\s+(\d{1,2})\s+n[aă]m\s+(20\d{2})/i);
+  if (m) return ymd(+m[3], +m[2], +m[1]);
+  return null;
+}
+function labelled(text: string, label: RegExp): string | null {
+  for (const m of text.matchAll(label)) {
+    const d = dateAt(text.slice((m.index ?? 0) + m[0].length).trimStart());
+    if (d) return d;
   }
   return null;
+}
+export function addDays(date: string, n: number): string {
+  const t = new Date(`${date}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + n);
+  return t.toISOString().slice(0, 10);
+}
+
+/**
+ * The invoice's own dates, read from the request and its documents: when it was issued, when it is due, and its
+ * terms. "Net 14" counts from the invoice date when there is one, else from `today` (the business's local date).
+ * A bare word like "today" is not a due date; it is pressure (see the urgency check).
+ */
+export function extractInvoiceDates(text: string, today: string): { invoiceDate: string | null; dueDate: string | null; termsDays: number | null } {
+  const invoiceDate = labelled(text, /\b(?:invoice\s+date|date\s+of\s+issue|issued(?:\s+on)?|dated|date|ng[aà]y\s+(?:l[aậ]p|h[oó]a\s+đ[oơ]n))\s*[:\-]?\s*/gi) ?? labelled(text, /\bng[aà]y\s+(?=\d)/gi);
+  const terms = text.match(/\b(?:net|terms?:?\s*(?:net)?)\s?(\d{1,3})(?:\s*days?)?\b/i) ?? text.match(/\b(?:within|in)\s+(\d{1,3})\s+days\b/i);
+  const termsDays = terms ? Math.min(365, Number(terms[1])) : null;
+  const explicit = labelled(text, /\b(?:due\s+date|due(?:\s+(?:on|by))?|payable\s+by|pay\s+by|please\s+pay\s+by|h[aạ]n\s+thanh\s+to[aá]n)\s*[:\-]?\s*/gi);
+  const dueDate = explicit ?? (termsDays != null ? addDays(invoiceDate ?? today, termsDays) : null);
+  return { invoiceDate, dueDate, termsDays };
+}
+
+export function extractDueDate(text: string, today = new Date().toISOString().slice(0, 10)): string | null {
+  return extractInvoiceDates(text, today).dueDate;
 }
 
 export function matchVendor(text: string, vendors: VendorPayoutProfile[]): VendorPayoutProfile | null {

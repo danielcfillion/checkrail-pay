@@ -10,7 +10,7 @@ import { useToast } from "./Toast";
 export type Candidate = { id: string; vendorName: string | null; sourceRef: string | null; amountMinor: number; currency: string; dueDate: string | null; state: string; rail: string | null; scheduled: boolean };
 
 /** Tick what is due, see the total, make a run. */
-export function RunBuilder({ rows, defaultName }: { rows: Candidate[]; defaultName: string }) {
+export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[]; defaultName: string; today?: string }) {
   const [picked, setPicked] = useState<Set<string>>(() => new Set(rows.filter((r) => !r.scheduled).map((r) => r.id)));
   const [name, setName] = useState(defaultName);
   const [pending, start] = useTransition();
@@ -28,8 +28,21 @@ export function RunBuilder({ rows, defaultName }: { rows: Candidate[]; defaultNa
     return n;
   });
   const all = picked.size === rows.length;
+  const [dueBy, setDueBy] = useState("");
+  const pickDueBy = (d: string) => {
+    setDueBy(d);
+    // Everything due on or before the date (payments with no due date are left for a person to pick).
+    if (d) setPicked(new Set(rows.filter((r) => !r.scheduled && r.dueDate && r.dueDate <= d).map((r) => r.id)));
+  };
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2 text-sm">
+        <label>
+          <span className="lbl">Pick everything due by</span>
+          <input type="date" className="field num" value={dueBy} onChange={(e) => pickDueBy(e.target.value)} />
+        </label>
+        {dueBy ? <span className="text-xs text-ink-soft">{rows.filter((r) => !r.dueDate).length} without a due date are not picked</span> : null}
+      </div>
       <div className="overflow-x-auto">
         <table className="ledger">
           <thead>
@@ -57,7 +70,7 @@ export function RunBuilder({ rows, defaultName }: { rows: Candidate[]; defaultNa
                   </Link>
                 </td>
                 <td className="num hidden text-ink-soft sm:table-cell">{r.sourceRef ?? "none"}</td>
-                <td className="num hidden text-ink-soft md:table-cell">{r.dueDate ?? "none"}</td>
+                <td className={`num hidden md:table-cell ${r.dueDate && r.dueDate < today ? "text-attention" : "text-ink-soft"}`}>{r.dueDate ?? "none"}</td>
                 <td className="text-ink-soft">{r.state === "approved" ? (r.scheduled ? "approved, autopilot scheduled" : "approved") : "waiting for approval"}</td>
                 <td className="hidden text-ink-soft sm:table-cell">{r.rail ?? "none"}</td>
                 <td className="r num">{formatMoney(r.amountMinor, r.currency)}</td>

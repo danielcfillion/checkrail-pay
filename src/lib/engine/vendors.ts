@@ -44,6 +44,9 @@ export interface VendorProfileInput {
   taxType?: string | null;
   taxForm?: string | null;
   withholdingBps?: number | null;
+  phone?: string | null;
+  taxId?: string | null;
+  paymentTermsDays?: number | null;
 }
 
 export interface PayoutInput {
@@ -98,7 +101,13 @@ export function validateProfile(raw: unknown): Required<VendorProfileInput> {
   if (r.taxForm && !taxForm) throw new Error(`Tax form must be one of: ${TAX_FORMS.join(", ")}`);
   const withholdingBps = r.withholdingBps === undefined || r.withholdingBps === null || r.withholdingBps === "" ? null : Number(r.withholdingBps);
   if (withholdingBps !== null && !(Number.isInteger(withholdingBps) && withholdingBps >= 0 && withholdingBps <= 3_000)) throw new Error("Withholding rate must be 0% to 30%");
-  return { name, role, country, email, notes, defaultAccountCode, taxType, taxForm, withholdingBps };
+  const phone = str(r.phone, "Phone", 24)?.replace(/[\s().-]/g, "") ?? null;
+  if (phone && !/^\+?\d{6,15}$/.test(phone)) throw new Error("Phone must be digits, with the country code, like +84 912 345 678");
+  const taxId = str(r.taxId, "Tax ID", 20)?.replace(/\s/g, "").toUpperCase() ?? null;
+  if (taxId && !/^[A-Z0-9-]{5,20}$/.test(taxId)) throw new Error("Tax ID may use letters, digits and dashes");
+  const paymentTermsDays = r.paymentTermsDays === undefined || r.paymentTermsDays === null || r.paymentTermsDays === "" ? null : Number(r.paymentTermsDays);
+  if (paymentTermsDays !== null && !(Number.isInteger(paymentTermsDays) && paymentTermsDays >= 0 && paymentTermsDays <= 120)) throw new Error("Payment terms must be 0 to 120 days");
+  return { name, role, country, email, notes, defaultAccountCode, taxType, taxForm, withholdingBps, phone, taxId, paymentTermsDays };
 }
 
 /**
@@ -173,6 +182,8 @@ export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendo
   if (!Object.keys(changed).length) return;
   // Tax details decide how much the vendor is actually paid: the person who prepares payments does not set them.
   if (["taxType", "taxForm", "withholdingBps"].some((k) => k in changed) && !actorCan(by, "verify_vendor")) throw new Error("Tax form and withholding change how much a vendor is paid; an approver or the owner records them");
+  // The phone on file is what a verifier calls to confirm new bank details; whoever requests changes does not set it.
+  if ("phone" in changed && v.phone && !actorCan(by, "verify_vendor")) throw new Error("The phone number is used to confirm bank details by calling back; an approver or the owner changes it");
   if ("name" in changed) {
     const clash = db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.businessId, businessId), eq(vendors.name, profile.name))).all().some((x) => x.id !== vendorId);
     if (clash) throw new Error("Another vendor already has this name");
@@ -316,7 +327,7 @@ export function submitOnboarding(db: Db, token: string, input: { profile?: unkno
   const inv = db.select().from(vendorInvites).where(eq(vendorInvites.tokenHash, hashToken(token))).get()!;
   const payout = validatePayout(input.payout);
   // A vendor states who they are; which tax form is on file and any withholding rate are for the business to record.
-  const profile = inv.vendorId ? null : { ...validateProfile(input.profile), taxForm: null, withholdingBps: null };
+  const profile = inv.vendorId ? null : { ...validateProfile(input.profile), taxForm: null, withholdingBps: null, paymentTermsDays: null };
   const actor = `vendor:onboarding:${inv.id}`;
   db.transaction((tx) => {
     const spent = tx.update(vendorInvites).set({ usedAt: now() }).where(and(eq(vendorInvites.id, inv.id), isNull(vendorInvites.usedAt))).run();

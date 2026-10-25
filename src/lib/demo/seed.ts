@@ -57,6 +57,13 @@ export function resetDemo(db: Db): void {
 }
 
 /** Tax forms on file for the demo roster: a W-9 from the US creator, W-8s from everyone abroad. */
+/** Demo phone numbers on file (fictional) and default terms, so callback verification and due dates have something to use. */
+function demoContact(v: { id: string; country: string; role: string }, i: number) {
+  const phone = v.country === "VN" ? `+8491200${String(1000 + i)}` : v.country === "PH" ? `+63917000${String(1000 + i)}` : `+1555010${String(1000 + i).slice(1)}`;
+  const paymentTermsDays = v.role === "homestay" || v.role === "hotel" ? 14 : v.role === "creator" ? 30 : 7;
+  return { phone, paymentTermsDays };
+}
+
 function demoTax(v: { id: string; role: string; country: string }) {
   const individual = v.role === "guide" || v.role === "creator" || v.id === "ven_linh";
   const taxForm = v.country === "US" ? "w9" : individual ? "w8ben" : "w8bene";
@@ -71,7 +78,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   seedDemoTeam(db, DEMO_BUSINESS_ID);
   for (const v of DEMO_VENDORS) {
     db.insert(vendors)
-      .values({ ...v, ...demoTax(v), businessId: DEMO_BUSINESS_ID, detailsHash: payoutHashOf(v), verifiedAt: "2026-08-14T09:00:00.000Z", verifiedBy: "user:minh", verificationMethod: "callback", createdBy: "user:daniel", createdAt: ts })
+      .values({ ...v, ...demoTax(v), ...demoContact(v, DEMO_VENDORS.indexOf(v)), businessId: DEMO_BUSINESS_ID, detailsHash: payoutHashOf(v), verifiedAt: "2026-08-14T09:00:00.000Z", verifiedBy: "user:minh", verificationMethod: "callback", createdBy: "user:daniel", createdAt: ts })
       .run();
   }
 

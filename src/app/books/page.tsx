@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/books";
-import { formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
 import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileUpload } from "@/components/BooksControls";
@@ -93,6 +93,36 @@ export default async function BooksPage() {
                   </ul>
                 </div>
               ) : null}
+              {last.result.returned?.length ? (
+                <div>
+                  <p className="font-medium text-attention">Came back to PayPal: these vendors are owed again.</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {last.result.returned.map((l) => (
+                      <li key={l.transactionId} className="num text-xs">
+                        <Link href={`/obligations/${l.obligationId}`} className="link">
+                          {l.vendorName}
+                        </Link>{" "}
+                        {formatMoney(l.amountMinor, l.currency)} on {l.date} ({l.type || "returned"}). Marked refunded; check their details, then request it again.
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {last.result.feeDiffs?.length ? (
+                <div>
+                  <p className="font-medium">Fee on the statement differs from the fee recorded here:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {last.result.feeDiffs.map((l) => (
+                      <li key={l.obligationId} className="num text-xs">
+                        <Link href={`/obligations/${l.obligationId}`} className="link">
+                          {l.vendorName}
+                        </Link>{" "}
+                        statement {formatMoney(l.statementFeeMinor, l.currency)}, recorded {formatMoney(l.recordedFeeMinor, l.currency)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {last.result.appOnly.length ? (
                 <div>
                   <p className="font-medium">Paid here, not on the statement (still in transit, or paid another way):</p>
@@ -102,7 +132,7 @@ export default async function BooksPage() {
                         <Link href={`/obligations/${l.obligationId}`} className="link">
                           {l.vendorName}
                         </Link>{" "}
-                        {formatMoney(l.amountMinor, l.currency)} on {l.settledAt.slice(0, 10)}
+                        {formatMoney(l.amountMinor, l.currency)} on {formatDate(l.settledAt)}
                       </li>
                     ))}
                   </ul>

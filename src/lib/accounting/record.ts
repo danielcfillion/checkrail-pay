@@ -154,7 +154,7 @@ export function exportPendingCsv(db: Db): { csv: string; count: number } {
   const rows = pending.map((p) => JSON.parse(p.payloadJson ?? "{}") as AccountingPayload);
   const ts = new Date().toISOString();
   for (const p of pending) {
-    db.update(accountingSyncs).set({ status: "exported", externalRef: `csv:${ts.slice(0, 10)}`, updatedAt: ts }).where(eq(accountingSyncs.id, p.id)).run();
+    db.update(accountingSyncs).set({ status: "exported", externalRef: `csv:${localDateString(new Date(ts))}`, updatedAt: ts }).where(eq(accountingSyncs.id, p.id)).run();
   }
   return { csv: toCsv(rows), count: rows.length };
 }

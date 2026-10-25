@@ -18,6 +18,8 @@ import { audit, transition } from "../domain/stateMachine";
 import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
+import { addDays, extractInvoiceDates } from "../ai/extractor";
+import { localDateString } from "../format";
 import { getRails } from "../rails";
 import { buildAccountingRecord } from "../accounting/record";
 
@@ -192,6 +194,8 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
     db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
     audit(db, { obligationId, actor: "system", action: "approvals.superseded", detail: { reason: "re-interpretation changed vendor, amount, currency or reference", count: approved.length } });
   }
+  // The invoice's own dates: read from everything on file, a person's setting wins, the vendor's terms fill the gap.
+  const dates = invoiceDatesFor(db, ob, ai.vendorId ?? ob.vendorId, docs.map((d) => d.text), ev, ai.dueDate);
   db.update(obligations)
     .set({
       vendorId: ai.vendorId ?? ob.vendorId,
@@ -199,7 +203,8 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
       amountMinor: ai.amountMinor,
       currency: ai.currency,
       sourceRef: ai.sourceRef ?? ob.sourceRef,
-      dueDate: ai.dueDate,
+      dueDate: dates.dueDate,
+      invoiceDate: dates.invoiceDate,
       aiSummary: ai.summary,
       aiConfidence: ai.confidence,
       aiFlagsJson: JSON.stringify(ai.flags),
@@ -236,6 +241,31 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   if (outcome.decision === "auto_execute" && mustGet(db, obligationId).state === "approved") {
     scheduleAutopilotRelease(db, obligationId);
   }
+}
+
+function invoiceDatesFor(db: Db, ob: typeof obligations.$inferSelect, vendorId: string | null, docTexts: Array<string | null>, ev: EvidenceItem[], agentDue: string | null): { invoiceDate: string | null; dueDate: string | null } {
+  const set = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, ob.id), eq(auditEntries.action, "obligation.dates_set"))).orderBy(desc(auditEntries.seq)).get();
+  if (set) return { invoiceDate: ob.invoiceDate, dueDate: ob.dueDate };
+  const text = [ob.rawInput, ...docTexts.map((t) => t?.slice(0, 8000)), ...ev.map((e) => e.excerpt)].filter(Boolean).join("\n");
+  const today = localDateString();
+  const read = extractInvoiceDates(text, today);
+  const terms = vendorId ? db.select({ t: vendors.paymentTermsDays }).from(vendors).where(eq(vendors.id, vendorId)).get()?.t ?? null : null;
+  const dueDate = read.dueDate ?? (agentDue && /^\d{4}-\d{2}-\d{2}$/.test(agentDue) ? agentDue : null) ?? (terms != null ? addDays(read.invoiceDate ?? localDateString(new Date(ob.createdAt)), terms) : null);
+  return { invoiceDate: read.invoiceDate, dueDate };
+}
+
+/** A person sets the invoice and due dates (they do not change what is paid, so approvals stand). */
+export function setObligationDates(db: Db, obligationId: string, actor: string, raw: { invoiceDate?: unknown; dueDate?: unknown }): void {
+  const ob = mustGet(db, obligationId);
+  if (["settled", "cancelled", "refunded"].includes(ob.state)) throw new Error("This payment is closed");
+  const ok = (v: unknown) => v === null || v === "" || (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00Z`)));
+  if (!ok(raw.invoiceDate ?? null) || !ok(raw.dueDate ?? null)) throw new Error("Dates must be YYYY-MM-DD");
+  const invoiceDate = (raw.invoiceDate as string | null) || null;
+  const dueDate = (raw.dueDate as string | null) || null;
+  if (invoiceDate && dueDate && dueDate < invoiceDate) throw new Error("The due date is before the invoice date");
+  db.update(obligations).set({ invoiceDate, dueDate, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  if (ob.billId) db.update(bills).set({ billDate: invoiceDate ?? undefined, dueDate: dueDate ?? undefined }).where(eq(bills.id, ob.billId)).run();
+  audit(db, { obligationId, actor, action: "obligation.dates_set", detail: { invoiceDate, dueDate, previous: { invoiceDate: ob.invoiceDate, dueDate: ob.dueDate } } });
 }
 
 /**
@@ -427,7 +457,7 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
     const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor!);
     const total = ai.paymentPart.ofTotalMinor ?? evidenced?.amountMinor ?? null;
     if (!total || total <= ob.amountMinor) return;
-    billId = createBill(db, ob.businessId, "agent", ob.vendorId, { kind: "invoice", reference: ob.sourceRef, totalMinor: total, currency: ob.currency, note: `Recorded from a deposit request (${obligationId})` });
+    billId = createBill(db, ob.businessId, "agent", ob.vendorId, { kind: "invoice", reference: ob.sourceRef, totalMinor: total, currency: ob.currency, billDate: ob.invoiceDate, dueDate: ob.dueDate, note: `Recorded from a deposit request (${obligationId})` });
   }
   if (!billId) return;
   const kind = ai.paymentPart?.kind ?? "part";

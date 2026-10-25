@@ -7,7 +7,7 @@ import { getDb } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { businesses, obligations, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -166,6 +166,17 @@ export async function confirmAction(id: string): Promise<ActionResult> {
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: `Settlement status: ${state}.` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Invoice and due dates: they decide when a payment is due and what the books show, not what is paid. */
+export async function setDatesAction(id: string, dates: { invoiceDate: string | null; dueDate: string | null }): Promise<ActionResult> {
+  try {
+    setObligationDates(getDb(), id, (await actOn(id, "amend", "change invoice dates")).id, { invoiceDate: dates?.invoiceDate ?? null, dueDate: dates?.dueDate ?? null });
+    done([`/obligations/${id}`, "/runs", "/books"]);
+    return { ok: true, message: "Dates saved." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

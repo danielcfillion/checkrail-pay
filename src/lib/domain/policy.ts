@@ -1,4 +1,5 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
+import { localDateString } from "../format";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -207,7 +208,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   //   c) same vendor, same amount, settled in the last 30 days with no shared identifier: a warning that forces approval.
   {
     // Earlier payments on the same bill are its other parts; the bill check above stops them adding up to too much.
-    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && !(bill && p.billId === bill.id));
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && p.state !== "refunded" && !(bill && p.billId === bill.id));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(obligation.sourceRef.toLowerCase());
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && p.sourceRef.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
@@ -241,7 +242,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   if (policy.blockOnRecipientChange && vendor) {
     rules.push(
       vendor.verifiedAt
-        ? pass("recipient_verified", `Payout details verified ${vendor.verifiedAt.slice(0, 10)}`)
+        ? pass("recipient_verified", `Payout details verified ${localDateString(new Date(vendor.verifiedAt))}`)
         : block("recipient_verified", "Payout details changed or were never verified; re-verify before paying")
     );
   }

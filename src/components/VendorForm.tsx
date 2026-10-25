@@ -25,6 +25,9 @@ export type VendorFormValues = {
   taxType?: string;
   taxForm?: string;
   withholdingPct?: string;
+  phone?: string;
+  taxId?: string;
+  paymentTermsDays?: string;
 };
 
 export const EMPTY_VENDOR: VendorFormValues = { name: "", role: "guide", country: "VN", email: "", notes: "", defaultAccountCode: "", preferredRail: "", paypalEmail: "", stellarAccount: "", bankCountry: "", bankCurrency: "", bankLabel: "", bankAccountNumber: "", bankCode: "", accountHolder: "" };
@@ -58,7 +61,7 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
   const showPayout = mode !== "profile";
   const internal = mode === "create" || mode === "profile";
 
-  const profile = { name: v.name, role: v.role, country: v.country, email: v.email || null, notes: v.notes || null, defaultAccountCode: v.defaultAccountCode || null, ...(internal ? { taxType: v.taxType || null, taxForm: v.taxForm || null, withholdingBps: v.withholdingPct ? Math.round(Number(v.withholdingPct) * 100) : null } : { taxType: v.taxType || null }) };
+  const profile = { name: v.name, role: v.role, country: v.country, email: v.email || null, notes: v.notes || null, defaultAccountCode: v.defaultAccountCode || null, phone: v.phone || null, taxId: v.taxId || null, ...(internal ? { paymentTermsDays: v.paymentTermsDays ? Number(v.paymentTermsDays) : null } : {}), ...(internal ? { taxType: v.taxType || null, taxForm: v.taxForm || null, withholdingBps: v.withholdingPct ? Math.round(Number(v.withholdingPct) * 100) : null } : { taxType: v.taxType || null }) };
   const payout = { preferredRail: v.preferredRail || null, paypalEmail: v.paypalEmail || null, stellarAccount: v.stellarAccount || null, bankCountry: v.bankCountry || null, bankCurrency: v.bankCurrency || null, bankLabel: v.bankLabel || null, bankAccountNumber: v.bankAccountNumber || null, bankCode: v.bankCode || null, accountHolder: v.accountHolder || null };
 
   const submit = () =>
@@ -119,6 +122,12 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
           <Field label="Email" id="v-email">
             <input id="v-email" type="email" className="field" value={v.email} onChange={set("email")} maxLength={254} autoComplete="email" />
           </Field>
+          <Field label={internal ? "Phone, with country code (used to call back about bank changes)" : "Phone, with country code"} id="v-phone">
+            <input id="v-phone" type="tel" className="field num" value={v.phone ?? ""} onChange={set("phone")} maxLength={24} autoComplete="tel" placeholder="+84 912 345 678" />
+          </Field>
+          <Field label={v.country === "VN" ? "Tax code (MST) or ID number (CCCD), optional" : "Tax ID (TIN), optional"} id="v-taxid">
+            <input id="v-taxid" className="field num" value={v.taxId ?? ""} onChange={set("taxId")} maxLength={20} autoComplete="off" />
+          </Field>
           {!internal ? (
             <Field label="I am paid as" id="v-taxtype2">
               <select id="v-taxtype2" className="field" value={v.taxType ?? ""} onChange={set("taxType")}>
@@ -132,6 +141,9 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
             <>
               <Field label="Account code for the books (optional)" id="v-code">
                 <input id="v-code" className="field num" value={v.defaultAccountCode} onChange={set("defaultAccountCode")} maxLength={20} placeholder="5100" />
+              </Field>
+              <Field label="Payment terms when the invoice gives none, days (optional)" id="v-terms">
+                <input id="v-terms" className="field num" inputMode="numeric" value={v.paymentTermsDays ?? ""} onChange={set("paymentTermsDays")} placeholder="14" />
               </Field>
               <Field label="Notes (optional)" id="v-notes">
                 <input id="v-notes" className="field" value={v.notes} onChange={set("notes")} maxLength={500} />
@@ -173,9 +185,11 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
           <Field label="PayPal email" id="v-pp">
             <input id="v-pp" type="email" className="field" value={v.paypalEmail} onChange={set("paypalEmail")} maxLength={254} />
           </Field>
-          <Field label="Stellar account (public key)" id="v-xlm">
-            <input id="v-xlm" className="field num" value={v.stellarAccount} onChange={set("stellarAccount")} maxLength={56} placeholder="G..." spellCheck={false} />
-          </Field>
+          {internal || mode === "payout" || v.country === "PH" || v.stellarAccount ? (
+            <Field label="Stellar account (public key)" id="v-xlm">
+              <input id="v-xlm" className="field num" value={v.stellarAccount} onChange={set("stellarAccount")} maxLength={56} placeholder="G..." spellCheck={false} />
+            </Field>
+          ) : null}
           <Field label="Bank account number" id="v-acct">
             <input id="v-acct" className="field num" value={v.bankAccountNumber} onChange={set("bankAccountNumber")} maxLength={34} inputMode="numeric" autoComplete="off" placeholder={initial.bankLabel ? `on file: ${initial.bankLabel}` : "0071000123456"} />
           </Field>

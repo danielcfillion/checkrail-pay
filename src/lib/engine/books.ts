@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import { businesses, obligations, reconciliations, settlements, vendors } from "../db/schema";
-import { audit } from "../domain/stateMachine";
+import { audit, transition } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { localDateString } from "../format";
 import { toBaseOrZero } from "../fx";
@@ -105,12 +105,17 @@ export interface ReconResult {
   statementOnly: Array<{ date: string; name: string; toEmail: string; amountMinor: number; currency: string; transactionId: string; type: string }>;
   /** Payments the app recorded as paid by PayPal in the period that the statement does not show. */
   appOnly: Array<{ settlementId: string; obligationId: string; vendorName: string; amountMinor: number; currency: string; settledAt: string }>;
+  /** Payouts that came back (unclaimed, reversed, returned): the vendor is owed again. */
+  returned?: Array<{ obligationId: string; vendorName: string; amountMinor: number; currency: string; date: string; transactionId: string; type: string }>;
+  /** Matched payouts whose statement fee differs from the fee recorded here. */
+  feeDiffs?: Array<{ obligationId: string; vendorName: string; statementFeeMinor: number; recordedFeeMinor: number; currency: string }>;
   feesMinor: Record<string, number>;
   periodFrom: string | null;
   periodTo: string | null;
 }
 
 const PAYOUT_TYPE = /payout|mass pay|payment sent|general payment/i;
+const RETURN_TYPE = /reversal|returned|unclaimed|refund/i;
 
 /**
  * Match outgoing payout lines to PayPal settlements: same recipient email, same amount and currency, within three
@@ -130,7 +135,7 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     .where(and(eq(obligations.businessId, businessId), eq(settlements.rail, "paypal")))
     .all();
   const used = new Set<string>();
-  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], feesMinor: {}, periodFrom, periodTo };
+  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], returned: [], feeDiffs: [], feesMinor: {}, periodFrom, periodTo };
   for (const l of out) {
     const amount = -l.grossMinor;
     result.feesMinor[l.currency] = (result.feesMinor[l.currency] ?? 0) + Math.abs(l.feeMinor);
@@ -139,12 +144,26 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     if (m) {
       used.add(m.s.id);
       result.matched.push({ settlementId: m.s.id, obligationId: m.s.obligationId, vendorName: m.vendorName, amountMinor: amount, currency: l.currency, statementRef: l.transactionId, date: l.date });
+      // PayPal reports the fee on the payout line; the app recorded the quoted one.
+      if (l.feeMinor && Math.abs(l.feeMinor) !== m.s.feeMinor) result.feeDiffs!.push({ obligationId: m.s.obligationId, vendorName: m.vendorName, statementFeeMinor: Math.abs(l.feeMinor), recordedFeeMinor: m.s.feeMinor, currency: l.currency });
     } else result.statementOnly.push({ date: l.date, name: l.name, toEmail: l.toEmail, amountMinor: amount, currency: l.currency, transactionId: l.transactionId, type: l.type });
+  }
+  // Money coming back: an unclaimed payout returned after 30 days, a reversal. The payment it belongs to is no longer paid.
+  const backs = lines.filter((l) => l.grossMinor > 0 && RETURN_TYPE.test(`${l.type} ${l.status} ${l.note}`));
+  const returnedIds = new Set<string>();
+  for (const l of backs) {
+    const m = rows.find((r) => !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && (!l.toEmail || (r.email ?? "").toLowerCase() === l.toEmail || !r.email));
+    if (!m) {
+      result.statementOnly.push({ date: l.date, name: l.name, toEmail: l.toEmail, amountMinor: -l.grossMinor, currency: l.currency, transactionId: l.transactionId, type: l.type });
+      continue;
+    }
+    returnedIds.add(m.s.id);
+    result.returned!.push({ obligationId: m.s.obligationId, vendorName: m.vendorName, amountMinor: l.grossMinor, currency: l.currency, date: l.date, transactionId: l.transactionId, type: l.type });
   }
   if (periodFrom && periodTo) {
     for (const r of rows) {
       if (used.has(r.s.id)) continue;
-      const d = r.s.settledAt.slice(0, 10);
+      const d = localDateString(new Date(r.s.settledAt));
       if (d >= periodFrom && d <= periodTo) result.appOnly.push({ settlementId: r.s.id, obligationId: r.s.obligationId, vendorName: r.vendorName, amountMinor: r.s.grossMinor, currency: r.s.grossCurrency, settledAt: r.s.settledAt });
     }
   }
@@ -152,9 +171,15 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
   db.transaction((tx) => {
     for (const m of result.matched) tx.update(settlements).set({ reconciledAt: ts, statementRef: m.statementRef.slice(0, 64) }).where(eq(settlements.id, m.settlementId)).run();
   });
+  for (const r of result.returned!) {
+    const o = db.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, r.obligationId)).get();
+    // The money is back with the business: the payment stands as refunded, its bill (if any) is open again, and the
+    // vendor's job can be requested again once their details are checked.
+    if (o?.state === "settled") transition(db, r.obligationId, "refunded", by.id, "settlement.returned", { amountMinor: r.amountMinor, currency: r.currency, statementRef: r.transactionId, type: r.type, date: r.date });
+  }
   const id = newId("rec");
   db.insert(reconciliations).values({ id, businessId, source: "paypal_csv", fileName: fileName?.slice(0, 120) ?? null, periodFrom, periodTo, summaryJson: JSON.stringify(result), createdBy: by.id, createdAt: ts }).run();
-  audit(db, { obligationId: null, actor: by.id, action: "books.reconciled", detail: { reconciliationId: id, matched: result.matched.length, statementOnly: result.statementOnly.length, appOnly: result.appOnly.length } });
+  audit(db, { obligationId: null, actor: by.id, action: "books.reconciled", detail: { reconciliationId: id, matched: result.matched.length, statementOnly: result.statementOnly.length, appOnly: result.appOnly.length, returned: result.returned!.length, feeDiffs: result.feeDiffs!.length } });
   return { id, result };
 }
 

@@ -34,6 +34,9 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
     taxType: v.taxType ?? "",
     taxForm: v.taxForm ?? "",
     withholdingPct: v.withholdingBps ? String(v.withholdingBps / 100) : "",
+    phone: v.phone ?? "",
+    taxId: v.taxId ?? "",
+    paymentTermsDays: v.paymentTermsDays != null ? String(v.paymentTermsDays) : "",
   };
   return (
     <>

@@ -91,6 +91,9 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
                 ["Stellar", v.stellarAccount ? <span className="num" title={v.stellarAccount}>{truncateMiddle(v.stellarAccount, 8)}</span> : <span className="text-ink-soft">not on file</span>],
                 ["Bank", v.bankLabel ? `${v.bankLabel}, ${v.bankCurrency} in ${countryName(v.bankCountry)}` : <span className="text-ink-soft">not on file</span>],
                 ["Email", v.email ?? <span className="text-ink-soft">none</span>],
+                ["Phone", v.phone ? <span className="num">{v.phone}</span> : <span className="text-attention">none: add one to call back about bank changes</span>],
+                ["Tax ID", v.taxId ? <span className="num">{v.taxId}</span> : <span className="text-ink-soft">none</span>],
+                ["Terms", v.paymentTermsDays != null ? `${v.paymentTermsDays} days unless the invoice says otherwise` : <span className="text-ink-soft">from each invoice</span>],
                 ["Preferred rail", v.preferredRail ? <RailTag rail={v.preferredRail} /> : <span className="text-ink-soft">let the router choose</span>],
                 ["Tax", v.taxForm && v.taxForm !== "none" ? `${v.taxType ?? "payee"}, ${TAX_FORM_LABEL[v.taxForm] ?? v.taxForm} on file${v.taxFormAt ? ` since ${formatDate(v.taxFormAt)}` : ""}${v.withholdingBps ? `, EWT ${v.withholdingBps / 100}%` : ""}` : <span className="text-attention">no tax form on file</span>],
               ]}
@@ -127,7 +130,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
                   .filter((c) => c.status !== "pending")
                   .map((c) => (
                     <li key={c.id}>
-                      <span className="num text-ink-soft">{(c.decidedAt ?? c.createdAt).slice(0, 10)}</span> {c.kind === "payout" ? "Payout change" : c.kind === "create" ? "Onboarded" : "First details"} {c.status}
+                      <span className="num text-ink-soft">{formatDate(c.decidedAt ?? c.createdAt)}</span> {c.kind === "payout" ? "Payout change" : c.kind === "create" ? "Onboarded" : "First details"} {c.status}
                       {c.decidedBy ? ` by ${c.decidedBy.replace(/^user:/, "")}` : ""}
                       {c.method && c.method in VERIFY_METHOD_LABEL ? ` (${VERIFY_METHOD_LABEL[c.method as VerifyMethod].toLowerCase()})` : ""}
                     </li>
