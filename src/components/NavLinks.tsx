@@ -114,6 +114,13 @@ function Icon({ name }: { name: string }) {
           <path d="M4 13V7M8 13V4M12 13V9" />
         </svg>
       );
+    case "books":
+      return (
+        <svg {...common}>
+          <path d="M3 3.5h4a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 0 7 11.5H3z" />
+          <path d="M13 3.5H9.5A1.5 1.5 0 0 0 8 5v8a1.5 1.5 0 0 1 1.5-1.5H13z" />
+        </svg>
+      );
     case "audit":
       return (
         <svg {...common}>

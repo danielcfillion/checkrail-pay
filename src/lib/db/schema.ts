@@ -15,6 +15,7 @@ export const businesses = sqliteTable("businesses", {
   country: text("country").notNull().default("US"),
   policyJson: text("policy_json").notNull(), // ApprovalPolicy
   createdAt: text("created_at").notNull(),
+  lockedThrough: text("locked_through"), // books closed up to and including this date: nothing dated then changes
 });
 
 export const vendors = sqliteTable("vendors", {
@@ -236,6 +237,8 @@ export const settlements = sqliteTable("settlements", {
   explorerUrl: text("explorer_url"),
   note: text("note"), // caveats, for example that a figure is modelled rather than reported by the provider
   settledAt: text("settled_at").notNull(),
+  reconciledAt: text("reconciled_at"), // matched to a line on the provider's statement
+  statementRef: text("statement_ref"), // that line's transaction id
 });
 
 export const accountingSyncs = sqliteTable("accounting_syncs", {
@@ -434,3 +437,16 @@ export const departureServices = sqliteTable(
   },
   (t) => [index("departure_services_departure").on(t.departureId)]
 );
+
+/** One statement reconciliation: what matched, what the statement has that the app does not, and the reverse. */
+export const reconciliations = sqliteTable("reconciliations", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").notNull(),
+  source: text("source").notNull(), // paypal_csv
+  fileName: text("file_name"),
+  periodFrom: text("period_from"),
+  periodTo: text("period_to"),
+  summaryJson: text("summary_json").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});

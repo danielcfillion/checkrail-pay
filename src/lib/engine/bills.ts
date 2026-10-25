@@ -7,6 +7,7 @@ import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef } from "../d
 import { fmt } from "../domain/policy";
 import { requirePermission, type Actor } from "./users";
 import { ingestObligation } from "./orchestrator";
+import { assertOpenPeriod } from "./books";
 
 /**
  * Bills: what is owed to a vendor, separate from the payments that settle it.
@@ -74,6 +75,7 @@ export function createBill(db: Db, businessId: string, by: Actor | "agent", vend
   const v = db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.id, vendorId), eq(vendors.businessId, businessId))).get();
   if (!v) throw new Error("No such vendor");
   const b = validateBill(raw);
+  assertOpenPeriod(db, businessId, b.billDate, "a bill");
   const clash = db.select({ id: bills.id }).from(bills).where(and(eq(bills.vendorId, vendorId), eq(bills.reference, b.reference), eq(bills.kind, b.kind))).get();
   if (clash) throw new Error(`This vendor already has a ${b.kind.replace("_", " ")} ${b.reference}`);
   const id = newId("bil");
@@ -122,6 +124,7 @@ export function applyCredit(db: Db, businessId: string, by: Actor, creditBillId:
   const c = db.select().from(bills).where(and(eq(bills.id, creditBillId), eq(bills.businessId, businessId))).get();
   const b = db.select().from(bills).where(and(eq(bills.id, billId), eq(bills.businessId, businessId))).get();
   if (!c || c.kind !== "credit_note") throw new Error("Choose a credit note");
+  assertOpenPeriod(db, businessId, now(), "a credit");
   if (!b || b.kind !== "invoice") throw new Error("Credit applies to an invoice");
   if (c.vendorId !== b.vendorId || c.currency !== b.currency) throw new Error("Credit and invoice must be the same vendor and currency");
   if (!isValidAmountMinor(amountMinor)) throw new Error("Amount must be positive");
@@ -146,6 +149,7 @@ export function settleAdvance(db: Db, businessId: string, by: Actor, advanceBill
   requirePermission(by, "amend", "settle advances");
   const a = db.select().from(bills).where(and(eq(bills.id, advanceBillId), eq(bills.businessId, businessId))).get();
   if (!a || a.kind !== "advance") throw new Error("Choose an advance");
+  assertOpenPeriod(db, businessId, now(), "an advance settlement");
   if (a.status !== "open") throw new Error("This advance is already settled");
   if (!Number.isSafeInteger(receiptsMinor) || receiptsMinor < 0) throw new Error("Receipts total must be zero or more");
   const bal = billBalance(db, advanceBillId);
@@ -167,6 +171,7 @@ export function voidBill(db: Db, businessId: string, by: Actor, billId: string, 
   requirePermission(by, "amend", "void bills");
   const b = db.select().from(bills).where(and(eq(bills.id, billId), eq(bills.businessId, businessId))).get();
   if (!b) throw new Error("No such bill");
+  assertOpenPeriod(db, businessId, b.billDate ?? b.createdAt, "a bill");
   const bal = billBalance(db, billId);
   if (bal.paidMinor + bal.pendingMinor + bal.creditedMinor > 0) throw new Error("This bill has payments or credits against it; cancel those first");
   db.update(bills).set({ status: "void" }).where(eq(bills.id, billId)).run();

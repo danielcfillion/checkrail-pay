@@ -23,6 +23,7 @@ import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/ru
 import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
 import { importDepartures, setRate } from "@/lib/engine/rates";
+import { parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -568,6 +569,32 @@ export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: st
     const { csv, count } = exportNewXeroBills(db, biz.id, who.id);
     done(["/accounting"]);
     return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import.` : "No new bills since the last export.", csv: count ? csv : undefined };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Books: statement reconciliation and period lock. */
+
+export async function reconcilePayPalAction(fileName: string, csv: string): Promise<ActionResult & { id?: string }> {
+  try {
+    if (typeof csv !== "string") throw new Error("Choose the PayPal activity CSV");
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const { id, result } = reconcilePayPal(db, biz.id, await currentActor(), parsePayPalCsv(csv), typeof fileName === "string" ? fileName : undefined);
+    done(["/books", "/ledger"]);
+    return { ok: true, message: `${result.matched.length} matched, ${result.statementOnly.length} on the statement only, ${result.appOnly.length} recorded here but not on the statement.`, id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function setPeriodLockAction(through: string | null): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => setPeriodLock(db, b, who, through || null));
+    done(["/books"]);
+    return { ok: true, message: through ? `Books closed through ${through}.` : "Period reopened." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

@@ -1,7 +1,7 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices, reconciliations } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
 import { newId } from "../domain/ids";
@@ -51,7 +51,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [reconciliations, departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }

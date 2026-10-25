@@ -6,6 +6,7 @@ import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
 import { expectedAmount } from "./rates";
+import { assertOpenPeriod } from "./books";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
@@ -488,6 +489,9 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
 }
 
 export function rejectObligation(db: Db, obligationId: string, actor: string, note?: string): void {
+  // A bill already in the books for a closed month stays: reversing it is the accountant's entry, not a cancel here.
+  const before = mustGet(db, obligationId);
+  if (before.xeroBillExportedAt) assertOpenPeriod(db, before.businessId, before.createdAt, "a bill already sent to the books");
   // Transition first and in one transaction with the row: an illegal cancel leaves no stray rejection behind.
   db.transaction((tx) => {
     transition(tx as unknown as Db, obligationId, "cancelled", actor, "approval.rejected", { note: note ?? null });
@@ -541,6 +545,7 @@ export function validateAmendPatch(db: Db, businessId: string, patch: unknown): 
 export async function amendObligation(db: Db, obligationId: string, actor: string, rawPatch: AmendPatch, note?: string): Promise<void> {
   const ob = mustGet(db, obligationId);
   if (!["blocked", "needs_evidence", "awaiting_approval", "approved", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
+  assertOpenPeriod(db, ob.businessId, ob.createdAt, "a payment");
   const patch = validateAmendPatch(db, ob.businessId, rawPatch);
   // Changing the payee of an obligation that already has one is not a correction, it is a different payment.
   if (patch.vendorId && ob.vendorId && patch.vendorId !== ob.vendorId) throw new Error("This payment already has a payee; cancel it and create a new request for the other vendor");
