@@ -1,15 +1,50 @@
 import Link from "next/link";
 import { listVendors } from "@/lib/queries";
 import { countryName, formatDate, roleLabel } from "@/lib/format";
-import { EmptyState, Money, PageHeader, RailTag, RelativeTime } from "@/components/ui";
+import { EmptyState, Money, PageHeader, Panel, RailTag, RelativeTime } from "@/components/ui";
+import { getDb } from "@/lib/db";
+import { getBusiness } from "@/lib/queries";
+import { getViewer } from "@/lib/viewer";
+import { describeChange, pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
+import { PendingChange } from "@/components/VendorControls";
 
 export const dynamic = "force-dynamic";
 
-export default function VendorsPage() {
+export default async function VendorsPage() {
   const vendors = listVendors();
+  const viewer = await getViewer();
+  const biz = getBusiness();
+  const db = getDb();
+  const pending = biz ? pendingChanges(db, biz.id) : [];
   return (
     <>
-      <PageHeader title="Vendors" lede="Everyone the business pays, with the payout details on file and what has been paid so far." />
+      <PageHeader
+        title="Vendors"
+        lede="Everyone the business pays, with the payout details on file and what has been paid so far. New details wait for a second person before any money goes there."
+        actions={
+          !viewer || viewer.can("edit_vendor") ? (
+            <Link href="/vendors/new" className="btn btn-primary">
+              Add vendor
+            </Link>
+          ) : undefined
+        }
+      />
+      {pending.length && biz ? (
+        <Panel title="Waiting for verification" aside={`${pending.length} request${pending.length === 1 ? "" : "s"}`} className="mb-6">
+          <div className="space-y-6">
+            {pending.map((c) => (
+              <div key={c.id} className="border-b pb-5 last:border-0 last:pb-0 hairline">
+                <PendingChange c={describeChange(db, c)} canVerify={!viewer || viewer.can("verify_vendor")} mine={viewer ? verifyBarrier(db, biz.id, viewer.actor.id, c) : null} />
+                {c.vendorId ? (
+                  <Link href={`/vendors/${c.vendorId}`} className="link mt-2 inline-block text-xs">
+                    Open vendor
+                  </Link>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
       {vendors.length === 0 ? (
         <EmptyState title="No vendors yet" body="Vendors are created with the demo seed. Reset the demo from the overview to load the Ridgeline roster." />
       ) : (
@@ -47,6 +82,7 @@ export default function VendorsPage() {
                       {v.name}
                     </Link>
                     {v.openCount ? <span className="num ml-2 text-xs text-ink-soft">{v.openCount} open</span> : null}
+                    {v.status === "blocked" ? <span className="ml-2 text-xs font-medium text-attention">blocked</span> : null}
                   </td>
                   <td className="text-ink-soft">{roleLabel(v.role)}</td>
                   <td className="hidden text-ink-soft sm:table-cell">{countryName(v.country)}</td>

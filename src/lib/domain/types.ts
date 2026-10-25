@@ -130,6 +130,8 @@ export interface VendorPayoutProfile {
   bankLabel: string | null;
   detailsHash: string;
   verifiedAt: string | null;
+  /** "blocked" stops every payment to this vendor until someone unblocks them. */
+  status?: string;
 }
 
 export interface EvidenceItem {

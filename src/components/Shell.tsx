@@ -18,7 +18,7 @@ export const NAV = [
   { href: "/settings", label: "Settings", icon: "settings" },
 ] as const;
 
-export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number };
+export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number; vendorChecks?: number };
 
 export function Shell({ businessName, system, who, children }: { businessName: string | null; system: SystemModes | null; who?: WhoProps | null; children: ReactNode }) {
   return (

@@ -18,6 +18,7 @@ import { seedDemo } from "@/lib/demo/seed";
 import type { Rail, SourceType } from "@/lib/domain/types";
 import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
+import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
  * Server actions: the only write surface of the UI. Each one finds out who is acting (the middleware sets the
@@ -29,6 +30,9 @@ import { signOffDailyClose } from "@/lib/engine/dailyClose";
 /** The acting person for this request. */
 async function currentActor(): Promise<Actor> {
   const h = await headers();
+  // Server actions can be posted to any page, including the vendor-facing ones that need no login. The middleware
+  // strips identity there; refuse outright too, so no internal action ever runs for a token holder.
+  if (h.get("x-checkrail-public") === "1") throw new Error("Not signed in");
   const username = h.get(ACTOR_HEADER);
   const role = h.get(ROLE_HEADER);
   if (!username || !isRole(role)) throw new Error("Not signed in");
@@ -137,6 +141,7 @@ export async function retryFailedAction(id: string): Promise<ActionResult> {
 
 export async function confirmAction(id: string): Promise<ActionResult> {
   try {
+    await currentActor();
     const state = await confirmSettlement(getDb(), id, "manual");
     done([`/obligations/${id}`]);
     done();
@@ -258,6 +263,7 @@ export async function cancelReleaseAction(id: string): Promise<ActionResult> {
 /** Run one autopilot pass now. The heartbeat does this on its own; the UI calls it when a countdown reaches zero. */
 export async function tickAutopilotAction(): Promise<ActionResult> {
   try {
+    await currentActor();
     const r = await runAutopilot(getDb());
     done();
     return { ok: true, message: r.released.length ? `Autopilot sent ${r.released.length} payment${r.released.length === 1 ? "" : "s"}.` : "Nothing was due." };
@@ -283,6 +289,7 @@ export async function signOffCloseAction(throughSeq: number): Promise<ActionResu
 
 /** Act as one of the demo team. Only takes effect where personas are allowed (never with real money); the middleware decides. */
 export async function setPersonaAction(username: string | null): Promise<ActionResult> {
+  if ((await headers()).get("x-checkrail-public") === "1") return { ok: false, message: "Not signed in" };
   const jar = await cookies();
   if (!username) {
     jar.delete(PERSONA_COOKIE);
@@ -307,6 +314,86 @@ export async function updateTeamAction(change: TeamChange): Promise<ActionResult
     updateTeamMember(db, biz.id, await currentActor(), change);
     done(["/settings"]);
     return { ok: true, message: "Team updated." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Vendor master. Payout details change only through a verified request; see lib/engine/vendors.ts. */
+
+async function withBusiness<T>(fn: (db: ReturnType<typeof getDb>, businessId: string, who: Actor) => T): Promise<T> {
+  const db = getDb();
+  const biz = await db.query.businesses.findFirst();
+  if (!biz) throw new Error("No business configured.");
+  return fn(db, biz.id, await currentActor());
+}
+
+export async function createVendorAction(profile: unknown, payout: unknown): Promise<ActionResult & { id?: string }> {
+  try {
+    const id = await withBusiness((db, b, who) => createVendor(db, b, who, profile, payout));
+    done(["/vendors", `/vendors/${id}`]);
+    return { ok: true, message: "Vendor added. Someone else verifies the payout details before the first payment.", id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function updateVendorAction(vendorId: string, profile: unknown): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => updateVendorProfile(db, b, who, vendorId, profile));
+    done(["/vendors", `/vendors/${vendorId}`]);
+    return { ok: true, message: "Vendor details saved." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function proposePayoutAction(vendorId: string, payout: unknown, note?: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => proposePayoutChange(db, b, who, vendorId, payout, typeof note === "string" ? note.slice(0, 300) : undefined));
+    done(["/vendors", `/vendors/${vendorId}`]);
+    return { ok: true, message: "Requested. The current details keep working until someone else verifies the new ones." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function verifyVendorChangeAction(changeId: string, method: string, note?: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => verifyVendorChange(db, b, who, changeId, method, typeof note === "string" ? note.slice(0, 300) : undefined));
+    done();
+    return { ok: true, message: "Verified. Payments use these details from now on." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function rejectVendorChangeAction(changeId: string, note?: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => rejectVendorChange(db, b, who, changeId, typeof note === "string" ? note.slice(0, 300) : undefined));
+    done(["/vendors"]);
+    return { ok: true, message: "Turned down. Nothing changed." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function setVendorStatusAction(vendorId: string, status: "active" | "blocked", reason: string): Promise<ActionResult> {
+  try {
+    if (status !== "active" && status !== "blocked") throw new Error("Unknown status");
+    await withBusiness((db, b, who) => setVendorStatus(db, b, who, vendorId, status, reason));
+    done();
+    return { ok: true, message: status === "blocked" ? "Blocked. No payment goes to this vendor until someone unblocks them." : "Unblocked." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Returns the link once. Only its hash is kept, so it cannot be shown again. */
+export async function createInviteAction(opts: { vendorId?: string | null; label?: string | null }): Promise<ActionResult & { path?: string; expiresAt?: string }> {
+  try {
+    const r = await withBusiness((db, b, who) => createInvite(db, b, who, { vendorId: typeof opts?.vendorId === "string" ? opts.vendorId : null, label: typeof opts?.label === "string" ? opts.label : null }));
+    return { ok: true, message: "Link created. Copy it now: it is shown only once.", path: `/onboard/${r.token}`, expiresAt: r.expiresAt };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

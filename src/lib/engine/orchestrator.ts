@@ -857,5 +857,5 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {
-  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt };
+  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status };
 }

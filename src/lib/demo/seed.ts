@@ -63,11 +63,28 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   seedDemoTeam(db, DEMO_BUSINESS_ID);
   for (const v of DEMO_VENDORS) {
     db.insert(vendors)
-      .values({ ...v, businessId: DEMO_BUSINESS_ID, detailsHash: hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]), verifiedAt: "2026-08-14T09:00:00.000Z", createdAt: ts })
+      .values({ ...v, businessId: DEMO_BUSINESS_ID, detailsHash: hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]), verifiedAt: "2026-08-14T09:00:00.000Z", verifiedBy: "user:minh", verificationMethod: "callback", createdBy: "user:daniel", createdAt: ts })
       .run();
   }
 
-  if (history) await seedHistory(db);
+  if (history) {
+    await seedHistory(db);
+    // The most common supplier fraud, waiting in the vendor checks: an email "from" Tam asking to be paid somewhere new.
+    db.insert(vendorChanges)
+      .values({
+        id: newId("vch"),
+        businessId: DEMO_BUSINESS_ID,
+        vendorId: "ven_tam",
+        kind: "payout",
+        proposedJson: JSON.stringify({ preferredRail: "paypal", paypalEmail: "tam.rental.payments@example.net", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****3391" }),
+        source: "operator",
+        requestedBy: "user:lan",
+        status: "pending",
+        note: "Email from Tam: their PayPal account changed, please pay the new one from now on",
+        createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      })
+      .run();
+  }
   if (extras) await seedExtras(db);
 
   // ---- The story ----

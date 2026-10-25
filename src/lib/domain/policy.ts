@@ -35,6 +35,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       ? pass("vendor_known", "Recipient is a known vendor")
       : block("vendor_known", "Recipient is not a known vendor")
   );
+  // R1b: a vendor someone has blocked is never paid, whatever else passes.
+  if (vendor?.status === "blocked") rules.push(block("vendor_active", `${vendor.name} is blocked from payments; unblock them on their vendor page first`));
 
   // R2: amount and currency present
   const hasAmount = isValidAmountMinor(obligation.amountMinor) && !!obligation.currency;
