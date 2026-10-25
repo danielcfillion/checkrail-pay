@@ -1,9 +1,10 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors } from "../db/schema";
+import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, bills } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
 import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField } from "../crypto/dataKey";
+import { billBalance, closeIfDone, createBill, findBill } from "./bills";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
@@ -36,6 +37,9 @@ export interface IngestInput {
    *  A row that points at an uploaded attachment and matches what the reader extracted gets provenance "document" instead. */
   evidenceSource?: "system" | "operator";
   actor?: string;
+  /** Internal: the bill this payment settles all or part of (see engine/bills.ts). Never taken from a form. */
+  billId?: string | null;
+  paymentKind?: "full" | "deposit" | "balance" | "part" | "advance" | null;
 }
 
 const SOURCE_TYPES: readonly SourceType[] = ["invoice", "job_completion", "operator_instruction", "booking"];
@@ -105,6 +109,8 @@ export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<s
         sourceType: input.sourceType,
         sourceRef: input.sourceRef ?? null,
         rawInput: input.rawInput,
+        billId: rawInput.billId && db.select({ id: bills.id }).from(bills).where(and(eq(bills.id, rawInput.billId), eq(bills.businessId, input.businessId))).get() ? rawInput.billId : null,
+        paymentKind: rawInput.paymentKind ?? null,
         createdAt: ts,
         updatedAt: ts,
       })
@@ -189,6 +195,9 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
     detail: { vendorId: ai.vendorId, amountMinor: ai.amountMinor, currency: ai.currency, sourceRef: ai.sourceRef, confidence: ai.confidence, flags: ai.flags, missing: ai.missing, notes: ai.notes ?? [], engine: run.engine, model: run.model, toolCalls: run.toolCalls.map((t) => ({ name: t.name, input: JSON.stringify(t.input ?? {}).slice(0, 200), resultPreview: String(t.resultPreview ?? "").slice(0, 200) })) },
   });
 
+  // 1b. A deposit or a balance belongs to a bill: the invoice total, with every part paid against it.
+  linkToBill(db, obligationId, ai, ev);
+
   // 2. Policy
   const outcome = runPolicy(db, obligationId);
 
@@ -269,7 +278,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -324,7 +333,8 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt })),
+    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
+    bill: billInput(db, ob),
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,
@@ -347,6 +357,37 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     .run();
   audit(db, { obligationId, actor: "policy", action: "policy.evaluated", detail: { decision: outcome.decision, rules: outcome.rules } });
   return outcome;
+}
+
+/**
+ * When the agent reads a deposit ("50% deposit USD 425 now, balance on arrival") against a known invoice total,
+ * record the invoice as a bill and link this payment to it as the deposit; a later "pay the balance" links to the
+ * same bill. The agent only files the record: policy then checks the payment against what is open on it.
+ */
+function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: EvidenceItem[]): void {
+  const ob = mustGet(db, obligationId);
+  if (ob.billId || !ob.vendorId || !ob.currency || !ob.amountMinor || !ob.sourceRef) return;
+  // Any payment naming a bill this vendor already has is a payment against it, whatever the request calls itself.
+  const existing = findBill(db, ob.vendorId, ob.sourceRef);
+  let billId = existing && existing.status !== "void" ? existing.id : null;
+  if (!billId && ai.paymentPart?.kind === "deposit") {
+    const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor!);
+    const total = ai.paymentPart.ofTotalMinor ?? evidenced?.amountMinor ?? null;
+    if (!total || total <= ob.amountMinor) return;
+    billId = createBill(db, ob.businessId, "agent", ob.vendorId, { kind: "invoice", reference: ob.sourceRef, totalMinor: total, currency: ob.currency, note: `Recorded from a deposit request (${obligationId})` });
+  }
+  if (!billId) return;
+  const kind = ai.paymentPart?.kind ?? "part";
+  db.update(obligations).set({ billId, paymentKind: kind, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  audit(db, { obligationId, actor: "ai:bills", action: "bill.linked", detail: { billId, kind } });
+}
+
+function billInput(db: Db, ob: typeof obligations.$inferSelect) {
+  if (!ob.billId) return null;
+  const b = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
+  if (!b) return null;
+  const bal = billBalance(db, b.id, ob.id);
+  return { id: b.id, vendorId: b.vendorId, reference: b.reference, kind: b.kind, status: b.status, totalMinor: b.totalMinor, currency: b.currency, coveredMinor: bal.paidMinor + bal.pendingMinor + bal.creditedMinor };
 }
 
 async function quoteAndRoute(db: Db, obligationId: string, vendor: VendorPayoutProfile, amountMinor: number, currency: string, businessCountry: string): Promise<void> {
@@ -838,6 +879,7 @@ function recordSettlement(db: Db, obligationId: string, attemptId: string, rail:
     db.update(paymentAttempts).set({ status: "confirmed", updatedAt: ts }).where(eq(paymentAttempts.id, attemptId)).run();
     transition(db, obligationId, "settled", `rail:${rail}`, "settlement.confirmed", { externalId, feeMinor, receivedMinor, receivedCurrency, explorerUrl });
     queueAccounting(db, obligationId);
+    if (ob.billId) closeIfDone(db, ob.billId);
   });
 }
 

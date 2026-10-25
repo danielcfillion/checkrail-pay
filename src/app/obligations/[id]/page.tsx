@@ -3,6 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBusiness, getObligationDetail, listVendors } from "@/lib/queries";
 import { toBaseMinor } from "@/lib/fx";
+import { billBalance } from "@/lib/engine/bills";
+import { bills as billsTable } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate } from "@/lib/engine/orchestrator";
 import { getDb } from "@/lib/db";
@@ -30,6 +33,10 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const availableRails = d.quotes.filter((q) => q.available).map((q) => q.rail as Rail);
   const caption = o.state === "blocked" && o.blockedReason ? shortReason(o.blockedReason) : undefined;
   const viewer = await getViewer();
+  const bill = o.billId ? (() => {
+    const b = getDb().select().from(billsTable).where(eq(billsTable.id, o.billId!)).get();
+    return b ? { ...b, balance: billBalance(getDb(), b.id) } : null;
+  })() : null;
   const base = getBusiness()?.baseCurrency ?? "USD";
   const baseMinor = o.amountMinor != null && o.currency && o.currency !== base ? toBaseMinor(o.amountMinor, o.currency, base) : null;
   const baseEquivalent = baseMinor != null ? formatMoneySymbol(baseMinor, base) : null;
@@ -257,6 +264,24 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} vendorChoices={vendorChoices} />
           </Panel>
 
+          {bill ? (
+            <Panel title={`Part of ${bill.kind === "advance" ? "advance" : "invoice"} ${bill.reference}`} aside={o.paymentKind ?? "payment"}>
+              <KeyValue
+                rows={[
+                  ["Bill total", formatMoney(bill.totalMinor, bill.currency)],
+                  ["Paid", formatMoney(bill.balance.paidMinor, bill.currency)],
+                  ["On its way or waiting", formatMoney(bill.balance.pendingMinor, bill.currency)],
+                  ...(bill.balance.creditedMinor ? [["Credited", formatMoney(bill.balance.creditedMinor, bill.currency)] as [string, string]] : []),
+                  ["Still open", formatMoney(bill.balance.openMinor, bill.currency)],
+                ]}
+              />
+              {o.vendorId ? (
+                <Link href={`/vendors/${o.vendorId}`} className="link mt-2 inline-block text-xs">
+                  All bills for this vendor
+                </Link>
+              ) : null}
+            </Panel>
+          ) : null}
           {d.settlement ? (
             <Panel title="Settlement" aside={<RailTag rail={d.settlement.rail} />}>
               <KeyValue

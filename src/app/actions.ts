@@ -20,6 +20,7 @@ import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, 
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
 import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/runs";
 import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
+import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -473,6 +474,61 @@ export async function returnBankLineAction(lineId: string, reason: string): Prom
     done();
     done(["/bank-files"]);
     return { ok: true, message: "Recorded as returned. The payment failed and can be retried or cancelled." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Bills: invoices paid in parts, credit notes, advances. */
+
+export async function createBillAction(vendorId: string, bill: { kind: string; reference: string; totalMinor: number; currency: string; dueDate?: string | null; note?: string | null }): Promise<ActionResult & { id?: string }> {
+  try {
+    const id = await withBusiness((db, b, who) => createBill(db, b, who, vendorId, bill));
+    done([`/vendors/${vendorId}`]);
+    return { ok: true, message: "Recorded.", id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function payBillAction(billId: string, amountMinor: number, note?: string): Promise<ActionResult & { id?: string }> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const id = await payBill(db, biz.id, await currentActor(), billId, amountMinor, typeof note === "string" ? note : undefined);
+    done();
+    return { ok: true, message: "Payment request created. It goes through the usual checks.", id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function applyCreditAction(creditBillId: string, billId: string, amountMinor: number): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => applyCredit(db, b, who, creditBillId, billId, amountMinor));
+    done(["/vendors"]);
+    return { ok: true, message: "Credit applied." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: number, note?: string): Promise<ActionResult> {
+  try {
+    const r = await withBusiness((db, b, who) => settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined));
+    done(["/vendors"]);
+    return { ok: true, message: r.owedTo === "vendor" ? "Settled. The overspend is recorded as owed to the vendor." : r.owedTo === "business" ? "Settled. The unspent part is a credit to set against their next bill." : "Settled exactly." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function voidBillAction(billId: string, reason: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => voidBill(db, b, who, billId, typeof reason === "string" ? reason : ""));
+    done(["/vendors"]);
+    return { ok: true, message: "Voided." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

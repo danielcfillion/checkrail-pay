@@ -1,7 +1,7 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
 import { newId } from "../domain/ids";
@@ -51,7 +51,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -132,7 +132,10 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     actor: "system:booking-webhook",
   });
 
-  if (history) await seedLocalCurrency(db);
+  if (history) {
+    await seedLocalCurrency(db);
+    await seedDeposit(db);
+  }
 
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
@@ -154,6 +157,17 @@ async function seedLocalCurrency(db: Db): Promise<void> {
     sourceType: "invoice",
     rawInput: "Hoa don HS-1027 tu Linh Family Homestay (Du Gia): 12 khach x 2 dem x 450.000 VND, tong cong 10.800.000 VND. Departure HG-4D-1004. Chuyen khoan BIDV giup em.",
     evidence: [{ kind: "invoice", label: "Homestay invoice HS-1027", amountMinor: 1_080_000_000, currency: "VND", reference: "HS-1027", excerpt: "Linh Family Homestay, Du Gia. 12 guests x 2 nights x VND 450,000 = VND 10,800,000. Dinner and breakfast included. Departure HG-4D-1004." }],
+    actor: "system:email-ingest",
+  });
+}
+
+/** A deposit: the lodge wants half now and half on arrival. The agent asks for USD 425, not 850, and files the invoice as a bill. */
+async function seedDeposit(db: Db): Promise<void> {
+  await ingestObligation(db, {
+    businessId: DEMO_BUSINESS_ID,
+    sourceType: "invoice",
+    rawInput: "Dao Mountain Lodge invoice INV-DML-1010 for the Cao Bang departure CB-3D-1012: 10 rooms, 2 nights, total USD 850. 50% deposit USD 425 now to hold the rooms, balance on arrival.",
+    evidence: [{ kind: "invoice", label: "Dao Mountain Lodge invoice INV-DML-1010", amountMinor: 85_000, currency: "USD", reference: "INV-DML-1010", excerpt: "Dao Mountain Lodge, Cao Bang. 10 rooms x 2 nights x USD 42.50 = USD 850.00. 50% deposit to confirm, balance on arrival." }],
     actor: "system:email-ingest",
   });
 }

@@ -165,6 +165,8 @@ export interface AiInterpretation {
   missing: string[]; // evidence the agent wants before it would be comfortable
   /** Neutral observations shown to the approver. They never affect policy. */
   notes?: string[];
+  /** The request pays part of a larger invoice: a deposit now, the balance of an earlier deposit, or a part payment. */
+  paymentPart?: { kind: "deposit" | "balance" | "part"; ofTotalMinor: number | null } | null;
 }
 
 export interface PolicyInput {
@@ -185,6 +187,8 @@ export interface PolicyInput {
    * the obligation is in the base currency; null when there is no rate for its currency.
    */
   baseAmountMinor?: number | null;
+  /** The bill this payment settles all or part of, with what other payments and credits already cover. */
+  bill?: { id: string; vendorId: string; reference: string; kind: string; status: string; totalMinor: number; currency: string; coveredMinor: number } | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
   priorSourceRefs: Array<{
     obligationId: string;
@@ -195,6 +199,8 @@ export interface PolicyInput {
     keys?: string[];
     /** ISO time of last update, for the same-amount recency check. */
     updatedAt?: string;
+    /** Bill the earlier obligation paid against: payments on the same bill are parts of one invoice, not duplicates. */
+    billId?: string | null;
   }>;
   /** Business-wide committed payments in base currency over the last 24h, excluding this one. Used by the autopilot daily cap. */
   businessRecentMinor?: number;

@@ -15,30 +15,7 @@ export const MAX_REQUEST_CHARS = 20_000;
 
 export function extractAmount(text: string, defaultCurrency?: string): { amountMinor: number; currency: string; assumedCurrency?: boolean } | null {
   text = text.slice(0, MAX_REQUEST_CHARS);
-  // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". Commas are only thousands separators
-  // (exactly three digits follow), and a number glued to an identifier ("INV-K-77", "HG-4D-0914") is not an
-  // amount. When a request lists several figures prefer, in order: "balance due" / "amount due" / "total" / "=",
-  // else the largest.
-  // Linear by construction: a match cannot start right after a digit, comma or dot (so it never restarts inside a
-  // long run like "000,000,000,..."), and plain digit runs are bounded. The old form was quadratic in the input.
-  const num = "(\\d{1,3}(?:,\\d{3}){1,6}|\\d{1,12})(?:\\.(\\d{1,2}))?";
-  const re = new RegExp(`(?<![A-Za-z0-9,.-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|THB|฿|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|₫|đ|THB|฿|EUR|GBP))(?![A-Za-z0-9-]|[.,]\\d)`, "gi");
-  const found: Array<{ amountMinor: number; currency: string; index: number }> = [];
-  for (const m of text.matchAll(re)) {
-    const symbol = (m[1] ?? m[6] ?? "").toLowerCase();
-    const whole = (m[2] ?? m[4] ?? "").replace(/,/g, "");
-    const frac = m[3] ?? m[5] ?? "";
-    const value = Number.parseFloat(frac ? `${whole}.${frac}` : whole);
-    if (!Number.isFinite(value) || value <= 0) continue;
-    found.push({ amountMinor: Math.round(value * 100), currency: CURRENCY_WORDS[symbol] ?? symbol.toUpperCase(), index: m.index ?? 0 });
-  }
-  // Vietnamese invoices group thousands with dots: "2.500.000 VND", "10.800.000đ". Only for VND, which has no
-  // decimals, so a dot there can never be a decimal point.
-  const vnd = /(?<![A-Za-z0-9,.-])(?:(?:VND|₫)\s?(\d{1,3}(?:\.\d{3}){1,4})|(\d{1,3}(?:\.\d{3}){1,4})\s?(?:VND|₫|đ|đồng|dong))(?![A-Za-z0-9-])/gi;
-  for (const m of text.matchAll(vnd)) {
-    const value = Number((m[1] ?? m[2] ?? "").replace(/\./g, ""));
-    if (Number.isFinite(value) && value > 0) found.push({ amountMinor: value * 100, currency: "VND", index: m.index ?? 0 });
-  }
+  const found = findAmounts(text);
   if (found.length === 0) {
     // Chat shorthand: "send maria 180", "pay him 1,200 today". Only with a verb in front, a plain figure
     // (no identifier glued on), and a default currency to assume. Flagged so confidence drops.
@@ -50,9 +27,71 @@ export function extractAmount(text: string, defaultCurrency?: string): { amountM
   }
   const lead = (f: { index: number }) => text.slice(Math.max(0, f.index - 24), f.index);
   const due = found.find((f) => /(balance due|amount due|net due|please pay|pay)[^0-9$]{0,12}$/i.test(lead(f)));
+  // A deposit request names two figures, the deposit and the total; the deposit is what is asked for now.
+  // An invoice stating its balance due ("less deposit USD 200, balance due USD 480") is asking for the balance.
+  const part = due ? null : depositIn(text, found);
+  if (part) return { amountMinor: part.amountMinor, currency: part.currency };
   const total = due ?? found.find((f) => /(total|=|sum)[^0-9$]{0,12}$/i.test(lead(f)));
   const pick = total ?? found.reduce((a, b) => (b.amountMinor > a.amountMinor ? b : a));
   return { amountMinor: pick.amountMinor, currency: pick.currency };
+}
+
+type Found = { amountMinor: number; currency: string; index: number; length: number };
+
+const DEPOSIT_WORD = /\b(deposit|down ?payment|dat coc|đặt cọc|advance payment)\b/i;
+
+/** The figure a deposit request asks for now: the one next to the word "deposit", or a stated percentage of the total. */
+function depositIn(text: string, found: Found[]): Found | null {
+  if (!DEPOSIT_WORD.test(text) || /\b(less|minus|after|paid|received)\s+(the\s+)?(deposit|down ?payment)\b/i.test(text)) return null;
+  // "deposit USD 425" first; "USD 425 deposit" only if no figure follows the word.
+  const near = found.find((f) => DEPOSIT_WORD.test(text.slice(Math.max(0, f.index - 20), f.index))) ?? found.find((f) => /^\s*(\(?\d{1,2}\s?%\)?\s*)?(deposit|down ?payment)/i.test(text.slice(f.index + f.length, f.index + f.length + 20)));
+  if (near) return near;
+  const pct = text.match(/(\d{1,2})\s?%\s*(?:deposit|down ?payment)/i);
+  if (pct && found.length) {
+    const total = found.reduce((a, b) => (b.amountMinor > a.amountMinor ? b : a));
+    return { ...total, amountMinor: Math.round((total.amountMinor * Number(pct[1])) / 100) };
+  }
+  return null;
+}
+
+/** Is this request a deposit against a larger total, or the balance after one? */
+export function paymentPartOf(text: string, amountMinor: number, currency: string, evidenceTotals: number[]): { kind: "deposit" | "balance" | "part"; ofTotalMinor: number | null } | null {
+  const found = findAmounts(text.slice(0, MAX_REQUEST_CHARS)).filter((f) => f.currency === currency);
+  const largest = Math.max(0, ...found.map((f) => f.amountMinor), ...evidenceTotals);
+  const depositPaid = /\b(less|minus|after|paid|received)\s+(the\s+)?(deposit|down ?payment)\b/i.test(text);
+  if (DEPOSIT_WORD.test(text) && !depositPaid && largest > amountMinor) return { kind: "deposit", ofTotalMinor: largest };
+  if (depositPaid && largest > amountMinor) return { kind: "balance", ofTotalMinor: largest };
+  if (/\b(pay|settle|send)\b[^.\n]{0,20}\b(remaining |the )?balance\b|\bbalance (payment|due|owing)\b|\bremaining balance\b/i.test(text)) return { kind: "balance", ofTotalMinor: largest > amountMinor ? largest : null };
+  if (/\b(part|partial) payment\b/i.test(text) && largest > amountMinor) return { kind: "part", ofTotalMinor: largest };
+  return null;
+}
+
+function findAmounts(text: string): Found[] {
+  // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". Commas are only thousands separators
+  // (exactly three digits follow), and a number glued to an identifier ("INV-K-77", "HG-4D-0914") is not an
+  // amount. When a request lists several figures prefer, in order: "balance due" / "amount due" / "total" / "=",
+  // else the largest.
+  // Linear by construction: a match cannot start right after a digit, comma or dot (so it never restarts inside a
+  // long run like "000,000,000,..."), and plain digit runs are bounded. The old form was quadratic in the input.
+  const num = "(\\d{1,3}(?:,\\d{3}){1,6}|\\d{1,12})(?:\\.(\\d{1,2}))?";
+  const re = new RegExp(`(?<![A-Za-z0-9,.-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|THB|฿|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|₫|đ|THB|฿|EUR|GBP))(?![A-Za-z0-9-]|[.,]\\d)`, "gi");
+  const found: Found[] = [];
+  for (const m of text.matchAll(re)) {
+    const symbol = (m[1] ?? m[6] ?? "").toLowerCase();
+    const whole = (m[2] ?? m[4] ?? "").replace(/,/g, "");
+    const frac = m[3] ?? m[5] ?? "";
+    const value = Number.parseFloat(frac ? `${whole}.${frac}` : whole);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    found.push({ amountMinor: Math.round(value * 100), currency: CURRENCY_WORDS[symbol] ?? symbol.toUpperCase(), index: m.index ?? 0, length: m[0].length });
+  }
+  // Vietnamese invoices group thousands with dots: "2.500.000 VND", "10.800.000đ". Only for VND, which has no
+  // decimals, so a dot there can never be a decimal point.
+  const vnd = /(?<![A-Za-z0-9,.-])(?:(?:VND|₫)\s?(\d{1,3}(?:\.\d{3}){1,4})|(\d{1,3}(?:\.\d{3}){1,4})\s?(?:VND|₫|đ|đồng|dong))(?![A-Za-z0-9-])/gi;
+  for (const m of text.matchAll(vnd)) {
+    const value = Number((m[1] ?? m[2] ?? "").replace(/\./g, ""));
+    if (Number.isFinite(value) && value > 0) found.push({ amountMinor: value * 100, currency: "VND", index: m.index ?? 0, length: m[0].length });
+  }
+  return found;
 }
 
 export function extractReference(text: string): string | null {
@@ -145,9 +184,12 @@ export function interpretWithRules(input: {
 
   // Compare against evidence
   const evidenced = evidence.filter((e) => e.amountMinor != null);
+  const paymentPart = money ? paymentPartOf(rawInput, money.amountMinor, money.currency, evidenced.filter((e) => e.currency === money.currency).map((e) => e.amountMinor!)) : null;
+  if (paymentPart?.kind === "deposit" && paymentPart.ofTotalMinor) adopted.push(`Deposit of ${fmt(money!.amountMinor, money!.currency)} against a total of ${fmt(paymentPart.ofTotalMinor, money!.currency)}; the balance is a separate payment`);
+  else if (paymentPart?.kind === "balance") adopted.push("Balance payment: checked against what is still open on the invoice");
   if (money && evidenced.length > 0) {
     const same = evidenced.find((e) => e.currency === money.currency && e.amountMinor === money.amountMinor);
-    if (same) {
+    if (same || (paymentPart && evidenced.some((e) => e.currency === money.currency && (e.amountMinor ?? 0) > money.amountMinor))) {
       confidence += 5;
     } else {
       const byRef = ref ? evidenced.find((e) => e.reference && e.reference.toUpperCase() === ref) : undefined;
@@ -197,6 +239,7 @@ export function interpretWithRules(input: {
     flags,
     missing,
     notes: adopted,
+    paymentPart,
   };
 }
 

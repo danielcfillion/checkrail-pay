@@ -105,6 +105,8 @@ export const obligations = sqliteTable(
     id: text("id").primaryKey(),
     businessId: text("business_id").notNull(),
     vendorId: text("vendor_id"),
+    billId: text("bill_id"), // the bill this pays all or part of
+    paymentKind: text("payment_kind"), // full | deposit | balance | part | advance
     state: text("state").notNull(), // ObligationState
     sourceType: text("source_type").notNull(), // invoice | job_completion | operator_instruction | booking
     sourceRef: text("source_ref"), // e.g. INV-2026-0142, JOB-HG-4D-0921
@@ -351,3 +353,38 @@ export const bankBatchLines = sqliteTable(
   },
   (t) => [uniqueIndex("bank_batch_lines_key_unique").on(t.idempotencyKey), index("bank_batch_lines_batch").on(t.batchId)]
 );
+
+/**
+ * What the business owes a vendor, apart from any one payment: an invoice (paid in one go, or as a deposit and a
+ * balance), a credit note the vendor issued, or a cash advance given before a trip and settled against receipts.
+ * A bill's open amount is its total less what payments against it have committed and less credits applied to it.
+ */
+export const bills = sqliteTable(
+  "bills",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    vendorId: text("vendor_id").notNull(),
+    kind: text("kind").notNull(), // invoice | credit_note | advance
+    reference: text("reference").notNull(),
+    totalMinor: integer("total_minor").notNull(),
+    currency: text("currency").notNull(),
+    billDate: text("bill_date"),
+    dueDate: text("due_date"),
+    status: text("status").notNull(), // open | closed | void
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("bills_vendor").on(t.vendorId), uniqueIndex("bills_vendor_ref_kind_unique").on(t.vendorId, t.reference, t.kind)]
+);
+
+/** Part of a credit note (or an over-advance the vendor owes back) set against a bill. */
+export const billAllocations = sqliteTable("bill_allocations", {
+  id: text("id").primaryKey(),
+  creditBillId: text("credit_bill_id").notNull(),
+  billId: text("bill_id").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});

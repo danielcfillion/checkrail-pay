@@ -57,6 +57,13 @@
       "when": 1791600000000,
       "tag": "0007_local_rails",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791700000000,
+      "tag": "0008_bills",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,10 @@ import { getDb } from "@/lib/db";
 import { getViewer } from "@/lib/viewer";
 import { changesFor, describeChange, verifyBarrier, VERIFY_METHOD_LABEL, type VerifyMethod } from "@/lib/engine/vendors";
 import { BlockToggle, InviteLink, PendingChange } from "@/components/VendorControls";
+import { BillsPanel } from "@/components/BillsPanel";
+import { vendorBills } from "@/lib/engine/bills";
+import { obligations as obligationsTable } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +32,9 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
   const pendingRows = history.filter((c) => c.status === "pending");
   const canVerify = !viewer || viewer.can("verify_vendor");
   const canEdit = !viewer || viewer.can("edit_vendor");
+  const vb = vendorBills(db, v.id);
+  const pays = db.select({ id: obligationsTable.id, state: obligationsTable.state, amountMinor: obligationsTable.amountMinor, paymentKind: obligationsTable.paymentKind, billId: obligationsTable.billId }).from(obligationsTable).where(eq(obligationsTable.vendorId, v.id)).all();
+  const billRows = vb.bills.map((b) => ({ id: b.id, kind: b.kind, reference: b.reference, totalMinor: b.totalMinor, currency: b.currency, dueDate: b.dueDate, status: b.status, note: b.note, balance: b.balance, payments: pays.filter((p) => p.billId === b.id && p.state !== "cancelled") }));
 
   return (
     <>
@@ -127,9 +134,14 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
             </Panel>
           ) : null}
         </div>
-        <div>
+        <div className="space-y-6">
+          <Panel title="Bills and balance" aside="deposits, credits, advances">
+            <BillsPanel vendorId={v.id} rows={billRows} position={vb.position} canIngest={!viewer || viewer.can("ingest")} canAmend={!viewer || viewer.can("amend")} defaultCurrency={v.bankCurrency && ["USD", "VND", "PHP", "THB"].includes(v.bankCurrency) && v.bankAccountEnc ? v.bankCurrency : "USD"} />
+          </Panel>
+          <div>
           <h2 className="mb-3 font-medium">Obligations</h2>
           {d.obligations.length ? <ObligationTable rows={d.obligations} /> : <EmptyState title="Nothing yet for this vendor" body="Obligations appear here once a request names them." />}
+          </div>
         </div>
       </div>
     </>

@@ -110,9 +110,22 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     );
   }
 
-  // R4: amount matches evidence within tolerance
+  // R4: amount matches evidence within tolerance. A payment against a bill (deposit, balance, part) is checked against
+  // what is still open on the bill instead: never more than the invoice total less what is already paid or credited.
   const evidenced = evidence.filter((e) => e.amountMinor != null && e.currency);
-  if (hasAmount && evidenced.length > 0) {
+  const bill = input.bill ?? null;
+  if (hasAmount && bill) {
+    const open = Math.max(0, bill.totalMinor - bill.coveredMinor);
+    const slack = Math.floor((bill.totalMinor * policy.amountToleranceBps) / 10_000);
+    if (bill.vendorId !== obligation.vendorId) rules.push(block("amount_matches_evidence", `Bill ${bill.reference} belongs to another vendor`));
+    else if (bill.status !== "open") rules.push(block("amount_matches_evidence", `Bill ${bill.reference} is ${bill.status}; nothing more is owed on it`));
+    else if (bill.currency !== obligation.currency) rules.push(block("amount_matches_evidence", `Bill ${bill.reference} is in ${bill.currency}, this payment is in ${obligation.currency}`));
+    else if (obligation.amountMinor! > open + slack) rules.push(block("amount_matches_evidence", `Requested ${fmt(obligation.amountMinor!, obligation.currency!)} but only ${fmt(open, bill.currency)} is still open on ${bill.reference} (total ${fmt(bill.totalMinor, bill.currency)}, ${fmt(bill.coveredMinor, bill.currency)} already paid or credited)`));
+    else {
+      const left = Math.max(0, open - obligation.amountMinor!);
+      rules.push(pass("amount_matches_evidence", left > 0 ? `Part of ${bill.reference}: ${fmt(obligation.amountMinor!, bill.currency)} of ${fmt(bill.totalMinor, bill.currency)}; ${fmt(left, bill.currency)} left after this` : `Settles ${bill.reference} in full (${fmt(bill.totalMinor, bill.currency)}${bill.coveredMinor ? `, ${fmt(bill.coveredMinor, bill.currency)} already paid or credited` : ""})`));
+    }
+  } else if (hasAmount && evidenced.length > 0) {
     const sameCurrency = evidenced.filter((e) => e.currency === obligation.currency);
     if (sameCurrency.length === 0) {
       rules.push(
@@ -162,7 +175,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   //      the same job re-invoiced under a new number;
   //   c) same vendor, same amount, settled in the last 30 days with no shared identifier: a warning that forces approval.
   {
-    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed");
+    // Earlier payments on the same bill are its other parts; the bill check above stops them adding up to too much.
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && !(bill && p.billId === bill.id));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(obligation.sourceRef.toLowerCase());
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && p.sourceRef.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
