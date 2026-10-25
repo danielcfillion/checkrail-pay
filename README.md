@@ -188,7 +188,7 @@ PayPal sandbox and Claude have both been run live this way (see Honest status). 
     npm run lint
     npm run build
 
-298 tests in 36 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+301 tests in 37 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
 
 ## Project layout
 
