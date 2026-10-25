@@ -188,7 +188,10 @@ export class PayPalRail implements PaymentRail {
     if (res.transportError || !res.ok) return { status: "pending", externalStatus: res.transportError ? "no answer" : `HTTP ${res.status}`, raw: res.json };
     const j = res.json as { batch_header?: { batch_status?: string }; items?: Array<{ transaction_status?: string }> };
     const batch = j.batch_header?.batch_status ?? "UNKNOWN";
-    const item = j.items?.[0]?.transaction_status ?? batch;
+    // The item is what reached the recipient. A batch can say SUCCESS while its item is still unclaimed, so without
+    // item detail the payout is not confirmed: keep polling.
+    const item = j.items?.[0]?.transaction_status;
+    if (!item) return { status: "pending", externalStatus: `${batch}/no item detail`, raw: j };
     const externalStatus = `${batch}/${item}`;
     if (ATTENTION_ITEM[item]) return { status: "exception", message: ATTENTION_ITEM[item], externalStatus, raw: j };
     const confirmed = item === "SUCCESS";

@@ -66,6 +66,11 @@ export const config = {
 export function isLiveRails(): boolean {
   return config.rails.mode === "live";
 }
+
+/** Real money: live rails pointed at PayPal live or the Stellar public network. Sandbox and testnet are not real money. */
+export function isRealMoney(): boolean {
+  return isLiveRails() && (config.rails.paypal.env === "live" || config.rails.stellar.network === "public");
+}
 export function isLiveAi(): boolean {
   return config.ai.mode === "live" && config.ai.anthropicApiKey.length > 0;
 }

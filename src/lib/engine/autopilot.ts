@@ -178,6 +178,9 @@ export function setAutonomy(db: Db, businessId: string, actor: string, change: A
   };
   if (change.autopilotPerPaymentCapMinor !== undefined) next.autopilotPerPaymentCapMinor = num(change.autopilotPerPaymentCapMinor, "Per-payment cap", 100_000_000);
   if (change.autopilotDailyCapMinor !== undefined) next.autopilotDailyCapMinor = num(change.autopilotDailyCapMinor, "Daily cap", 1_000_000_000);
+  // A cap of zero would read as "no limit" to some people and "nothing" to others. Refuse it; policy also fails closed.
+  if ((next.autopilotPerPaymentCapMinor ?? 0) < 100 || (next.autopilotDailyCapMinor ?? 0) < 100) throw new Error("Autopilot caps must be at least 1.00; to stop the agent sending, lower the autonomy level or pause it");
+  if ((next.autopilotPerPaymentCapMinor ?? 0) > (next.autopilotDailyCapMinor ?? 0)) throw new Error("The per-payment cap cannot be larger than the daily cap");
   if (change.autopilotCancelWindowSeconds !== undefined) next.autopilotCancelWindowSeconds = num(change.autopilotCancelWindowSeconds, "Cancel window", 86_400);
   writePolicy(db, businessId, next);
   if (effectiveAutonomy(next) !== "autopilot") standDown(db, businessId, actor, "autonomy lowered");

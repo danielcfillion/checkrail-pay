@@ -44,7 +44,8 @@ export function AutonomyControl({ view }: { view: AutonomyView }) {
   const { toast } = useToast();
   const router = useRouter();
 
-  const capsValid = [perPayment, daily, minutes].every((v) => v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0);
+  const isNum = (v: string) => v.trim() !== "" && Number.isFinite(Number(v));
+  const capsValid = isNum(perPayment) && isNum(daily) && isNum(minutes) && Number(perPayment) >= 1 && Number(daily) >= 1 && Number(perPayment) <= Number(daily) && Number(minutes) >= 1;
   const dirty = level !== view.level || toMinor(perPayment) !== view.perPaymentCapMinor || toMinor(daily) !== view.dailyCapMinor || Math.round(Number(minutes) * 60) !== view.cancelWindowSeconds;
   const raising = level === "autopilot" && view.level !== "autopilot";
 
@@ -165,7 +166,7 @@ export function AutonomyControl({ view }: { view: AutonomyView }) {
             {view.paused ? "Resume autopilot" : "Pause autopilot"}
           </button>
         ) : null}
-        {!capsValid ? <span className="text-blocked">Caps must be numbers, zero or more.</span> : null}
+        {!capsValid ? <span className="text-blocked">Caps must be at least 1.00, the per-payment cap no larger than the daily cap, and the cancel window at least 1 minute.</span> : null}
       </div>
     </div>
   );

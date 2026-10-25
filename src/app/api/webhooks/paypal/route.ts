@@ -21,12 +21,40 @@ import { config } from "@/lib/config";
  * In mock mode there is no signature to check and nothing real to confirm, so the route
  * does not exist: a hosted demo running on mocks must not carry an open write endpoint.
  */
+const MAX_WEBHOOK_BYTES = 64 * 1024;
+
+/** Read at most `limit` bytes of the body; null if it is longer. */
+async function readLimited(req: Request, limit: number): Promise<string | null> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+}
+
 export async function POST(req: Request) {
   // Tests set CHECKRAIL_ALLOW_MOCK_WEBHOOK=1 to exercise the route against the mock rail. Never set it on a hosted demo.
   if (config.rails.mode !== "live" && process.env.CHECKRAIL_ALLOW_MOCK_WEBHOOK !== "1") return NextResponse.json({ error: "not found" }, { status: 404 });
-  const raw = await req.text();
   const headers: Record<string, string> = {};
   req.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
+  // Cheap refusals before reading the body or calling PayPal: PayPal's signature headers must be present in live
+  // mode, and no PayPal event is anywhere near 64 KB.
+  if (config.rails.mode === "live" && ["paypal-transmission-id", "paypal-transmission-sig", "paypal-cert-url", "paypal-auth-algo", "paypal-transmission-time"].some((h) => !headers[h])) {
+    return NextResponse.json({ error: "signature verification failed" }, { status: 400 });
+  }
+  if (Number(headers["content-length"] ?? 0) > MAX_WEBHOOK_BYTES) return NextResponse.json({ error: "too large" }, { status: 413 });
+  const raw = await readLimited(req, MAX_WEBHOOK_BYTES);
+  if (raw === null) return NextResponse.json({ error: "too large" }, { status: 413 });
   const db = getDb();
 
   if (config.rails.mode === "live") {

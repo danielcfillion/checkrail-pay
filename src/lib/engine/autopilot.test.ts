@@ -255,3 +255,25 @@ describe("pause and cancel", () => {
     expect(attempts).toHaveLength(1);
   });
 });
+
+describe("autopilot caps fail closed (security audit F2)", () => {
+  it("a cap of zero is refused, and a per-payment cap above the daily cap is refused", async () => {
+    const db = await fresh("autopilot");
+    expect(() => setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autopilotPerPaymentCapMinor: 0 })).toThrow(/at least 1.00/);
+    expect(() => setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autopilotDailyCapMinor: 0 })).toThrow(/at least 1.00/);
+    expect(() => setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autopilotPerPaymentCapMinor: 300_000, autopilotDailyCapMinor: 200_000 })).toThrow(/per-payment cap/);
+  });
+  it("a stored policy with no caps sends nothing on its own", async () => {
+    const { evaluatePolicy } = await import("../domain/policy");
+    const { DEFAULT_POLICY } = await import("../domain/types");
+    const out = evaluatePolicy({ ...DEFAULT_POLICY, autonomy: "autopilot", autopilotPerPaymentCapMinor: 0, autopilotDailyCapMinor: 0 }, {
+      obligation: { id: "o", amountMinor: 18_000, currency: "USD", sourceRef: "JOB-1", vendorId: "v" },
+      vendor: { id: "v", name: "Maria Santos", country: "PH", preferredRail: null, paypalEmail: "m@example.com", stellarAccount: null, bankCountry: "PH", bankCurrency: "PHP", bankLabel: "x", verifiedAt: "2026-08-14T00:00:00.000Z", detailsHash: "h" } as never,
+      evidence: [{ id: "e1", kind: "job_sheet", label: "Trip sheet JOB-1", amountMinor: 18_000, currency: "USD", reference: "JOB-1", excerpt: "Lead guide Maria Santos", provenance: "system" }],
+      ai: { vendorName: "Maria Santos", vendorId: "v", amountMinor: 18_000, currency: "USD", description: "", sourceRef: "JOB-1", dueDate: null, summary: "", confidence: 92, flags: [], missing: [] },
+      businessCountry: "US", baseCurrency: "USD", priorSourceRefs: [], approvalsCount: 0,
+    });
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons[0]).toMatch(/no per-payment or daily cap/);
+  });
+});

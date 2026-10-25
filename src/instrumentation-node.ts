@@ -2,6 +2,7 @@ import { desc, like } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { auditEntries } from "@/lib/db/schema";
 import { runAutopilot } from "@/lib/engine/autopilot";
+import { purgeUnlinkedUploads } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import { isLiveRails } from "@/lib/config";
 
@@ -17,6 +18,11 @@ export function startHeartbeat(): void {
   g.__checkrailSeededAt = new Date().toISOString();
   g.__checkrailHeartbeat = setInterval(() => {
     runAutopilot(getDb()).catch((e) => console.error("[autopilot] pass failed:", (e as Error).message));
+    try {
+      purgeUnlinkedUploads(getDb());
+    } catch (e) {
+      console.error("[uploads] purge failed:", (e as Error).message);
+    }
     if (idleMinutes > 0 && !isLiveRails()) {
       try {
         const last = getDb().select({ at: auditEntries.createdAt }).from(auditEntries).where(like(auditEntries.actor, "user:%")).orderBy(desc(auditEntries.seq)).limit(1).get();

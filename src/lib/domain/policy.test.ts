@@ -243,3 +243,19 @@ describe("jobKeys catches a re-issued invoice", () => {
     expect(jobKeys("INV-TAM-0835").some((k) => original.includes(k))).toBe(false);
   });
 });
+
+describe("autopilot holds what a person should see first", () => {
+  const auto = { ...DEFAULT_POLICY, autonomy: "autopilot" as const, autopilotPerPaymentCapMinor: 50_000, autopilotDailyCapMinor: 200_000 };
+  it("the first payment to a vendor waits for a person", () => {
+    const out = evaluatePolicy(auto, base({ vendorSettledMinors: [] }));
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons[0]).toMatch(/First payment/);
+  });
+  it("an amount three times the vendor's usual waits for a person; a normal one goes", () => {
+    expect(evaluatePolicy(auto, base({ vendorSettledMinors: [5_000, 6_000, 5_500] })).decision).toBe("require_approval");
+    expect(evaluatePolicy(auto, base({ vendorSettledMinors: [17_000, 18_000, 19_000] })).decision).toBe("auto_execute");
+  });
+  it("on Assist the same payment is pre-approved as before", () => {
+    expect(evaluatePolicy({ ...DEFAULT_POLICY, autonomy: "assist" }, base({ vendorSettledMinors: [] })).decision).toBe("auto_execute");
+  });
+});

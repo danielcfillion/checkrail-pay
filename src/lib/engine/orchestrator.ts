@@ -34,7 +34,52 @@ export interface IngestInput {
   actor?: string;
 }
 
-export async function ingestObligation(db: Db, input: IngestInput): Promise<string> {
+const SOURCE_TYPES: readonly SourceType[] = ["invoice", "job_completion", "operator_instruction", "booking"];
+const EVIDENCE_KINDS = ["contract", "booking", "job_sheet", "invoice", "message", "photo", "receipt", "purchase_order"];
+
+/**
+ * Validate an ingest request at the boundary. Server actions receive whatever the client sends, so every field is
+ * checked: known source type, at most 20 evidence rows, bounded text, whole non-negative amounts, ISO currency codes.
+ */
+export function validateIngest(input: IngestInput): IngestInput {
+  if (!SOURCE_TYPES.includes(input.sourceType)) throw new Error("Unknown source type");
+  if (typeof input.rawInput !== "string" || input.rawInput.trim().length === 0) throw new Error("The request text is empty");
+  if (input.rawInput.length > 20_000) throw new Error("The request text is longer than 20,000 characters; attach the document instead");
+  const ev = input.evidence ?? [];
+  if (!Array.isArray(ev) || ev.length > 20) throw new Error("At most 20 evidence records per request");
+  const str = (v: unknown, name: string, max: number, required = false): string | null => {
+    if (v == null || v === "") {
+      if (required) throw new Error(`Evidence ${name} is required`);
+      return null;
+    }
+    if (typeof v !== "string") throw new Error(`Evidence ${name} must be text`);
+    if (v.length > max) throw new Error(`Evidence ${name} is longer than ${max} characters`);
+    return v;
+  };
+  const evidence = ev.map((e) => {
+    if (!e || typeof e !== "object") throw new Error("Invalid evidence record");
+    const amountMinor = e.amountMinor == null ? null : e.amountMinor;
+    if (amountMinor !== null && !(Number.isSafeInteger(amountMinor) && amountMinor >= 0)) throw new Error("Evidence amounts must be whole minor units, zero or more");
+    const currency = e.currency == null || e.currency === "" ? null : String(e.currency).toUpperCase();
+    if (currency !== null && !/^[A-Z]{3}$/.test(currency)) throw new Error("Evidence currency must be a three-letter code");
+    const kind = String(e.kind ?? "");
+    if (!EVIDENCE_KINDS.includes(kind)) throw new Error(`Unknown evidence kind ${kind.slice(0, 20)}`);
+    return {
+      kind,
+      label: str(e.label, "label", 200, true)!,
+      amountMinor,
+      currency,
+      reference: str(e.reference, "reference", 80),
+      excerpt: str(e.excerpt, "excerpt", 4000),
+      provenance: e.provenance,
+      attachmentId: e.attachmentId == null ? null : str(e.attachmentId, "attachment", 64),
+    };
+  });
+  return { ...input, evidence };
+}
+
+export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<string> {
+  const input = validateIngest(rawInput);
   const id = newId("obl");
   const ts = now();
   // One document backs one payment. Re-using it would move it off the first obligation and erase the text that
@@ -44,43 +89,47 @@ export async function ingestObligation(db: Db, input: IngestInput): Promise<stri
     const att = db.select({ name: attachments.name, obligationId: attachments.obligationId }).from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
     if (att?.obligationId) throw new Error(`Document ${att.name} is already attached to another payment; upload it again if it really backs this one too`);
   }
-  db.insert(obligations)
-    .values({
-      id,
-      businessId: input.businessId,
-      vendorId: null,
-      state: "drafted",
-      sourceType: input.sourceType,
-      sourceRef: input.sourceRef ?? null,
-      rawInput: input.rawInput,
-      createdAt: ts,
-      updatedAt: ts,
-    })
-    .run();
-  audit(db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
-  for (const e of input.evidence ?? []) {
-    let provenance: string = input.evidenceSource ?? "system";
-    let attachmentId: string | null = null;
-    if (e.attachmentId) {
-      const att = db.select().from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
-      if (att) {
-        // One document backs one payment. Re-using it would move it off the first obligation and erase the text its duplicate check reads.
-        attachmentId = att.id;
-        // "document" only when every field is what the reader extracted: figures, reference, label and excerpt. Policy reads the
-        // label and excerpt to bind the payee, so an edited excerpt is the operator's claim, not the document's.
-        const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null; label?: string; excerpt?: string | null }>;
-        const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? "").replace(/\s+/g, " ").trim() === (b ?? "").replace(/\s+/g, " ").trim();
-        const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase() && same(p.label, e.label) && same(p.excerpt, e.excerpt));
-        // A .txt file is as easy to type as the form itself, so it never counts as an independent document.
-        provenance = untouched && att.mimeType !== "text/plain" ? "document" : "operator";
-        db.update(attachments).set({ obligationId: id }).where(eq(attachments.id, att.id)).run();
+  // The obligation, its evidence and the attachment links are written together or not at all: a bad row must not
+  // leave an orphan draft holding an attachment that can then never be used again.
+  db.transaction((tx) => {
+    tx.insert(obligations)
+      .values({
+        id,
+        businessId: input.businessId,
+        vendorId: null,
+        state: "drafted",
+        sourceType: input.sourceType,
+        sourceRef: input.sourceRef ?? null,
+        rawInput: input.rawInput,
+        createdAt: ts,
+        updatedAt: ts,
+      })
+      .run();
+    audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
+    for (const e of input.evidence ?? []) {
+      let provenance: string = input.evidenceSource ?? "system";
+      let attachmentId: string | null = null;
+      if (e.attachmentId) {
+        const att = tx.select().from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
+        if (att) {
+          // One document backs one payment. Re-using it would move it off the first obligation and erase the text its duplicate check reads.
+          attachmentId = att.id;
+          // "document" only when every field is what the reader extracted: figures, reference, label and excerpt. Policy reads the
+          // label and excerpt to bind the payee, so an edited excerpt is the operator's claim, not the document's.
+          const proposed = JSON.parse(att.proposedJson) as Array<{ amountMinor: number | null; currency: string | null; reference: string | null; label?: string; excerpt?: string | null }>;
+          const same = (a: string | null | undefined, b: string | null | undefined) => (a ?? "").replace(/\s+/g, " ").trim() === (b ?? "").replace(/\s+/g, " ").trim();
+          const untouched = proposed.some((p) => p.amountMinor === e.amountMinor && (p.currency ?? null) === (e.currency ?? null) && (p.reference ?? null)?.toUpperCase() === (e.reference ?? null)?.toUpperCase() && same(p.label, e.label) && same(p.excerpt, e.excerpt));
+          // A .txt file is as easy to type as the form itself, so it never counts as an independent document.
+          provenance = untouched && att.mimeType !== "text/plain" ? "document" : "operator";
+          tx.update(attachments).set({ obligationId: id }).where(eq(attachments.id, att.id)).run();
+        }
       }
+      tx.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance, attachmentId, createdAt: ts }).run();
     }
-    db.insert(evidenceTable).values({ id: newId("evd"), obligationId: id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance, attachmentId, createdAt: ts }).run();
-  }
-  if ((input.evidence ?? []).length > 0) {
-    audit(db, { obligationId: id, actor: input.actor ?? "system", action: "evidence.attached", detail: { count: input.evidence!.length, labels: input.evidence!.map((e) => e.label) } });
-  }
+    if ((input.evidence ?? []).length > 0) {
+      audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "evidence.attached", detail: { count: input.evidence!.length, labels: input.evidence!.map((e) => e.label) } });
+    }
+  });
   await processObligation(db, id);
   return id;
 }
@@ -190,8 +239,20 @@ function moveTo(db: Db, obligationId: string, target: ObligationState, outcome: 
 }
 
 /** Hash of the fields that decide where a payment lands. Same parts as the seed uses for vendors.detailsHash. */
-function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null }): string {
+export function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null }): string {
   return hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]);
+}
+
+/** Names of other vendors in the same business paid to the same PayPal email, Stellar account or bank account. */
+function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
+  const norm = (x: string | null) => (x ?? "").trim().toLowerCase();
+  return db
+    .select()
+    .from(vendors)
+    .where(and(eq(vendors.businessId, v.businessId), ne(vendors.id, v.id)))
+    .all()
+    .filter((o) => (norm(v.paypalEmail) && norm(o.paypalEmail) === norm(v.paypalEmail)) || (norm(v.stellarAccount) && norm(o.stellarAccount) === norm(v.stellarAccount)) || (norm(v.bankLabel) && norm(o.bankLabel) === norm(v.bankLabel) && norm(o.bankCountry) === norm(v.bankCountry)))
+    .map((o) => o.name);
 }
 
 export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
@@ -258,7 +319,9 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,
+    sharedPayoutWith: vendorRow ? sharedPayout(db, vendorRow) : [],
     requestText: ob.rawInput,
+    vendorSettledMinors: prior.filter((p) => p.state === "settled" && p.amountMinor != null).map((p) => p.amountMinor!),
     knownVendorNames: db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, ob.businessId)).all(),
     approvalsCount,
     vendorRecentMinor,
@@ -399,6 +462,8 @@ export async function amendObligation(db: Db, obligationId: string, actor: strin
   const ob = mustGet(db, obligationId);
   if (!["blocked", "needs_evidence", "awaiting_approval", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
   const patch = validateAmendPatch(db, ob.businessId, rawPatch);
+  // Changing the payee of an obligation that already has one is not a correction, it is a different payment.
+  if (patch.vendorId && ob.vendorId && patch.vendorId !== ob.vendorId) throw new Error("This payment already has a payee; cancel it and create a new request for the other vendor");
   // The human's values are now authoritative; drop agent flags about the field that was corrected.
   // Approvals given before the correction were for different numbers; they no longer count.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
@@ -459,7 +524,10 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   const vendor = toProfile(vendorRow);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
   const adapter = getRails()[rail];
-  const refPart = safeRefForMemo(ob.sourceRef ?? obligationId).slice(0, 19); // memo is `ref + space + 8 key chars`, 28 max
+  // The recipient sees the memo. Use the reference only when an attached record carries it too, so text the agent or
+  // a document made up cannot be sent to the payee; otherwise the obligation id. Memo is `ref + space + 8 key chars`, 28 max.
+  const boundRef = ob.sourceRef && listEvidence(db, obligationId).some((e) => e.reference && e.reference.toUpperCase() === ob.sourceRef!.toUpperCase()) ? ob.sourceRef : null;
+  const refPart = safeRefForMemo(boundRef ?? obligationId).slice(0, 19);
 
   // Start: state check + attempt row + CAS transition, atomically.
   const started = db.transaction(
@@ -484,6 +552,8 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
         tx.update(obligations).set({ selectedRail: opts.rail, routeReason: `Operator override by ${opts.actor}`, updatedAt: ts }).where(eq(obligations.id, obligationId)).run();
         audit(tx as unknown as Db, { obligationId, actor: opts.actor, action: "route.overridden", detail: { from: ob.selectedRail, to: opts.rail } });
       }
+      // Whoever starts this payment, any autopilot release scheduled for it is spent. A later retry must not inherit it.
+      tx.update(obligations).set({ releaseAt: null }).where(eq(obligations.id, obligationId)).run();
       transition(tx as unknown as Db, obligationId, "execution_pending", opts.actor, "execution.started", { attemptId, rail, mode: adapter.mode, idempotencyKey: key });
       return { attemptId, key, memo: fullMemo };
     },
@@ -656,7 +726,7 @@ export function retryFailed(db: Db, obligationId: string, actor: string): void {
   const current = payoutHashOf(vendorRow);
   if (current !== vendorRow.detailsHash) throw new Error("Vendor payout details were edited without re-verification; verify the vendor first");
   if (ob.payoutHash && ob.payoutHash !== current) throw new Error("Vendor payout details changed since approval; review and approve this payment again");
-  db.update(obligations).set({ payoutHash: current, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  db.update(obligations).set({ payoutHash: current, releaseAt: null, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   transition(db, obligationId, "approved", actor, "execution.retry_requested", { payoutHash: current });
 }
 
@@ -672,7 +742,11 @@ export async function confirmSettlement(db: Db, obligationId: string, source = "
   const adapter = getRails()[rail];
   const status = await adapter.getStatus(attempt.externalId);
   db.update(paymentAttempts).set({ externalStatus: status.externalStatus, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
-  audit(db, { obligationId, actor: `rail:${rail}`, action: `settlement.checked:${source}`, detail: { status: status.status, externalStatus: status.externalStatus } });
+  // Audit a check only when it learned something: polling an unclaimed payout every 15 seconds for 30 days
+  // otherwise writes thousands of identical rows.
+  if (attempt.externalStatus !== status.externalStatus || source !== "autopilot") {
+    audit(db, { obligationId, actor: `rail:${rail}`, action: `settlement.checked:${source}`, detail: { status: status.status, externalStatus: status.externalStatus } });
+  }
   if (status.status === "confirmed") {
     if (resolvingUnknown) {
       db.update(paymentAttempts).set({ status: "submitted", updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();

@@ -189,6 +189,10 @@ export interface PolicyInput {
   businessRecentMinor?: number;
   /** Fingerprints (see warningFingerprint) of the warnings the current approvals were given over. A bare rule id, from approvals made before fingerprints, covers every warning of that rule. Undefined means unknown (older approvals): every warning counts as seen. */
   acknowledgedWarnings?: string[];
+  /** Other vendors of this business whose payout destination (PayPal email, Stellar account, bank account) is the same as this vendor's. */
+  sharedPayoutWith?: string[];
+  /** Amounts (base currency, minor units) of this vendor's earlier settled payments. Autopilot holds a first payment or an unusual amount. */
+  vendorSettledMinors?: number[];
   /** The raw request text (message, email body). Used to check the request names the payee. */
   requestText?: string;
   /** Every vendor the business knows, for deciding whether a record names the payee or someone else. */

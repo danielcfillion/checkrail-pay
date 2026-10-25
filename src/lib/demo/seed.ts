@@ -1,3 +1,4 @@
+import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments } from "../db/schema";
@@ -19,7 +20,8 @@ export const DEMO_BUSINESS_ID = "biz_ridgeline";
 /** Live PayPal test: set DEMO_PAYPAL_RECIPIENT to a sandbox Personal account email so Maria's payout lands somewhere real. */
 const MARIA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT || "maria.santos@example.com";
 /** Rosa is the autopilot shot in the video (PayPal only, under the cap), so in a live take her payout must land somewhere real too. */
-const ROSA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT || "rosa.v@example.com";
+// A second sandbox account: two vendors paid to one account is itself a warning (payout_shared), which would hold the shot.
+const ROSA_PAYPAL = process.env.DEMO_PAYPAL_RECIPIENT_ROSA || "rosa.v@example.com";
 const STELLAR_DEMO_RECIPIENT = process.env.DEMO_STELLAR_RECIPIENT ?? "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYM9F3H6VCC4DEMONSTRATION";
 
 export const DEMO_VENDORS = [
@@ -35,7 +37,18 @@ export const DEMO_VENDORS = [
   { id: "ven_tam", name: "Tam Motorbike Rental", role: "driver", country: "VN", email: "tam.rental@example.com", preferredRail: null, paypalEmail: "tam.rental@example.com", stellarAccount: null, bankCountry: "VN", bankCurrency: "VND", bankLabel: "Techcombank ****3391", notes: "Ha Giang bike fleet. Weekly rental invoices." },
 ] as const;
 
+/**
+ * The demo seed deletes every table. Refuse wherever that could destroy real records: real-money configuration
+ * (PayPal live, Stellar public), or a database holding a business other than the demo one.
+ */
+export function assertSafeToReset(db: Db): void {
+  if (isRealMoney()) throw new Error("Refusing to reset: PAYPAL_ENV=live or STELLAR_NETWORK=public is set. The demo seed deletes every table; use a separate demo database.");
+  const other = db.select({ id: businesses.id }).from(businesses).all().filter((b) => b.id !== DEMO_BUSINESS_ID);
+  if (other.length) throw new Error(`Refusing to reset: this database holds a business other than the demo (${other[0].id}). The demo seed deletes every table.`);
+}
+
 export function resetDemo(db: Db): void {
+  assertSafeToReset(db);
   for (const t of [auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendors, businesses]) {
     db.delete(t).run();
   }
@@ -203,7 +216,17 @@ function backdate(db: Db, obligationId: string, days: number): void {
     db.update(paymentAttempts).set({ createdAt: shift(p.createdAt), updatedAt: shift(p.updatedAt) }).where(eq(paymentAttempts.id, p.id)).run();
   }
   for (const a of db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, obligationId)).all()) {
-    db.update(accountingSyncs).set({ createdAt: shift(a.createdAt), updatedAt: shift(a.updatedAt), status: "exported", externalRef: "csv:2026-09-30" }).where(eq(accountingSyncs.id, a.id)).run();
+    // The record was built before the shift: move its bill and payment dates with everything else, so the export
+    // agrees with the ledger, and mark it exported the day after it was queued.
+    const payload = a.payloadJson ? (JSON.parse(a.payloadJson) as Record<string, unknown>) : null;
+    if (payload) {
+      for (const k of ["billDate", "paymentDate"]) if (typeof payload[k] === "string") payload[k] = shift(`${payload[k]}T12:00:00.000Z`).slice(0, 10);
+    }
+    const exportedOn = new Date(new Date(shift(a.createdAt)).getTime() + 86_400_000).toISOString().slice(0, 10);
+    db.update(accountingSyncs)
+      .set({ createdAt: shift(a.createdAt), updatedAt: shift(a.updatedAt), status: "exported", externalRef: `csv:${exportedOn}`, payloadJson: payload ? JSON.stringify(payload) : a.payloadJson })
+      .where(eq(accountingSyncs.id, a.id))
+      .run();
   }
 }
 

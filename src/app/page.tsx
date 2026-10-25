@@ -40,7 +40,7 @@ export default function OverviewPage() {
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
         <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
         <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open obligation")}, ${o.counts.blocked} blocked held back`} />
-        <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">the overpaid part, plus duplicates</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
+        <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpaid parts and duplicates, since day one</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
       </dl>
 
       <div className="mt-6">

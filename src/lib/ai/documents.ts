@@ -121,22 +121,50 @@ function pickExcerpt(text: string, amountMajor: string | null): string {
   return text.slice(0, 220).trim();
 }
 
+/** Longest a PDF may take to read, and the heap the reader may use, before it is abandoned. */
+const PDF_TIMEOUT_MS = 10_000;
+const PDF_HEAP_MB = 192;
+
+/**
+ * Read the text layer in a child process (scripts/pdf-text.mjs) with a time and a memory limit. pdf.js on the
+ * server's own thread let one crafted PDF freeze every request for most of a minute.
+ */
 async function pdfText(bytes: Buffer): Promise<string | null> {
-  try {
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, isEvalSupported: false }).promise;
-    const parts: string[] = [];
-    const pages = Math.min(doc.numPages, 20);
-    for (let i = 1; i <= pages; i++) {
-      const page = await doc.getPage(i);
-      const content = await page.getTextContent();
-      parts.push(content.items.map((it) => ("str" in it ? it.str : "")).join(" "));
-    }
-    return parts.join("\n");
-  } catch (e) {
-    console.warn(`[documents] pdf text extraction failed: ${(e as Error).message}`);
-    return null;
-  }
+  const { spawn } = await import("node:child_process");
+  const path = await import("node:path");
+  const script = path.join(process.cwd(), "scripts", "pdf-text.mjs");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [`--max-old-space-size=${PDF_HEAP_MB}`, script], { stdio: ["pipe", "pipe", "ignore"] });
+    let out = "";
+    let done = false;
+    const finish = (v: string | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (!child.killed) child.kill("SIGKILL");
+      resolve(v);
+    };
+    const timer = setTimeout(() => {
+      console.warn("[documents] pdf text extraction timed out");
+      finish(null);
+    }, PDF_TIMEOUT_MS);
+    child.stdout.on("data", (c: Buffer) => {
+      out += c.toString("utf8");
+      if (out.length > 1_000_000) finish(null);
+    });
+    child.on("error", () => finish(null));
+    child.on("close", () => {
+      try {
+        const j = JSON.parse(out) as { text?: string; error?: string };
+        if (j.error) console.warn(`[documents] pdf text extraction failed: ${j.error}`);
+        finish(j.text ?? null);
+      } catch {
+        finish(null);
+      }
+    });
+    child.stdin.on("error", () => finish(null));
+    child.stdin.end(bytes);
+  });
 }
 
 /** Claude reads the document itself. Returns null on any failure so the caller falls back honestly. */

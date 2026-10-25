@@ -88,10 +88,10 @@ export default function SettingsPage() {
         </Panel>
 
         <Panel title="Switching to live mode" className="lg:col-span-2">
-          <p className="text-ink-soft">Everything runs with zero credentials in mock mode. To move a rail or the agent to live, set these in .env (see .env.example) and restart. A rail missing credentials falls back to mock and says so in the sidebar.</p>
+          <p className="text-ink-soft">Everything runs with zero credentials in mock mode. To move a rail or the agent to live, set these in .env (see .env.example) and restart. In live mode a rail with missing or invalid credentials refuses to start rather than falling back to mock; the sidebar always shows which mode each rail is in.</p>
           <dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">
             <EnvBlock title="Rails" lines={["RAIL_MODE=live", "PAYPAL_CLIENT_ID=…", "PAYPAL_CLIENT_SECRET=…", "PAYPAL_ENV=sandbox", "STELLAR_NETWORK=testnet", "STELLAR_TREASURY_SECRET=S…", "STELLAR_PYUSD_ISSUER=G…"]} />
-            <EnvBlock title="Agent and books" lines={["AI_MODE=live", "ANTHROPIC_API_KEY=sk-ant-…", "ANTHROPIC_MODEL=claude-sonnet-4-5", "ACCOUNTING_DESTINATION=xero", "XERO_CLIENT_ID=…", "XERO_CLIENT_SECRET=…"]} />
+            <EnvBlock title="Agent and books" lines={["AI_MODE=live", "ANTHROPIC_API_KEY=sk-ant-…", "ANTHROPIC_MODEL=claude-sonnet-5-5", "ACCOUNTING_DESTINATION=xero", "XERO_CLIENT_ID=…", "XERO_CLIENT_SECRET=…"]} />
           </dl>
         </Panel>
       </div>

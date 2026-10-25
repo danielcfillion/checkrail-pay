@@ -20,8 +20,8 @@ export default function ExceptionsPage() {
         lede={
           rows.length ? (
             <>
-              Policy stopped <span className="num">{formatMoneySymbol(o.money.preventedMinor, base)}</span> from going out wrong: {pluralise(blocked.length, "obligation")} blocked
-              {failed.length ? `, ${pluralise(failed.length, "payment")} failed on the rail` : ""}. Each one tells you why and what to do.
+              Open now: <span className="num">{formatMoneySymbol(o.money.preventedOpenMinor, base)}</span> held back across {pluralise(blocked.length, "blocked obligation")}
+              {failed.length ? `, ${pluralise(failed.length, "payment")} failed on the rail` : ""}. Since the first payment, policy has kept <span className="num">{formatMoneySymbol(o.money.preventedMinor, base)}</span> from going out wrong. Each one below tells you why and what to do.
             </>
           ) : (
             "Nothing is blocked or failed. When policy stops a payment, it lands here with the reason."

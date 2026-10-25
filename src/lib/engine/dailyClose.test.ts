@@ -125,7 +125,9 @@ describe("daily close: payments that went out but deserve a second look", () => 
     const db = openTestDb();
     await seedDemo(db, { history: true });
     const maria = db.select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!;
-    db.insert(vendors).values({ ...maria, id: "ven_tuan", name: "Tuan Nguyen" }).run();
+    const tuanPayout = { paypalEmail: "tuan.driver@example.com", stellarAccount: null, bankLabel: "Vietcombank ****4410" };
+    const { payoutHashOf } = await import("./orchestrator");
+    db.insert(vendors).values({ ...maria, ...tuanPayout, id: "ven_tuan", name: "Tuan Nguyen", detailsHash: payoutHashOf(tuanPayout) }).run();
     const id = await payByHand(db, "Trip closed. Driver Tuan Nguyen, USD 90 (JOB-HG2D-0992). Release payment.", 90, "JOB-HG2D-0992", "Tuan Nguyen");
     const item = getDailyClose(db, DEMO_BUSINESS_ID, "USD").attention.find((a) => a.id === id);
     expect(item?.kind).toBe("new_vendor");

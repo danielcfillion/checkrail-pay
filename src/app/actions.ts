@@ -197,6 +197,8 @@ export async function setAutonomyAction(change: AutonomyChange): Promise<ActionR
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
     if (!biz) return { ok: false, message: "No business configured." };
+    // People get at least a minute to cancel; a zero window exists only for tests and scripted demos.
+    if (change.autopilotCancelWindowSeconds !== undefined && change.autopilotCancelWindowSeconds < 60) throw new Error("The cancel window must be at least 1 minute");
     const next = setAutonomy(db, biz.id, await actor(), change);
     await runAutopilot(db, { businessId: biz.id }); // picks up anything already approved and clean
     done();

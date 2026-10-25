@@ -533,3 +533,18 @@ describe("demo seed never touches a live rail (C5)", () => {
     }
   });
 });
+
+describe("ingest validation (security audit F9)", () => {
+  it("refuses bad input and leaves nothing behind", async () => {
+    const before = db.select().from(obligations).all().length;
+    const bad: Array<Record<string, unknown>> = [
+      { sourceType: "<img src=x>", rawInput: "x" },
+      { sourceType: "invoice", rawInput: "x", evidence: [{ kind: "invoice", label: null, amountMinor: 1, currency: "USD", reference: null, excerpt: null }] },
+      { sourceType: "invoice", rawInput: "x", evidence: [{ kind: "invoice", label: "a", amountMinor: 18000.4, currency: "USD", reference: null, excerpt: null }] },
+      { sourceType: "invoice", rawInput: "x", evidence: [{ kind: "invoice", label: "a", amountMinor: -5, currency: "USD", reference: null, excerpt: null }] },
+      { sourceType: "invoice", rawInput: "x", evidence: Array.from({ length: 21 }, () => ({ kind: "invoice", label: "a", amountMinor: 1, currency: "USD", reference: null, excerpt: null })) },
+    ];
+    for (const b of bad) await expect(ingestObligation(db, { businessId: DEMO_BUSINESS_ID, actor: "user:daniel", ...(b as object) } as never)).rejects.toThrow();
+    expect(db.select().from(obligations).all().length).toBe(before);
+  });
+});

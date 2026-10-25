@@ -4,6 +4,7 @@ import { accountingSyncs, approvals, attachments, auditEntries, businesses, evid
 import type { ObligationState, Rail } from "./domain/types";
 import { railModes } from "./rails";
 import { config, isLiveAi } from "./config";
+import { startOfLocalDay } from "./format";
 
 /**
  * Read models for the operator dashboard. Plain functions over the DB, no
@@ -162,7 +163,7 @@ export function getOverview(db: Db = getDb()) {
   const thirtyDays = now - 30 * 86_400_000;
   const settled = listSettlements(db);
   const settledRecent = settled.filter((s) => new Date(s.settledAt).getTime() >= thirtyDays);
-  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const startOfToday = startOfLocalDay();
   const settledToday = settled.filter((s) => new Date(s.settledAt).getTime() >= startOfToday.getTime());
   const blocked = all.filter((r) => r.state === "blocked");
   const byRail = (rail: Rail) => settledRecent.filter((s) => s.rail === rail);
@@ -201,7 +202,8 @@ export function getOverview(db: Db = getDb()) {
       paidTodayCount: settledToday.length,
       fees30dMinor: settledRecent.reduce((a, s) => a + s.feeMinor, 0),
       blockedMinor: sum(blocked),
-      preventedMinor: blocked.reduce((a, r) => a + mismatchDelta(r), 0),
+      preventedMinor: preventedTotal(db).minor,
+      preventedOpenMinor: blocked.reduce((a, r) => a + mismatchDelta(r), 0),
       byRail: { paypal: { grossMinor: grossByRail("paypal"), feeMinor: feesByRail("paypal"), count: byRail("paypal").length }, stellar: { grossMinor: grossByRail("stellar"), feeMinor: feesByRail("stellar"), count: byRail("stellar").length } },
     },
     weeks,
@@ -218,14 +220,44 @@ function scheduled(r: ObligationRow): boolean {
 
 /** For a blocked mismatch, how much the block saved: requested minus evidenced amount, if positive. */
 function mismatchDelta(r: ObligationRow): number {
-  const m = (r.blockedReason ?? "").match(/Requested [A-Z]{3} ([\d,]+\.\d{2}) but .* says [A-Z]{3} ([\d,]+\.\d{2})/);
+  return savedBy(r.blockedReason ?? "", r.amountMinor ?? 0);
+}
+
+/** What one block kept from going out wrong: the overpaid part of a mismatch, or the whole amount of a duplicate. */
+function savedBy(reason: string, amountMinor: number): number {
+  const m = reason.match(/Requested [A-Z]{3} ([\d,]+\.\d{2}) but .* says [A-Z]{3} ([\d,]+\.\d{2})/);
   if (m) {
     const req = Math.round(Number(m[1].replace(/,/g, "")) * 100);
     const ev = Math.round(Number(m[2].replace(/,/g, "")) * 100);
     return Math.max(0, req - ev);
   }
-  if (/already used/.test(r.blockedReason ?? "")) return r.amountMinor ?? 0;
+  if (/already used|Same job as/.test(reason)) return amountMinor;
   return 0;
+}
+
+/**
+ * Errors prevented, cumulative: every payment policy ever blocked as an overpayment or a duplicate, counted once,
+ * at what it would have overpaid at the time of the block. Resolving a block (correcting it, cancelling the
+ * duplicate) does not take it back out of the total; it still did not go out wrong.
+ */
+export function preventedTotal(db: Db = getDb()): { minor: number; count: number } {
+  const rows = db
+    .select({ obligationId: auditEntries.obligationId, detail: auditEntries.detailJson, amountMinor: obligations.amountMinor })
+    .from(auditEntries)
+    .innerJoin(obligations, eq(obligations.id, auditEntries.obligationId))
+    .where(eq(auditEntries.toState, "blocked"))
+    .orderBy(auditEntries.seq)
+    .all();
+  const best = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.obligationId) continue;
+    const reasons = (r.detail ? ((JSON.parse(r.detail) as { reasons?: string[] }).reasons ?? []) : []) as string[];
+    const saved = Math.max(0, ...reasons.map((x) => savedBy(x, r.amountMinor ?? 0)));
+    if (saved > (best.get(r.obligationId) ?? 0)) best.set(r.obligationId, saved);
+  }
+  let minor = 0;
+  for (const v of best.values()) minor += v;
+  return { minor, count: [...best.values()].filter((v) => v > 0).length };
 }
 
 function rank(state: string): number {

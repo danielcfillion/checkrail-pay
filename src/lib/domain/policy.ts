@@ -1,4 +1,7 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
+
+/** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
+export const UNUSUAL_MULTIPLE = 3;
 import { isValidAmountMinor } from "./money";
 import { effectiveAutonomy, fingerprintCovered, warningFingerprint } from "./types";
 import type {
@@ -71,6 +74,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     if (!mentionsVendor(input.requestText, vendor.name, otherNamesForReq)) {
       rules.push(warn("request_names_vendor", `The request does not name ${vendor.name}; the payee was chosen from the attached records. Confirm who is being paid`));
     }
+  }
+
+  // R2c: two vendors paid to one destination is how a fake vendor collects real payments (or a copy-paste slip).
+  if (input.sharedPayoutWith?.length) {
+    rules.push(warn("payout_shared", `${vendor?.name ?? "This vendor"} is paid to the same account as ${input.sharedPayoutWith.join(", ")}; confirm both are right`));
   }
 
   // R3c: the evidence must name the vendor the agent chose. The agent proposes vendorId; this rule binds it.
@@ -253,14 +261,34 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     return { decision: "require_approval", reasons: ["Autonomy is set to review everything: a person approves every payment"], rules };
   }
   if (level === "autopilot") {
+    // Autopilot fails closed: a missing or zero cap means "the agent may send nothing", never "no limit".
     const perCap = policy.autopilotPerPaymentCapMinor ?? 0;
-    if (perCap > 0 && amount > perCap && input.approvalsCount < 1) {
+    const dayCapSet = policy.autopilotDailyCapMinor ?? 0;
+    if ((perCap <= 0 || dayCapSet <= 0) && input.approvalsCount < 1) {
+      return { decision: "require_approval", reasons: ["Autopilot has no per-payment or daily cap set, so it sends nothing on its own; set both caps in Settings"], rules };
+    }
+    if (amount > perCap && input.approvalsCount < 1) {
       return { decision: "require_approval", reasons: [`Amount exceeds the autopilot per-payment cap ${fmt(perCap, input.baseCurrency)}`], rules };
     }
     const dayCap = policy.autopilotDailyCapMinor ?? 0;
     const bizRecent = input.businessRecentMinor ?? 0;
-    if (dayCap > 0 && bizRecent + amount > dayCap && input.approvalsCount < 1) {
+    if (bizRecent + amount > dayCap && input.approvalsCount < 1) {
       return { decision: "require_approval", reasons: [`Payments committed across the business in the last 24h total ${fmt(bizRecent, input.baseCurrency)}; this one would take it to ${fmt(bizRecent + amount, input.baseCurrency)}, above the ${fmt(dayCap, input.baseCurrency)} autopilot daily cap`], rules };
+    }
+    // Autopilot sends without a person, so it does not send what a person would want to see first: the first
+    // payment to a vendor, or an amount far above what this vendor is usually paid.
+    if (input.vendorSettledMinors && input.approvalsCount < 1) {
+      const past = [...input.vendorSettledMinors].sort((a, b) => a - b);
+      if (past.length === 0) {
+        return { decision: "require_approval", reasons: ["First payment to this vendor: autopilot leaves it for a person"], rules };
+      }
+      if (past.length >= 2) {
+        const mid = Math.floor(past.length / 2);
+        const median = past.length % 2 ? past[mid] : Math.round((past[mid - 1] + past[mid]) / 2);
+        if (median > 0 && amount >= UNUSUAL_MULTIPLE * median) {
+          return { decision: "require_approval", reasons: [`${fmt(amount, input.baseCurrency)} is ${(amount / median).toFixed(1)} times this vendor's usual ${fmt(median, input.baseCurrency)}: autopilot leaves it for a person`], rules };
+        }
+      }
     }
     return { decision: "auto_execute", reasons: [], rules };
   }

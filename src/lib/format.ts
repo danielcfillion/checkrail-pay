@@ -73,12 +73,31 @@ export function timeAgo(iso: string | null | undefined, now: number = Date.now()
   return future ? `in ${out}` : `${out} ago`;
 }
 
-/** "3 Oct 2026, 10:15" in UTC, for title attributes and detail panels. */
+/**
+ * The business's own time zone. Times are stored in UTC and shown in this zone, and "today" means today here.
+ * Set NEXT_PUBLIC_CHECKRAIL_TIMEZONE (an IANA name such as Asia/Ho_Chi_Minh or Asia/Manila) at build time.
+ */
+export const TIMEZONE = process.env.NEXT_PUBLIC_CHECKRAIL_TIMEZONE || "Asia/Ho_Chi_Minh";
+
+/** "GMT+7" for the business time zone at this instant. */
+export function zoneLabel(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: TIMEZONE, timeZoneName: "short" }).formatToParts(at).find((p) => p.type === "timeZoneName")?.value ?? TIMEZONE;
+}
+
+/** Midnight today in the business time zone, as an instant. */
+export function startOfLocalDay(at: Date = new Date()): Date {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(at).map((p) => [p.type, p.value]));
+  const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  const offsetMs = asUtc - Math.floor(at.getTime() / 1000) * 1000;
+  return new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)) - offsetMs);
+}
+
+/** "3 Oct 2026, 17:15 GMT+7" in the business time zone, for title attributes and detail panels. */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
+  return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE }) + " " + zoneLabel(d);
 }
 
 /** "3 Oct 2026". Accepts a date-only string too. */
@@ -86,7 +105,8 @@ export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso.length === 10 ? iso + "T00:00:00Z" : iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  // A bare date (an invoice date, a due date) has no time zone; an instant is shown as its local date.
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: iso.length === 10 ? "UTC" : TIMEZONE });
 }
 
 /** "10:15" for timelines within one obligation. */
@@ -94,7 +114,7 @@ export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "";
-  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE });
 }
 
 const STATE_LABELS: Record<string, string> = {

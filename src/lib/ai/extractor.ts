@@ -9,13 +9,19 @@ import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../dom
 
 const CURRENCY_WORDS: Record<string, string> = { "$": "USD", usd: "USD", "us$": "USD", php: "PHP", "₱": "PHP", vnd: "VND", "₫": "VND", eur: "EUR", "€": "EUR", gbp: "GBP", "£": "GBP" };
 
+/** Requests longer than this are read from their first part only: no real payment request is longer. */
+export const MAX_REQUEST_CHARS = 20_000;
+
 export function extractAmount(text: string, defaultCurrency?: string): { amountMinor: number; currency: string; assumedCurrency?: boolean } | null {
+  text = text.slice(0, MAX_REQUEST_CHARS);
   // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". Commas are only thousands separators
   // (exactly three digits follow), and a number glued to an identifier ("INV-K-77", "HG-4D-0914") is not an
   // amount. When a request lists several figures prefer, in order: "balance due" / "amount due" / "total" / "=",
   // else the largest.
-  const num = "(\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.(\\d{1,2}))?";
-  const re = new RegExp(`(?<![A-Za-z0-9-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|EUR|GBP))(?![A-Za-z0-9-])`, "gi");
+  // Linear by construction: a match cannot start right after a digit, comma or dot (so it never restarts inside a
+  // long run like "000,000,000,..."), and plain digit runs are bounded. The old form was quadratic in the input.
+  const num = "(\\d{1,3}(?:,\\d{3}){1,6}|\\d{1,12})(?:\\.(\\d{1,2}))?";
+  const re = new RegExp(`(?<![A-Za-z0-9,.-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|EUR|GBP))(?![A-Za-z0-9-])`, "gi");
   const found: Array<{ amountMinor: number; currency: string; index: number }> = [];
   for (const m of text.matchAll(re)) {
     const symbol = (m[1] ?? m[6] ?? "").toLowerCase();
@@ -60,7 +66,8 @@ export function extractDueDate(text: string): string | null {
 }
 
 export function matchVendor(text: string, vendors: VendorPayoutProfile[]): VendorPayoutProfile | null {
-  const lower = text.toLowerCase();
+  const lower = text.slice(0, MAX_REQUEST_CHARS).toLowerCase();
+  const esc = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let best: { v: VendorPayoutProfile; score: number } | null = null;
   for (const v of vendors) {
     const parts = v.name.toLowerCase().split(/\s+/).filter((p) => p.length > 2);
@@ -71,7 +78,7 @@ export function matchVendor(text: string, vendors: VendorPayoutProfile[]): Vendo
   }
   if (best && best.score >= 2) return best.v;
   // A single distinctive name part ("maria", "phuong") is enough when exactly one vendor has it.
-  const singles = vendors.filter((v) => v.name.toLowerCase().split(/\s+/).some((p) => p.length >= 3 && new RegExp(`\\b${p}\\b`, "i").test(lower)));
+  const singles = vendors.filter((v) => v.name.toLowerCase().split(/\s+/).some((p) => p.length >= 3 && new RegExp(`\\b${esc(p)}\\b`, "i").test(lower)));
   return singles.length === 1 ? singles[0] : null;
 }
 
@@ -149,7 +156,9 @@ export function interpretWithRules(input: {
     missing.push("supporting evidence (job sheet, contract or invoice)");
   }
 
-  if (/\b(urgent|asap|today|now|immediately)\b/i.test(rawInput)) {
+  // Pressure words, not scheduling words: "deposit due now" or "balance due today" on an invoice is a due date.
+  const pressure = rawInput.replace(/\b(due|payable|balance|deposit)\s+(now|today)\b/gi, "");
+  if (/\b(urgent|urgently|asap|today|now|immediately)\b/i.test(pressure)) {
     flags.push("Urgency language in the request; treat as a social-engineering signal, not a reason to skip checks");
     confidence -= 5;
   }

@@ -15,17 +15,14 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
-    "@paypal/agent-toolkit": "^1.11.0",
     "@paypal/paypal-server-sdk": "^2.5.0",
     "@stellar/stellar-sdk": "^17.2.1",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.3",
-    "next": "^15.5.27",
+    "next": "^15.5.28",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "zod": "^3.25.76",
-    "zod-to-json-schema": "^3.25.2"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -36,7 +33,7 @@
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
-    "eslint-config-next": "15.5.27",
+    "eslint-config-next": "^15.5.28",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",

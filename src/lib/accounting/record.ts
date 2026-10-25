@@ -107,7 +107,10 @@ export function toCsv(rows: AccountingPayload[]): string {
     let s = v == null ? "" : String(v);
     // Vendor-written text must not run as a spreadsheet formula. Numbers like -12.50 stay numbers.
     if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    // A line break inside a field can start a new row in some importers: neutralise a formula after any break,
+    // and quote any field holding CR or LF.
+    s = s.replace(/(\r\n|\r|\n)([=+\-@\t])/g, "$1'$2");
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [CSV_COLUMNS.join(",")];
   for (const r of rows) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));

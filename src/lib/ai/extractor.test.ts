@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractAmount, extractReference } from "./extractor";
+import { extractAmount, extractReference, matchVendor } from "./extractor";
 
 describe("extractAmount", () => {
   it("prefers the total over unit prices", () => {
@@ -21,5 +21,17 @@ describe("extractReference", () => {
     expect(extractReference("pay JOB-HG4D-0921 now")).toBe("JOB-HG4D-0921");
     expect(extractReference("Invoice inv-2026-0152 attached")).toBe("INV-2026-0152");
     expect(extractReference("no ref here")).toBeNull();
+  });
+});
+
+describe("hostile input does not stall the server (security audit F1)", () => {
+  it("a long run of comma-separated zeros is read in linear time", () => {
+    const t0 = Date.now();
+    extractAmount("000,".repeat(160_000) + " USD");
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+  it("vendor names with regex characters do not break matching", () => {
+    const v = { id: "v", name: "Ana (Boats) + Co", country: "PH", preferredRail: null, paypalEmail: null, stellarAccount: null, bankCountry: null, bankCurrency: null, bankLabel: null, detailsHash: "h", verifiedAt: null };
+    expect(() => matchVendor("pay ana (boats) + co", [v as never])).not.toThrow();
   });
 });
