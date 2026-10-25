@@ -22,6 +22,9 @@ export type VendorFormValues = {
   bankAccountNumber: string;
   bankCode: string;
   accountHolder: string;
+  taxType?: string;
+  taxForm?: string;
+  withholdingPct?: string;
 };
 
 export const EMPTY_VENDOR: VendorFormValues = { name: "", role: "guide", country: "VN", email: "", notes: "", defaultAccountCode: "", preferredRail: "", paypalEmail: "", stellarAccount: "", bankCountry: "", bankCurrency: "", bankLabel: "", bankAccountNumber: "", bankCode: "", accountHolder: "" };
@@ -55,7 +58,7 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
   const showPayout = mode !== "profile";
   const internal = mode === "create" || mode === "profile";
 
-  const profile = { name: v.name, role: v.role, country: v.country, email: v.email || null, notes: v.notes || null, defaultAccountCode: v.defaultAccountCode || null };
+  const profile = { name: v.name, role: v.role, country: v.country, email: v.email || null, notes: v.notes || null, defaultAccountCode: v.defaultAccountCode || null, ...(internal ? { taxType: v.taxType || null, taxForm: v.taxForm || null, withholdingBps: v.withholdingPct ? Math.round(Number(v.withholdingPct) * 100) : null } : { taxType: v.taxType || null }) };
   const payout = { preferredRail: v.preferredRail || null, paypalEmail: v.paypalEmail || null, stellarAccount: v.stellarAccount || null, bankCountry: v.bankCountry || null, bankCurrency: v.bankCurrency || null, bankLabel: v.bankLabel || null, bankAccountNumber: v.bankAccountNumber || null, bankCode: v.bankCode || null, accountHolder: v.accountHolder || null };
 
   const submit = () =>
@@ -116,6 +119,15 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
           <Field label="Email" id="v-email">
             <input id="v-email" type="email" className="field" value={v.email} onChange={set("email")} maxLength={254} autoComplete="email" />
           </Field>
+          {!internal ? (
+            <Field label="I am paid as" id="v-taxtype2">
+              <select id="v-taxtype2" className="field" value={v.taxType ?? ""} onChange={set("taxType")}>
+                <option value="">Choose</option>
+                <option value="individual">An individual</option>
+                <option value="business">A business</option>
+              </select>
+            </Field>
+          ) : null}
           {internal ? (
             <>
               <Field label="Account code for the books (optional)" id="v-code">
@@ -123,6 +135,25 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
               </Field>
               <Field label="Notes (optional)" id="v-notes">
                 <input id="v-notes" className="field" value={v.notes} onChange={set("notes")} maxLength={500} />
+              </Field>
+              <Field label="Paid as" id="v-taxtype">
+                <select id="v-taxtype" className="field" value={v.taxType ?? ""} onChange={set("taxType")}>
+                  <option value="">Not recorded</option>
+                  <option value="individual">An individual</option>
+                  <option value="business">A business</option>
+                </select>
+              </Field>
+              <Field label="Tax form on file" id="v-taxform">
+                <select id="v-taxform" className="field" value={v.taxForm ?? ""} onChange={set("taxForm")}>
+                  <option value="">None yet</option>
+                  <option value="w9">W-9 (US person)</option>
+                  <option value="w8ben">W-8BEN (foreign individual)</option>
+                  <option value="w8bene">W-8BEN-E (foreign entity)</option>
+                  <option value="vn_08">Commitment 08/CK-TNCN (Vietnam)</option>
+                </select>
+              </Field>
+              <Field label="Philippine EWT rate, % (optional)" id="v-ewt">
+                <input id="v-ewt" className="field num" inputMode="decimal" value={v.withholdingPct ?? ""} onChange={set("withholdingPct")} placeholder="2" />
               </Field>
             </>
           ) : null}

@@ -7,6 +7,7 @@ import { decryptField } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
 import { expectedAmount } from "./rates";
 import { assertOpenPeriod } from "./books";
+import { taxFormWarning, withholdingFor } from "./taxes";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
@@ -207,7 +208,7 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   const fresh = mustGet(db, obligationId);
   const vendor = fresh.vendorId ? vendorProfiles.find((v) => v.id === fresh.vendorId) ?? null : null;
   if (vendor && fresh.amountMinor && fresh.currency) {
-    await quoteAndRoute(db, obligationId, vendor, fresh.amountMinor, fresh.currency, biz.country);
+    await quoteAndRoute(db, obligationId, vendor, payableMinor(fresh), fresh.currency, biz.country);
   }
 
   // 4. State
@@ -324,6 +325,9 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     .all()
     .filter((o) => o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt)))
     .reduce((sum, o) => sum + inBase(o.amountMinor, o.currency), 0);
+  // Tax kept back from this payment, recomputed with every policy run so a corrected amount or a new form counts.
+  const withholding = vendorRow && ob.amountMinor && ob.currency ? withholdingFor(policy, biz.country, vendorRow, ob.amountMinor, ob.currency) : null;
+  db.update(obligations).set({ withheldMinor: withholding?.withheldMinor ?? null, withholdingNote: withholding?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
@@ -338,6 +342,8 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
     bill: billInput(db, ob),
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
+    withholding,
+    taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,
@@ -560,7 +566,7 @@ export async function amendObligation(db: Db, obligationId: string, actor: strin
   const fresh = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, fresh.businessId)).get()!;
   const vendorRow = fresh.vendorId ? db.select().from(vendors).where(eq(vendors.id, fresh.vendorId)).get() : null;
-  if (vendorRow && fresh.amountMinor && fresh.currency) await quoteAndRoute(db, obligationId, toProfile(vendorRow), fresh.amountMinor, fresh.currency, biz.country);
+  if (vendorRow && fresh.amountMinor && fresh.currency) await quoteAndRoute(db, obligationId, toProfile(vendorRow), payableMinor(fresh), fresh.currency, biz.country);
   moveTo(db, obligationId, targetState(outcome, fresh.state as ObligationState), outcome);
 }
 
@@ -632,7 +638,7 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
       const attemptId = newId("pay");
       const ts = now();
       const fullMemo = `${refPart} ${key.slice(0, 8)}`.slice(0, 28);
-      tx.insert(paymentAttempts).values({ id: attemptId, obligationId, rail, idempotencyKey: key, status: "pending", mode: adapter.mode, requestJson: JSON.stringify({ amountMinor: ob.amountMinor, currency: ob.currency, memo: fullMemo, vendorId: vendor.id }), createdAt: ts, updatedAt: ts }).run();
+      tx.insert(paymentAttempts).values({ id: attemptId, obligationId, rail, idempotencyKey: key, status: "pending", mode: adapter.mode, requestJson: JSON.stringify({ amountMinor: payableMinor(ob), currency: ob.currency, memo: fullMemo, vendorId: vendor.id, withheldMinor: ob.withheldMinor ?? 0 }), createdAt: ts, updatedAt: ts }).run();
       if (opts.rail && opts.rail !== ob.selectedRail) {
         tx.update(obligations).set({ selectedRail: opts.rail, routeReason: `Operator override by ${opts.actor}`, updatedAt: ts }).where(eq(obligations.id, obligationId)).run();
         audit(tx as unknown as Db, { obligationId, actor: opts.actor, action: "route.overridden", detail: { from: ob.selectedRail, to: opts.rail } });
@@ -645,7 +651,7 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     { behavior: "immediate" }
   );
 
-  const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: ob.amountMinor!, currency: ob.currency!, memo: started.memo, businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(rail, vendorRow) });
+  const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: payableMinor(ob), currency: ob.currency!, memo: started.memo, businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(rail, vendorRow) });
   return finishAttempt(db, obligationId, started.attemptId, rail, adapter.mode, result);
 }
 
@@ -669,6 +675,11 @@ function redact(value: unknown, depth = 0): unknown {
   if (depth > 8 || value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, SECRET_KEY.test(k) ? "[redacted]" : redact(v, depth + 1)]));
+}
+
+/** What the rail sends: the amount owed less tax withheld for the tax office. */
+export function payableMinor(ob: { amountMinor: number | null; withheldMinor?: number | null }): number {
+  return (ob.amountMinor ?? 0) - (ob.withheldMinor ?? 0);
 }
 
 /** The full account number, decrypted only for a bank rail and only for this request. */
@@ -754,9 +765,9 @@ export async function retryAmbiguousExecution(db: Db, obligationId: string, opts
       return { attemptId: attempt.id, status: st.status === "confirmed" ? "confirmed" : "submitted" };
     }
   }
-  const req = JSON.parse(attempt.requestJson ?? "{}") as { memo?: string };
+  const req = JSON.parse(attempt.requestJson ?? "{}") as { memo?: string; amountMinor?: number };
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
-  const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: ob.amountMinor!, currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(attempt.rail as Rail, vendorRow) });
+  const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: req.amountMinor ?? payableMinor(ob), currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(attempt.rail as Rail, vendorRow) });
   if (result.status === "failed" && adapter.mode !== "mock") {
     // A rejected replay proves nothing about the first submission. Only a provider lookup that finds no batch does,
     // and that happened above (or the rail has no lookup). Keep the attempt unknown and leave it for a person.
@@ -881,7 +892,9 @@ function recordSettlement(db: Db, obligationId: string, attemptId: string, rail:
     const ts = now();
     const existing = db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).get();
     if (!existing) {
-      db.insert(settlements).values({ id: newId("stl"), obligationId, attemptId, rail, grossMinor: ob.amountMinor!, grossCurrency: ob.currency!, feeMinor, receivedMinor, receivedCurrency, fxRate, externalId, explorerUrl, note, settledAt: ts }).run();
+      // What actually went to the vendor: the amount less any tax withheld, as the attempt asked the rail to send.
+      const sent = (JSON.parse(db.select({ r: paymentAttempts.requestJson }).from(paymentAttempts).where(eq(paymentAttempts.id, attemptId)).get()?.r ?? "{}") as { amountMinor?: number }).amountMinor ?? payableMinor(ob);
+      db.insert(settlements).values({ id: newId("stl"), obligationId, attemptId, rail, grossMinor: sent, grossCurrency: ob.currency!, feeMinor, receivedMinor, receivedCurrency, fxRate, externalId, explorerUrl, note, settledAt: ts }).run();
     }
     db.update(paymentAttempts).set({ status: "confirmed", updatedAt: ts }).where(eq(paymentAttempts.id, attemptId)).run();
     transition(db, obligationId, "settled", `rail:${rail}`, "settlement.confirmed", { externalId, feeMinor, receivedMinor, receivedCurrency, explorerUrl });

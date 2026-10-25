@@ -9,6 +9,7 @@ import { requirePermission, type Actor } from "./users";
 import { payoutHashOf } from "./orchestrator";
 import { RAILS, type Rail } from "../domain/types";
 import { decryptField, encryptField, lastFour } from "../crypto/dataKey";
+import { TAX_FORMS } from "./taxes";
 
 /**
  * The vendor master: who the business pays and where the money lands.
@@ -40,6 +41,9 @@ export interface VendorProfileInput {
   email?: string | null;
   notes?: string | null;
   defaultAccountCode?: string | null;
+  taxType?: string | null;
+  taxForm?: string | null;
+  withholdingBps?: number | null;
 }
 
 export interface PayoutInput {
@@ -88,7 +92,13 @@ export function validateProfile(raw: unknown): Required<VendorProfileInput> {
   const notes = str(r.notes, "Notes", 500);
   const defaultAccountCode = str(r.defaultAccountCode, "Account code", 20);
   if (defaultAccountCode && !/^[A-Za-z0-9.-]+$/.test(defaultAccountCode)) throw new Error("Account code may use letters, digits, dots and dashes");
-  return { name, role, country, email, notes, defaultAccountCode };
+  const taxType = r.taxType === "individual" || r.taxType === "business" ? r.taxType : null;
+  if (r.taxType && !taxType) throw new Error("Tax type must be individual or business");
+  const taxForm = (TAX_FORMS as readonly unknown[]).includes(r.taxForm) ? (r.taxForm as string) : null;
+  if (r.taxForm && !taxForm) throw new Error(`Tax form must be one of: ${TAX_FORMS.join(", ")}`);
+  const withholdingBps = r.withholdingBps === undefined || r.withholdingBps === null || r.withholdingBps === "" ? null : Number(r.withholdingBps);
+  if (withholdingBps !== null && !(Number.isInteger(withholdingBps) && withholdingBps >= 0 && withholdingBps <= 3_000)) throw new Error("Withholding rate must be 0% to 30%");
+  return { name, role, country, email, notes, defaultAccountCode, taxType, taxForm, withholdingBps };
 }
 
 /**
@@ -161,7 +171,7 @@ export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendo
   const profile = validateProfile(profileRaw);
   const changed = Object.fromEntries(Object.entries(profile).filter(([k, val]) => (v as Record<string, unknown>)[k] !== val));
   if (!Object.keys(changed).length) return;
-  db.update(vendors).set(changed).where(eq(vendors.id, vendorId)).run();
+  db.update(vendors).set({ ...changed, ...("taxForm" in changed ? { taxFormAt: now() } : {}) }).where(eq(vendors.id, vendorId)).run();
   audit(db, { obligationId: null, actor: by.id, action: "vendor.updated", detail: { vendorId, changed, previous: Object.fromEntries(Object.keys(changed).map((k) => [k, (v as Record<string, unknown>)[k]])) } });
 }
 
@@ -300,7 +310,8 @@ export function submitOnboarding(db: Db, token: string, input: { profile?: unkno
   if (!view.ok) throw new Error(view.reason);
   const inv = db.select().from(vendorInvites).where(eq(vendorInvites.tokenHash, hashToken(token))).get()!;
   const payout = validatePayout(input.payout);
-  const profile = inv.vendorId ? null : validateProfile(input.profile);
+  // A vendor states who they are; which tax form is on file and any withholding rate are for the business to record.
+  const profile = inv.vendorId ? null : { ...validateProfile(input.profile), taxForm: null, withholdingBps: null };
   const actor = `vendor:onboarding:${inv.id}`;
   db.transaction((tx) => {
     const spent = tx.update(vendorInvites).set({ usedAt: now() }).where(and(eq(vendorInvites.id, inv.id), isNull(vendorInvites.usedAt))).run();

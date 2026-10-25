@@ -179,6 +179,10 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     }
   }
 
+  // R8: tax. Withholding is information for the approver (the vendor receives less); a missing form holds for a person.
+  if (input.withholding) rules.push({ ruleId: "tax_withholding", passed: true, severity: "info", message: input.withholding.reason });
+  if (input.taxFormWarning) rules.push(warn("tax_form", input.taxFormWarning));
+
   // R5x: the same job reference already billed by a different payee. Driver and guide on one trip have their own
   // invoice numbers; one reference on two payees is how a job gets paid twice.
   for (const o of input.otherVendorRefs ?? []) {

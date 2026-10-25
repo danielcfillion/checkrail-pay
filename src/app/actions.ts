@@ -5,7 +5,8 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { obligations } from "@/lib/db/schema";
+import { businesses, obligations } from "@/lib/db/schema";
+import { audit } from "@/lib/domain/stateMachine";
 import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
@@ -618,6 +619,23 @@ export async function createVendorLinkAction(kind: "remittance" | "evidence", ob
     const token = createEvidenceRequest(db, biz.id, who, obligationId, typeof note === "string" ? note : null);
     done([`/obligations/${obligationId}`]);
     return { ok: true, message: "Evidence request ready. Copy it now: it is shown once.", path: `/evidence/${token}` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function setTaxSettingsAction(change: { withholdVnPit: boolean; withholdPhEwt: boolean }): Promise<ActionResult> {
+  try {
+    const who = await act("settings", "change tax settings");
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const policy = JSON.parse(biz.policyJson) as Record<string, unknown>;
+    const next = { ...policy, withholdVnPit: change?.withholdVnPit === true, withholdPhEwt: change?.withholdPhEwt === true };
+    db.update(businesses).set({ policyJson: JSON.stringify(next) }).where(eq(businesses.id, biz.id)).run();
+    audit(db, { obligationId: null, actor: who.id, action: "settings.tax_changed", detail: { withholdVnPit: next.withholdVnPit, withholdPhEwt: next.withholdPhEwt } });
+    done(["/settings"]);
+    return { ok: true, message: "Tax settings saved. They apply from the next check of each payment." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

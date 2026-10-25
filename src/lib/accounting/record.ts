@@ -22,6 +22,8 @@ export interface AccountingPayload {
   grossAmount: string; // major units, decimal string
   grossCurrency: string;
   feeAmount: string;
+  /** Tax kept back from the vendor and owed to the tax office (a liability line in the books). */
+  withheldAmount?: string;
   feeCurrency: string;
   netPaid: string; // cash out in gross currency: gross + fee for PayPal, gross for Stellar (fee is inside it)
   recipientReceived: string | null;
@@ -58,7 +60,9 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       billDate: billDate,
       dueDate: ob.dueDate ?? bill?.dueDate ?? billDate,
       paymentDate: localDateString(new Date(st.settledAt)),
-      grossAmount: major(st.grossMinor),
+      // The bill is the full amount owed; the vendor was sent that less any tax withheld.
+      grossAmount: major(ob.amountMinor ?? st.grossMinor),
+      withheldAmount: major(ob.withheldMinor ?? 0),
       grossCurrency: st.grossCurrency,
       feeAmount: major(st.feeMinor),
       feeCurrency: st.grossCurrency,
@@ -105,6 +109,7 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "grossCurrency",
   "feeAmount",
   "feeCurrency",
+  "withheldAmount",
   "netPaid",
   "recipientReceived",
   "recipientCurrency",

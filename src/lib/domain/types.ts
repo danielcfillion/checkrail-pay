@@ -89,6 +89,10 @@ export interface ApprovalPolicy {
   autopilotCancelWindowSeconds?: number;
   /** Autopilot switched off without losing its settings. While true the level behaves as assist. */
   autopilotPaused?: boolean;
+  /** The business pays as a Vietnamese entity and withholds 10% personal income tax from individuals paid VND 2,000,000 or more. */
+  withholdVnPit?: boolean;
+  /** The business pays as a Philippine entity and withholds expanded withholding tax at each payee's rate. */
+  withholdPhEwt?: boolean;
 }
 
 export const DEFAULT_POLICY: ApprovalPolicy = {
@@ -187,6 +191,9 @@ export interface PolicyInput {
    * the obligation is in the base currency; null when there is no rate for its currency.
    */
   baseAmountMinor?: number | null;
+  /** Tax kept back from this payment, and a missing tax form (see engine/taxes.ts). */
+  withholding?: { rule: string; withheldMinor: number; reason: string } | null;
+  taxFormWarning?: string | null;
   /** What the business's own rate card and departure records say this job should cost (see engine/rates.ts). */
   expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string } | null;
   /** The bill this payment settles all or part of, with what other payments and credits already cover. */

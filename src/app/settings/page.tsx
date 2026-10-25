@@ -10,6 +10,7 @@ import { getViewer } from "@/lib/viewer";
 import { listTeam, whoIs } from "@/lib/engine/users";
 import { ROLE_LABEL, can, isRole } from "@/lib/auth/roles";
 import { TeamPanel } from "@/components/TeamPanel";
+import { TaxSettings } from "@/components/TaxSettings";
 import { fxAsOf, fxTable } from "@/lib/fx";
 import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
 import { usingDevKey } from "@/lib/crypto/dataKey";
@@ -100,6 +101,11 @@ export default async function SettingsPage() {
           <p className="mb-3 text-ink-soft">Invoices can be in {SUPPORTED_CURRENCIES.join(", ")}. Every limit, cap and total is checked in {cur} at these rates; what the vendor receives comes from the rail&apos;s own quote.</p>
           <KeyValue rows={fxTable().filter((r) => r.currency !== "USD").map((r) => [`1 USD`, `${r.perUsd.toLocaleString("en-US")} ${r.currency}`] as [string, string])} />
           <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">Override with FX_RATES (JSON, units per USD) and FX_RATES_AS_OF. Full bank account numbers are stored encrypted{usingDevKey() ? " with a development key: set CHECKRAIL_DATA_KEY before real use" : ""}.</p>
+        </Panel>
+
+        <Panel title="Tax" aside="guidance, not tax advice">
+          <p className="mb-3 text-ink-soft">A US payee without a W-9 has 24% withheld; payees abroad need a W-8 on file before they are paid without a second look. US payees paid USD 2,000 or more in a year are listed for a 1099-NEC on the Books page.</p>
+          <TaxSettings vnPit={Boolean(policy.withholdVnPit)} phEwt={Boolean(policy.withholdPhEwt)} editable={mayChange} />
         </Panel>
 
         <Panel title="Approval rules" aside="apply at every autonomy level" className="lg:col-span-2">

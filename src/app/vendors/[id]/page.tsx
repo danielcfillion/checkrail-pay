@@ -12,6 +12,7 @@ import { BlockToggle, InviteLink, PendingChange } from "@/components/VendorContr
 import { BillsPanel } from "@/components/BillsPanel";
 import { RatesPanel } from "@/components/RatesPanel";
 import { ratesFor } from "@/lib/engine/rates";
+import { TAX_FORM_LABEL } from "@/lib/engine/taxes";
 import { vendorBills } from "@/lib/engine/bills";
 import { obligations as obligationsTable } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -91,6 +92,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
                 ["Bank", v.bankLabel ? `${v.bankLabel}, ${v.bankCurrency} in ${countryName(v.bankCountry)}` : <span className="text-ink-soft">not on file</span>],
                 ["Email", v.email ?? <span className="text-ink-soft">none</span>],
                 ["Preferred rail", v.preferredRail ? <RailTag rail={v.preferredRail} /> : <span className="text-ink-soft">let the router choose</span>],
+                ["Tax", v.taxForm && v.taxForm !== "none" ? `${v.taxType ?? "payee"}, ${TAX_FORM_LABEL[v.taxForm] ?? v.taxForm} on file${v.taxFormAt ? ` since ${formatDate(v.taxFormAt)}` : ""}${v.withholdingBps ? `, EWT ${v.withholdingBps / 100}%` : ""}` : <span className="text-attention">no tax form on file</span>],
               ]}
             />
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">

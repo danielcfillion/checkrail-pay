@@ -18,7 +18,7 @@ let db: Db;
 const as = (u: string): Actor => resolveActor(db, DEMO_BUSINESS_ID, u, db.select().from(users).where(eq(users.id, u)).get()!.role as Role);
 const ob = (id: string) => db.select().from(obligations).where(eq(obligations.id, id)).get()!;
 
-const HOA = { name: "Hoa Binh Homestay", role: "homestay", country: "VN", email: "hoa@example.com" };
+const HOA = { name: "Hoa Binh Homestay", role: "homestay", country: "VN", email: "hoa@example.com", taxType: "business", taxForm: "w8bene" };
 const ACCOUNT = "0071000123456";
 
 async function vietnameseVendor(): Promise<string> {

@@ -44,6 +44,10 @@ export const vendors = sqliteTable("vendors", {
   bankAccountEnc: text("bank_account_enc"), // full account number, AES-GCM with CHECKRAIL_DATA_KEY; never shown whole
   bankCode: text("bank_code"), // e.g. VCB, TCB, BIDV, BDO
   accountHolder: text("account_holder"), // name on the bank account, as the bank has it
+  taxType: text("tax_type"), // individual | business
+  taxForm: text("tax_form"), // w9 | w8ben | w8bene | vn_08 | none: which form is on file (the form itself, never an ID number)
+  taxFormAt: text("tax_form_at"),
+  withholdingBps: integer("withholding_bps"), // Philippine EWT rate for this payee, set by the accountant
 });
 
 /** People who use the app. Logins come from configuration; this table holds what the app needs to know about them. */
@@ -108,7 +112,9 @@ export const obligations = sqliteTable(
     vendorId: text("vendor_id"),
     billId: text("bill_id"), // the bill this pays all or part of
     paymentKind: text("payment_kind"), // full | deposit | balance | part | advance
-    xeroBillExportedAt: text("xero_bill_exported_at"), // when this payment's bill went out in a Xero bills import file
+    xeroBillExportedAt: text("xero_bill_exported_at"),
+    withheldMinor: integer("withheld_minor"), // tax kept back and paid to the tax office instead of the vendor
+    withholdingNote: text("withholding_note"), // when this payment's bill went out in a Xero bills import file
     state: text("state").notNull(), // ObligationState
     sourceType: text("source_type").notNull(), // invoice | job_completion | operator_instruction | booking
     sourceRef: text("source_ref"), // e.g. INV-2026-0142, JOB-HG-4D-0921

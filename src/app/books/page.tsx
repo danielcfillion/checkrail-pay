@@ -3,7 +3,8 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/books";
-import { formatDateTime, formatMoney, formatMoneySymbol } from "@/lib/format";
+import { formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
+import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileUpload } from "@/components/BooksControls";
 
@@ -20,6 +21,8 @@ export default async function BooksPage() {
   const last = recs[0] ?? null;
   const canRecon = !viewer || viewer.can("reconcile") || viewer.can("pay");
   const total = Object.values(aged.totals).reduce((a, b) => a + b, 0);
+  const year = Number(localDateString().slice(0, 4));
+  const forms = form1099Report(db, biz.id, year);
   return (
     <>
       <PageHeader title="Books" lede="What is owed and how late, whether PayPal's statement agrees with what was paid, and which periods are closed." />
@@ -107,6 +110,41 @@ export default async function BooksPage() {
               ) : null}
             </div>
           ) : null}
+        </Panel>
+
+        <Panel title={`US 1099-NEC, ${year}`} aside="USD 2,000 threshold" className="lg:col-span-2" padded={forms.length === 0}>
+          {forms.length ? (
+            <div className="overflow-x-auto">
+              <table className="ledger">
+                <thead>
+                  <tr>
+                    <th scope="col">Payee</th>
+                    <th scope="col">W-9</th>
+                    <th scope="col" className="r">Paid this year</th>
+                    <th scope="col" className="r">Withheld</th>
+                    <th scope="col">1099-NEC</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forms.map((f) => (
+                    <tr key={f.vendorId}>
+                      <td className="font-medium">
+                        <Link href={`/vendors/${f.vendorId}`} className="hover:underline">
+                          {f.name}
+                        </Link>
+                      </td>
+                      <td className={f.taxForm === "w9" ? "text-settled" : "text-attention"}>{f.taxForm === "w9" ? "on file" : "missing"}</td>
+                      <td className="r num">{formatMoney(f.paidMinor, "USD")}</td>
+                      <td className="r num">{formatMoney(f.withheldMinor, "USD")}</td>
+                      <td>{f.needs1099 ? "file one" : "not needed yet"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-ink-soft">No US payees paid this year.</p>
+          )}
         </Panel>
 
         <Panel title="Closed periods" aside={biz.lockedThrough ? `closed through ${biz.lockedThrough}` : "all open"}>
