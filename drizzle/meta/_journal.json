@@ -64,6 +64,13 @@
       "when": 1791700000000,
       "tag": "0008_bills",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791800000000,
+      "tag": "0009_rates_departures",
+      "breakpoints": true
     }
   ]
 }

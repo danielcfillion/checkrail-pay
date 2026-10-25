@@ -21,6 +21,7 @@ import { signOffDailyClose } from "@/lib/engine/dailyClose";
 import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/runs";
 import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
+import { importDepartures, setRate } from "@/lib/engine/rates";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -529,6 +530,29 @@ export async function voidBillAction(billId: string, reason: string): Promise<Ac
     await withBusiness((db, b, who) => voidBill(db, b, who, billId, typeof reason === "string" ? reason : ""));
     done(["/vendors"]);
     return { ok: true, message: "Voided." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Rate cards and departures. */
+
+export async function setRateAction(vendorId: string, rate: { unit: string; rateMinor: number; currency: string; validFrom: string; validTo?: string | null; note?: string | null }): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => setRate(db, b, who, vendorId, rate));
+    done([`/vendors/${vendorId}`, "/departures"]);
+    return { ok: true, message: "Rate saved. Invoices for this vendor are checked against it from now on." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function importDeparturesAction(csv: string): Promise<ActionResult & { errors?: string[] }> {
+  try {
+    if (typeof csv !== "string") throw new Error("Choose a CSV file");
+    const r = await withBusiness((db, b, who) => importDepartures(db, b, who, csv));
+    done(["/departures"]);
+    return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}.`, errors: r.errors };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

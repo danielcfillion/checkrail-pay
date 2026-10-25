@@ -22,11 +22,16 @@ export default async function VendorsPage() {
         title="Vendors"
         lede="Everyone the business pays, with the payout details on file and what has been paid so far. New details wait for a second person before any money goes there."
         actions={
-          !viewer || viewer.can("edit_vendor") ? (
-            <Link href="/vendors/new" className="btn btn-primary">
-              Add vendor
+          <div className="flex flex-wrap gap-2">
+            <Link href="/departures" className="btn">
+              Departures and rates
             </Link>
-          ) : undefined
+            {!viewer || viewer.can("edit_vendor") ? (
+              <Link href="/vendors/new" className="btn btn-primary">
+                Add vendor
+              </Link>
+            ) : null}
+          </div>
         }
       />
       {pending.length && biz ? (

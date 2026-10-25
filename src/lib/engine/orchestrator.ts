@@ -5,6 +5,7 @@ import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./user
 import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
+import { expectedAmount } from "./rates";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
@@ -335,6 +336,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
     bill: billInput(db, ob),
+    expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,

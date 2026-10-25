@@ -187,6 +187,8 @@ export interface PolicyInput {
    * the obligation is in the base currency; null when there is no rate for its currency.
    */
   baseAmountMinor?: number | null;
+  /** What the business's own rate card and departure records say this job should cost (see engine/rates.ts). */
+  expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string } | null;
   /** The bill this payment settles all or part of, with what other payments and credits already cover. */
   bill?: { id: string; vendorId: string; reference: string; kind: string; status: string; totalMinor: number; currency: string; coveredMinor: number } | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */

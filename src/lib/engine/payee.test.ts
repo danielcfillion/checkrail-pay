@@ -45,9 +45,24 @@ describe("a document that mentions a vendor does not pay that vendor (critic rou
       expect(sent(db, id)).toBe(false);
     });
   }
-  it("a record that names the payee in full still clears, and autopilot sends it", async () => {
+  it("the vendor's own invoice alone waits for a person on autopilot (security audit F6)", async () => {
     const db = await autopilotDb();
     const id = await invoice(db, "Invoice attached from Rosa, please pay.", "Rosa Villanueva, two day trips, USD 205.", 20_500, "INV-RV-0950");
+    expect(state(db, id).state).toBe("awaiting_approval");
+    expect(state(db, id).policyReasonsJson).toMatch(/Only the vendor's own documents support this amount/);
+    await runAutopilot(db);
+    expect(sent(db, id)).toBe(false);
+  });
+
+  it("a job sheet from the business's systems that names the payee in full clears, and autopilot sends it", async () => {
+    const db = await autopilotDb();
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "job_completion",
+      rawInput: "Trips CEB-1D-0950 and CEB-1D-0951 closed. Guide Rosa Villanueva, USD 205 (JOB-CEB-0950).",
+      evidence: [{ kind: "job_sheet", label: "Trip sheet CEB-1D-0950", amountMinor: 20_500, currency: "USD", reference: "JOB-CEB-0950", excerpt: "Rosa Villanueva, two day trips, USD 205." }],
+      actor: "system:booking-webhook",
+    });
     expect(state(db, id).state).toBe("approved");
     await runAutopilot(db);
     await runAutopilot(db);

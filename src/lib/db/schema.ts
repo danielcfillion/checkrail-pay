@@ -388,3 +388,47 @@ export const billAllocations = sqliteTable("bill_allocations", {
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+/** What a vendor charges per unit, for a period. The expected-amount rule multiplies it by a departure's quantities. */
+export const rateCards = sqliteTable("rate_cards", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").notNull(),
+  vendorId: text("vendor_id").notNull(),
+  unit: text("unit").notNull(), // day | vehicle_day | guest_night | room_night | guest | trip
+  rateMinor: integer("rate_minor").notNull(),
+  currency: text("currency").notNull(),
+  validFrom: text("valid_from").notNull(),
+  validTo: text("valid_to"),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+/** A departure (one run of a tour), from the booking system or a manifest import: dates, guests, and who serves it. */
+export const departures = sqliteTable(
+  "departures",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    code: text("code").notNull(), // e.g. HG-4D-0927
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    guests: integer("guests").notNull(),
+    source: text("source").notNull(), // csv | manual | booking_system
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("departures_business_code_unique").on(t.businessId, t.code)]
+);
+
+export const departureServices = sqliteTable(
+  "departure_services",
+  {
+    id: text("id").primaryKey(),
+    departureId: text("departure_id").notNull(),
+    vendorId: text("vendor_id").notNull(),
+    unit: text("unit").notNull(),
+    quantity: integer("quantity").notNull(),
+  },
+  (t) => [index("departure_services_departure").on(t.departureId)]
+);

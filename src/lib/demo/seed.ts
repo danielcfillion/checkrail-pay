@@ -1,7 +1,7 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
 import { newId } from "../domain/ids";
@@ -51,7 +51,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -68,6 +68,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
       .run();
   }
 
+  seedRatesAndDepartures(db);
   if (history) {
     await seedHistory(db);
     // The most common supplier fraud, waiting in the vendor checks: an email "from" Tam asking to be paid somewhere new.
@@ -159,6 +160,27 @@ async function seedLocalCurrency(db: Db): Promise<void> {
     evidence: [{ kind: "invoice", label: "Homestay invoice HS-1027", amountMinor: 1_080_000_000, currency: "VND", reference: "HS-1027", excerpt: "Linh Family Homestay, Du Gia. 12 guests x 2 nights x VND 450,000 = VND 10,800,000. Dinner and breakfast included. Departure HG-4D-1004." }],
     actor: "system:email-ingest",
   });
+}
+
+/**
+ * The business's own record of what jobs cost: contract rates per vendor, and the departures (from the booking
+ * system's manifest) with who serves each one. The expected-amount rule reads these.
+ */
+function seedRatesAndDepartures(db: Db): void {
+  const ts = new Date().toISOString();
+  const rate = (vendorId: string, unit: string, rateMinor: number, currency: string, note: string) =>
+    db.insert(rateCards).values({ id: newId("rte"), businessId: DEMO_BUSINESS_ID, vendorId, unit, rateMinor, currency, validFrom: "2026-01-01", validTo: null, note, createdBy: "user:minh", createdAt: ts }).run();
+  rate("ven_phuong", "vehicle_day", 20_000, "USD", "Transport agreement 2026: van, driver and fuel");
+  rate("ven_maria", "day", 4_500, "USD", "Lead guide day rate 2026");
+  rate("ven_linh", "guest_night", 1_800, "USD", "Homestay, dinner and breakfast included");
+  rate("ven_linh", "guest_night", 45_000_000, "VND", "Homestay, dinner and breakfast included (VND)");
+  const dep = (code: string, start: string, end: string, guests: number, services: Array<[string, string, number]>) => {
+    const id = newId("dep");
+    db.insert(departures).values({ id, businessId: DEMO_BUSINESS_ID, code, startDate: start, endDate: end, guests, source: "csv", createdBy: "user:lan", createdAt: ts }).run();
+    for (const [vendorId, unit, quantity] of services) db.insert(departureServices).values({ id: newId("dsv"), departureId: id, vendorId, unit, quantity }).run();
+  };
+  dep("HG-4D-0927", "2026-09-27", "2026-09-30", 9, [["ven_phuong", "vehicle_day", 4]]);
+  dep("HG-4D-1004", "2026-10-04", "2026-10-07", 12, [["ven_linh", "guest_night", 24]]);
 }
 
 /** A deposit: the lodge wants half now and half on arrival. The agent asks for USD 425, not 850, and files the invoice as a bill. */

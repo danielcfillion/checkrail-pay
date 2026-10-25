@@ -10,6 +10,8 @@ import { getViewer } from "@/lib/viewer";
 import { changesFor, describeChange, verifyBarrier, VERIFY_METHOD_LABEL, type VerifyMethod } from "@/lib/engine/vendors";
 import { BlockToggle, InviteLink, PendingChange } from "@/components/VendorControls";
 import { BillsPanel } from "@/components/BillsPanel";
+import { RatesPanel } from "@/components/RatesPanel";
+import { ratesFor } from "@/lib/engine/rates";
 import { vendorBills } from "@/lib/engine/bills";
 import { obligations as obligationsTable } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -112,6 +114,9 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
                 <InviteLink vendorId={v.id} />
               </div>
             ) : null}
+          </Panel>
+          <Panel title="Rate card" aside={<Link href="/departures" className="link">Departures</Link>}>
+            <RatesPanel vendorId={v.id} rows={ratesFor(db, v.id)} canSet={!viewer || viewer.can("verify_vendor")} defaultCurrency="USD" />
           </Panel>
           {history.some((c) => c.status !== "pending") ? (
             <Panel title="Detail changes">

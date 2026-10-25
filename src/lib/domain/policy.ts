@@ -160,6 +160,21 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     rules.push(warn("amount_matches_evidence", "None of the attached records carries an amount; the requested figure has not been checked against anything"));
   }
 
+  // R4c: the business's own rate card and departure say what this job costs. More than that is blocked; a match is
+  // support that does not come from the vendor, which Autopilot needs (see below).
+  const exp = input.expectation && hasAmount && input.expectation.currency === obligation.currency ? input.expectation : null;
+  let rateCardMatch = false;
+  if (exp) {
+    const slack = Math.floor((exp.expectedMinor * policy.amountToleranceBps) / 10_000);
+    const asked = obligation.amountMinor!;
+    const fullJob = bill ? bill.totalMinor : asked;
+    if (fullJob > exp.expectedMinor + slack) rules.push(block("expected_amount", `Rate card and departure ${exp.departureCode} say ${fmt(exp.expectedMinor, exp.currency)} (${exp.basis}); this asks for ${fmt(fullJob, obligation.currency!)}`));
+    else {
+      rateCardMatch = true;
+      rules.push(pass("expected_amount", `Within the rate card for ${exp.departureCode}: ${exp.basis} = ${fmt(exp.expectedMinor, exp.currency)}`));
+    }
+  }
+
   // R5x: the same job reference already billed by a different payee. Driver and guide on one trip have their own
   // invoice numbers; one reference on two payees is how a job gets paid twice.
   for (const o of input.otherVendorRefs ?? []) {
@@ -293,6 +308,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     const bizRecent = input.businessRecentMinor ?? 0;
     if (bizRecent + amount > dayCap && input.approvalsCount < 1) {
       return { decision: "require_approval", reasons: [`Payments committed across the business in the last 24h total ${fmt(bizRecent, input.baseCurrency)}; this one would take it to ${fmt(bizRecent + amount, input.baseCurrency)}, above the ${fmt(dayCap, input.baseCurrency)} autopilot daily cap`], rules };
+    }
+    // An invoice is the vendor's own claim, however it arrived. Autopilot pays only what a record the vendor did not
+    // write supports: a job sheet, booking or purchase order from the business's systems, or the rate card.
+    const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
+    if (!independent && input.approvalsCount < 1) {
+      return { decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; autopilot pays what a job sheet, booking or the rate card confirms, so a person approves this one"], rules };
     }
     // Autopilot sends without a person, so it does not send what a person would want to see first: the first
     // payment to a vendor, or an amount far above what this vendor is usually paid.
