@@ -134,9 +134,10 @@ export function remittanceMessageFor(rs: Remittance[], urls: string[]): string {
   const links = urls.join(" ");
   const shorts = rs.filter((x) => x.shortPaid);
   const left = rs.length === 1 && r.history ? r.history.left : null;
+  const taxed = rs.length === 1 && r.withheld ? r : null;
   if (r.language === "vi")
-    return `Chào ${r.vendorName}, ${r.businessName} ${paid ? "đã thanh toán" : "đang chuyển"} ${amount} cho ${refs} qua ${r.rail}${paid ? ` ngày ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (mã giao dịch ${r.providerRef})` : ""}.${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
-  return `Hi ${r.vendorName}, ${r.businessName} ${paid ? "has paid" : "is sending"} ${amount} for ${refs} by ${r.rail}${paid ? ` on ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (reference ${r.providerRef})` : ""}.${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
+    return `Chào ${r.vendorName}, ${r.businessName} ${paid ? "đã thanh toán" : "đang chuyển"} ${amount} cho ${refs} qua ${r.rail}${paid ? ` ngày ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (mã giao dịch ${r.providerRef})` : ""}.${taxed ? ` Thuế khấu trừ ${taxed.withheld} đã nộp cho cơ quan thuế; bạn nhận ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
+  return `Hi ${r.vendorName}, ${r.businessName} ${paid ? "has paid" : "is sending"} ${amount} for ${refs} by ${r.rail}${paid ? ` on ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (reference ${r.providerRef})` : ""}.${taxed ? ` ${taxed.withheld} was withheld for tax and paid to the tax office; you receive ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
 }
 
 export interface EvidenceRequestView {

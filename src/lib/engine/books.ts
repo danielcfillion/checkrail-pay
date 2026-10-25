@@ -177,11 +177,16 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
       continue;
     }
     returnedIds.add(r.s.id);
+    const st = db.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, r.s.obligationId)).get()?.state;
+    if (st === "refunded") {
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "that payment is already marked as come back" });
+      continue;
+    }
     result.returned!.push({ obligationId: r.s.obligationId, vendorName: r.vendorName, amountMinor: l.grossMinor, currency: l.currency, date: l.date, transactionId: l.transactionId, type: l.type, applied: canRefund });
   }
   if (periodFrom && periodTo) {
     for (const r of rows) {
-      if (used.has(r.s.id)) continue;
+      if (used.has(r.s.id) || r.s.reconciledAt) continue;
       const d = localDateString(new Date(r.s.settledAt));
       if (d >= periodFrom && d <= periodTo) result.appOnly.push({ settlementId: r.s.id, obligationId: r.s.obligationId, vendorName: r.vendorName, amountMinor: r.s.grossMinor, currency: r.s.grossCurrency, settledAt: r.s.settledAt });
     }
@@ -205,6 +210,23 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
   db.insert(reconciliations).values({ id, businessId, source: "paypal_csv", fileName: fileName?.slice(0, 120) ?? null, periodFrom, periodTo, summaryJson: JSON.stringify(result), createdBy: by.id, createdAt: ts }).run();
   audit(db, { obligationId: null, actor: by.id, action: "books.reconciled", detail: { reconciliationId: id, matched: result.matched.length, statementOnly: result.statementOnly.length, appOnly: result.appOnly.length, returned: result.returned!.length, feeDiffs: result.feeDiffs!.length } });
   return { id, result };
+}
+
+/**
+ * A person found in PayPal that a payout came back, on a line the statement could not tie (no Reference Txn ID).
+ * They name the PayPal transaction they checked; the payment is then refunded like a tied reversal.
+ */
+export function markReturnedByHand(db: Db, businessId: string, by: Actor, obligationId: string, statementRef: string): void {
+  requirePermission(by, "reconcile", "record money that came back");
+  const ref = statementRef.trim();
+  if (!/^[A-Za-z0-9-]{6,40}$/.test(ref)) throw new Error("Enter the PayPal transaction id of the money that came back");
+  const o = db.select().from(obligations).where(and(eq(obligations.id, obligationId), eq(obligations.businessId, businessId))).get();
+  if (!o) throw new Error("Obligation not found");
+  if (o.state !== "settled") throw new Error("Only a paid payment can be marked as come back");
+  const used = db.select({ d: auditEntries.detailJson }).from(auditEntries).where(eq(auditEntries.action, "settlement.returned")).all().some((a) => (JSON.parse(a.d ?? "{}") as { statementRef?: string }).statementRef === ref);
+  if (used) throw new Error("That PayPal transaction is already recorded against a payment");
+  transition(db, obligationId, "refunded", by.id, "settlement.returned", { statementRef: ref, type: "recorded by hand" });
+  if (o.billId) reopenBill(db, o.billId);
 }
 
 export function listReconciliations(db: Db, businessId: string) {

@@ -178,6 +178,11 @@ export interface AiInterpretation {
 export interface PolicyInput {
   /** "advance", "deposit", "balance", "part", "full" for a payment against a bill. */
   paymentKind?: string | null;
+  /** An earlier payment to the vendor's current payout details came back after they were verified. */
+  returnedToSameDetails?: string | null;
+  /** The invoice's own date and the business's local today, to catch a future-dated invoice. */
+  invoiceDate?: string | null;
+  today?: string;
   obligation: {
     id: string;
     amountMinor: number | null;

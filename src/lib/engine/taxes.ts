@@ -1,4 +1,4 @@
-import { and, eq, gte, lt } from "drizzle-orm";
+import { and, eq, gte, lt, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { obligations, settlements, vendors } from "../db/schema";
 import type { ApprovalPolicy } from "../domain/types";
@@ -68,7 +68,7 @@ export function form1099Report(db: Db, businessId: string, year: number) {
     .from(settlements)
     .innerJoin(obligations, eq(obligations.id, settlements.obligationId))
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
-    .where(and(eq(obligations.businessId, businessId), eq(vendors.country, "US"), gte(settlements.settledAt, from), lt(settlements.settledAt, to)))
+    .where(and(eq(obligations.businessId, businessId), eq(vendors.country, "US"), gte(settlements.settledAt, from), lt(settlements.settledAt, to), ne(obligations.state, "refunded")))
     .all();
   const by = new Map<string, { vendorId: string; name: string; taxForm: string | null; paidMinor: number; withheldMinor: number }>();
   for (const r of rows) {

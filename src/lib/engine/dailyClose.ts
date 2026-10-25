@@ -136,7 +136,7 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   for (const e of entries) {
     if (!e.obligationId) continue;
     const detail = e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : {};
-    if (e.action === "settlement.returned") flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again from the payment page.`);
+    if (e.action === "settlement.returned") flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again (from the payment page, or the vendor's page when it was part of a bill).`);
     if (e.action === "autopilot.refused") flag("refused", e.obligationId, e.createdAt, String(detail.reason ?? "Policy refused at the last moment. No money moved."));
     if (e.action === "autopilot.cancelled") flag("cancelled_release", e.obligationId, e.createdAt, `Scheduled release cancelled by ${e.actor.replace(/^user:/, "")}.`);
     if (e.action === "execution.failed" || e.action === "settlement.failed") {

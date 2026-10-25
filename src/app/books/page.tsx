@@ -103,7 +103,7 @@ export default async function BooksPage() {
                           {l.vendorName}
                         </Link>{" "}
                         {formatMoney(l.amountMinor, l.currency)} on {l.date} ({l.type || "returned"}).{" "}
-                        {l.applied === false ? "Not applied: someone who reconciles (the accountant, an approver or the owner) uploads this statement to mark it." : "Marked refunded; check their details, then pay it again from the payment page."}
+                        {l.applied === false ? "Not applied: someone who reconciles (the accountant, an approver or the owner) uploads this statement to mark it." : "Marked refunded; check their details, then pay it again (from the payment page, or the vendor\u2019s page when it was part of a bill)."}
                       </li>
                     ))}
                   </ul>

@@ -25,7 +25,7 @@ import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/ru
 import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
 import { importDepartures, setRate } from "@/lib/engine/rates";
-import { parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
+import { markReturnedByHand, parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
 import { createEvidenceRequest, createRemittanceLink, remittanceMessage, remittanceMessageFor, viewRemittance } from "@/lib/engine/vendorLinks";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
@@ -221,6 +221,22 @@ export async function repayAction(id: string): Promise<ActionResult & { id?: str
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: "Requested again. It goes through every check like a new payment.", id: newId };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+  });
+}
+
+/** Record that a payout came back, after checking it in PayPal (a reversal the statement could not tie). */
+export async function markReturnedAction(id: string, statementRef: string): Promise<ActionResult> {
+  return inRequest(async () => {
+  try {
+    const who = await actOn(id, "reconcile", "record money that came back");
+    const biz = await getDb().query.businesses.findFirst();
+    markReturnedByHand(getDb(), biz!.id, who, id, typeof statementRef === "string" ? statementRef : "");
+    done([`/obligations/${id}`]);
+    done();
+    return { ok: true, message: "Recorded as come back. The vendor is owed again." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -471,8 +487,15 @@ export async function createVendorAction(profile: unknown, payout: unknown): Pro
 export async function updateVendorAction(vendorId: string, profile: unknown): Promise<ActionResult> {
   return inRequest(async () => {
   try {
-    await withBusiness((db, b, who) => updateVendorProfile(db, b, who, vendorId, profile));
+    await withBusiness(async (db, b, who) => {
+      updateVendorProfile(db, b, who, vendorId, profile);
+      // Tax status or country may have changed what is kept back: waiting payments are checked and quoted again.
+      await recheckVendorItems(db, b, vendorId, who.id);
+      const approved = db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.businessId, b), eq(obligations.vendorId, vendorId), eq(obligations.state, "approved"))).all();
+      for (const o of approved) await refreshQuotesIfStale(db, o.id, 0);
+    });
     done(["/vendors", `/vendors/${vendorId}`]);
+    done();
     return { ok: true, message: "Vendor details saved." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };

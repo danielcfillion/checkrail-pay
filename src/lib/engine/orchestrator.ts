@@ -46,6 +46,8 @@ export interface IngestInput {
   /** Internal: the bill this payment settles all or part of (see engine/bills.ts). Never taken from a form. */
   billId?: string | null;
   paymentKind?: "full" | "deposit" | "balance" | "part" | "advance" | null;
+  /** Internal: the provenance each evidence row already had, when a payment is requested again. Never from a form. */
+  evidenceProvenance?: string[];
 }
 
 const SOURCE_TYPES: readonly SourceType[] = ["invoice", "job_completion", "operator_instruction", "booking"];
@@ -122,8 +124,9 @@ export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<s
       })
       .run();
     audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
-    for (const e of input.evidence ?? []) {
-      let provenance: string = input.evidenceSource ?? "system";
+    for (const [n, e] of (input.evidence ?? []).entries()) {
+      const carried = rawInput.evidenceProvenance?.[n];
+      let provenance: string = carried && ["system", "operator", "document", "vendor"].includes(carried) ? carried : input.evidenceSource ?? "system";
       let attachmentId: string | null = null;
       if (e.attachmentId) {
         const att = tx.select().from(attachments).where(and(eq(attachments.id, e.attachmentId), eq(attachments.businessId, input.businessId))).get();
@@ -287,17 +290,18 @@ export async function repayRefunded(db: Db, obligationId: string, actor: string)
   const live = again.map((r) => mustGet(db, r.id)).find((o) => !["cancelled", "failed", "refunded"].includes(o.state));
   if (live) throw new Error(`Already requested again (${live.id})`);
   const ev = listEvidence(db, obligationId);
-  // Copied records keep their weight: anything that was not from an integration becomes the operator's claim.
-  const source = ev.every((e) => e.provenance === "system") ? "system" : "operator";
+  // Copied records keep exactly the weight they had: a machine-read document stays a document, a typed one stays typed.
   const id = await ingestObligation(db, {
     businessId: ob.businessId,
     sourceType: ob.sourceType as SourceType,
     sourceRef: ob.sourceRef,
     rawInput: ob.rawInput,
     evidence: ev.map(({ id: _id, provenance: _p, ...e }) => (void _id, void _p, e)),
-    evidenceSource: source,
+    evidenceProvenance: ev.map((e) => e.provenance ?? "system"),
     actor,
   });
+  // The bill is already in Xero from the first time: the same invoice is not a second bill.
+  if (ob.xeroBillExportedAt) db.update(obligations).set({ xeroBillExportedAt: ob.xeroBillExportedAt }).where(eq(obligations.id, id)).run();
   audit(db, { obligationId: id, actor, action: "obligation.repays", detail: { refunded: obligationId } });
   return id;
 }
@@ -336,7 +340,10 @@ export async function refreshQuotesIfStale(db: Db, obligationId: string, maxAgeM
   const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get();
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get();
   if (!vendorRow || !biz) return false;
-  await quoteAndRoute(db, obligationId, toProfile(vendorRow), payableMinor(ob), ob.currency, biz.country);
+  // The tax kept back is part of what is sent: work it out from the vendor's details as they are now.
+  const w = withholdingFor({ ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) }, biz.country, vendorRow, ob.amountMinor, ob.currency);
+  db.update(obligations).set({ withheldMinor: w?.withheldMinor ?? null, withholdingNote: w?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
+  await quoteAndRoute(db, obligationId, toProfile(vendorRow), payableMinor(mustGet(db, obligationId)), ob.currency, biz.country);
   return true;
 }
 
@@ -400,7 +407,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -462,6 +469,10 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
+    invoiceDate: ob.invoiceDate,
+    today: localDateString(),
+    // A payout to these same details came back since they were last verified: likely a dead address.
+    returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? null) : null,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
     withholding,
     taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,

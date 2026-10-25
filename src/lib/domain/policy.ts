@@ -251,6 +251,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     );
   }
 
+  // R6b: the last payment to these exact details came back (unclaimed or reversed). Paying them again is how money
+  // bounces twice; someone confirms the details with the vendor first.
+  if (input.returnedToSameDetails) rules.push(warn("payout_returned", `A payment to these payout details came back (obligation ${input.returnedToSameDetails}); confirm them with the vendor before paying again`));
+
+  if (input.invoiceDate && input.today && input.invoiceDate > input.today) rules.push(warn("invoice_date", `The invoice is dated ${input.invoiceDate}, in the future; check the date before paying`));
+
   // R7: corridor allowed
   if (vendor) {
     const corridor = `${input.businessCountry}->${vendor.country}`;

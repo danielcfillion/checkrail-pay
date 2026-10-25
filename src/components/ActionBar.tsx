@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, recheckAction, repayAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, markReturnedAction, recheckAction, repayAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -25,7 +25,7 @@ type Props = {
   availableRails: Rail[];
   hasAccounting: boolean;
   /** What the viewer may do. The server checks again; this only hides buttons that would be refused. */
-  perms?: { approve: boolean; pay: boolean; amend: boolean; resolveStuck: boolean };
+  perms?: { approve: boolean; pay: boolean; amend: boolean; resolveStuck: boolean; reconcile?: boolean };
   /** Why this viewer cannot approve this one (role, limit, or they prepared it), when they cannot. */
   approveRefusal?: string | null;
   vendorId?: string | null;
@@ -34,7 +34,7 @@ type Props = {
   vendorChoices?: Array<{ id: string; name: string }>;
 };
 
-const ALL = { approve: true, pay: true, amend: true, resolveStuck: true };
+const ALL = { approve: true, pay: true, amend: true, resolveStuck: true, reconcile: true };
 
 function Waiting({ children }: { children: React.ReactNode }) {
   return <p className="rounded border px-3 py-2 text-ink-soft hairline">{children}</p>;
@@ -45,7 +45,7 @@ function Waiting({ children }: { children: React.ReactNode }) {
  * On a successful payment the check line marker travels to paid, then reconciled.
  */
 export function ActionBar(p: Props) {
-  const can = p.perms ?? ALL;
+  const can: typeof ALL = { ...ALL, ...(p.perms ?? {}), reconcile: p.perms ? Boolean(p.perms.reconcile) : true };
   const [pending, start] = useTransition();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -261,7 +261,28 @@ export function ActionBar(p: Props) {
       );
 
     case "settled":
-      return <p className="text-ink-soft">{p.hasAccounting ? "Paid and recorded. Nothing left to do." : "Paid. Waiting for the accounting record."}</p>;
+      return (
+        <div className="space-y-3">
+          <p className="text-ink-soft">{p.hasAccounting ? "Paid and recorded. Nothing left to do." : "Paid. Waiting for the accounting record."}</p>
+          {can.reconcile ? (
+            <details className="text-sm">
+              <summary className="cursor-pointer text-ink-soft hover:text-ink">The money came back (found in PayPal)?</summary>
+              <form
+                className="mt-2 flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (note.trim()) run("returned", () => markReturnedAction(p.id, note.trim()));
+                }}
+              >
+                <input className="field num w-56" value={note} onChange={(e) => setNote(e.target.value)} placeholder="PayPal transaction id" aria-label="PayPal transaction id of the money that came back" />
+                <button type="submit" className="btn btn-sm btn-danger" disabled={pending || note.trim().length < 6}>
+                  {busy === "returned" ? "Recording" : "Record it as come back"}
+                </button>
+              </form>
+            </details>
+          ) : null}
+        </div>
+      );
 
     case "refunded":
       return (

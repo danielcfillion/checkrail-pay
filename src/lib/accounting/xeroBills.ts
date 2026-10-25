@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db";
-import { bills, obligations, vendors } from "../db/schema";
+import { bills, businesses, obligations, vendors } from "../db/schema";
 import { csvCell } from "./record";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
@@ -51,6 +51,11 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
     .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, AGREED), opts.onlyNew ? isNull(obligations.xeroBillExportedAt) : undefined))
     .all();
+  // Xero refuses (or misplaces) a bill dated in a closed month. A late invoice keeps its own date in the description
+  // and is posted on the first open day.
+  const lock = db.select({ l: businesses.lockedThrough }).from(businesses).where(eq(businesses.id, businessId)).get()?.l ?? null;
+  const posting = (d: string) => (lock && d <= lock ? new Date(Date.parse(`${lock}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : d);
+  const late = (d: string) => (lock && d <= lock ? ` (invoice dated ${d})` : "");
   const rows: Row[] = [];
   const obligationIds: string[] = [];
   const billIds = new Set<string>();
@@ -67,17 +72,19 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
       const b = db.select().from(bills).where(eq(bills.id, o.billId)).get();
       if (!b || b.kind === "credit_note" || (opts.onlyNew && b.xeroExportedAt)) continue;
       billIds.add(b.id);
-      const date = b.billDate ?? o.invoiceDate ?? localDateString(new Date(b.createdAt));
-      const due = b.dueDate ?? o.dueDate ?? date;
-      rows.push({ ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, b.reference, departure, b.kind), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": b.kind === "advance" ? advancesAccount : base["*AccountCode"], Currency: b.currency });
+      const docDate = b.billDate ?? o.invoiceDate ?? localDateString(new Date(b.createdAt));
+      const date = posting(docDate);
+      const due = [b.dueDate ?? o.dueDate ?? date, date].sort()[1];
+      rows.push({ ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": b.kind === "advance" ? advancesAccount : base["*AccountCode"], Currency: b.currency });
       const w = withholdingLine(b.reference, date, due, o.withheldMinor ?? 0, b.currency, o.withholdingNote);
       if (w) rows.push(w);
       continue;
     }
-    const date = o.invoiceDate ?? localDateString(new Date(o.createdAt));
-    const due = o.dueDate ?? date;
+    const docDate = o.invoiceDate ?? localDateString(new Date(o.createdAt));
+    const date = posting(docDate);
+    const due = [o.dueDate ?? date, date].sort()[1];
     const ref = o.sourceRef ?? o.id;
-    rows.push({ ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, ref, departure), "*UnitAmount": major(o.amountMinor, o.currency) });
+    rows.push({ ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) });
     const w = withholdingLine(ref, date, due, o.withheldMinor ?? 0, o.currency, o.withholdingNote);
     if (w) rows.push(w);
   }
@@ -91,7 +98,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     .filter(({ b }) => b.status !== "void");
   for (const { b, v } of credits) {
     billIds.add(b.id);
-    const date = b.billDate ?? localDateString(new Date(b.createdAt));
+    const date = posting(b.billDate ?? localDateString(new Date(b.createdAt)));
     rows.push({ "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describe(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount : accountFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency });
   }
   return { rows, obligationIds, billIds: [...billIds] };

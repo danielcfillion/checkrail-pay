@@ -97,7 +97,7 @@ export interface RunView {
 export async function viewRun(db: Db, businessId: string, runId: string, viewer: Actor | null): Promise<RunView> {
   const run = mustRun(db, businessId, runId);
   const rows = db.select().from(paymentRunItems).where(eq(paymentRunItems.runId, runId)).all();
-  const obs = rows.length ? db.select({ id: obligations.id, state: obligations.state, amountMinor: obligations.amountMinor, currency: obligations.currency, sourceRef: obligations.sourceRef, dueDate: obligations.dueDate, vendorName: vendors.name }).from(obligations).leftJoin(vendors, eq(vendors.id, obligations.vendorId)).where(inArray(obligations.id, rows.map((r) => r.obligationId))).all() : [];
+  const obs = rows.length ? db.select({ id: obligations.id, state: obligations.state, amountMinor: obligations.amountMinor, withheldMinor: obligations.withheldMinor, currency: obligations.currency, sourceRef: obligations.sourceRef, dueDate: obligations.dueDate, vendorName: vendors.name }).from(obligations).leftJoin(vendors, eq(vendors.id, obligations.vendorId)).where(inArray(obligations.id, rows.map((r) => r.obligationId))).all() : [];
   const byId = new Map(obs.map((o) => [o.id, o]));
   const items = rows.map((r) => {
     const o = byId.get(r.obligationId);
@@ -113,7 +113,8 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     const g = groups.get(key) ?? { currency: it.currency, rail: it.rail ?? "unrouted", totalMinor: 0, feeMinor: 0, count: 0 };
     const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
     if (q && it.rail !== "stellar" && q.sendCurrency === it.currency) g.feeMinor += q.feeMinor ?? 0;
-    g.totalMinor += it.amountMinor;
+    // What leaves the account: the amount less any tax kept back for the tax office.
+    g.totalMinor += it.amountMinor - (byId.get(it.obligationId)?.withheldMinor ?? 0);
     g.count += 1;
     groups.set(key, g);
   }

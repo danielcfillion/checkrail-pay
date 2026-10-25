@@ -43,7 +43,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const base = getBusiness()?.baseCurrency ?? "USD";
   const baseMinor = o.amountMinor != null && o.currency && o.currency !== base ? toBaseMinor(o.amountMinor, o.currency, base) : null;
   const baseEquivalent = baseMinor != null ? formatMoneySymbol(baseMinor, base) : null;
-  const perms = viewer ? { approve: viewer.can("approve"), pay: viewer.can("pay"), amend: viewer.can("amend"), resolveStuck: viewer.can("resolve_stuck") } : undefined;
+  const perms = viewer ? { approve: viewer.can("approve"), pay: viewer.can("pay"), amend: viewer.can("amend"), resolveStuck: viewer.can("resolve_stuck"), reconcile: viewer.can("reconcile") } : undefined;
   const approveRefusal = viewer && o.state === "awaiting_approval" ? runAs(viewer.login, () => approvalGate(getDb(), o.id, viewer.actor.id)).refusal : null;
   const dualGap = o.state === "awaiting_approval" && o.amountMinor != null && o.currency ? dualControlGap(getDb(), o.businessId, baseMinor ?? (o.currency === base ? o.amountMinor : undefined)) : null;
   const vendorChoices = !o.vendorId && o.state === "blocked" ? listVendors().map((v) => ({ id: v.id, name: v.name })) : undefined;
