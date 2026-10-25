@@ -61,6 +61,7 @@ export function InviteLink({ vendorId }: { vendorId?: string }) {
 export type ChangeView = {
   id: string;
   kind: string;
+  warnings?: string[];
   source: string;
   requestedBy: string;
   createdAt: string;
@@ -92,6 +93,13 @@ export function PendingChange({ c, canVerify, mine }: { c: ChangeView; canVerify
           {c.note ? `: ${c.note}` : ""}
         </p>
       </div>
+      {c.warnings?.length ? (
+        <ul className="space-y-1 rounded bg-attention-soft px-3 py-2 text-sm text-attention">
+          {c.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      ) : null}
       <table className="w-full text-sm">
         <thead>
           <tr className="dense text-left text-ink-soft">

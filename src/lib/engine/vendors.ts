@@ -386,7 +386,26 @@ export function describeChange(db: Db, ch: typeof vendorChanges.$inferSelect) {
     vendorName: v?.name ?? proposedRaw.profile?.name ?? null,
     lines,
     note: ch.note,
+    warnings: changeWarnings(v, proposedRaw.profile ?? null, payout),
   };
+}
+
+const fold = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase();
+const words = (x: string) => new Set(fold(x).split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !["nha", "nghi", "homestay", "hotel", "co", "ltd", "llc", "inc", "the", "and", "cong", "ty", "tnhh"].includes(w)));
+
+/** What the verifier should ask about on the call: things that are not wrong in themselves but often are. */
+function changeWarnings(v: typeof vendors.$inferSelect | null | undefined, profile: VendorProfileInput | null, payout: PayoutInput): string[] {
+  const out: string[] = [];
+  const name = v?.name ?? profile?.name ?? "";
+  const holder = payout.accountHolder ?? "";
+  if (holder && name) {
+    const a = words(name);
+    const shared = [...words(holder)].some((w) => a.has(w));
+    if (!shared) out.push(`The name on the account (${holder}) does not match ${name}. Often it is the owner's own account; ask whose it is when you call.`);
+  }
+  if (v && !v.phone) out.push(`No phone number on file for ${v.name}: there is nothing independent to call back. Use a number from an earlier invoice or booking, not one in this request.`);
+  if (!v && profile && !profile.phone) out.push("No phone number given. Get one you can check against the booking or a past invoice before verifying.");
+  return out;
 }
 
 /** Why this person cannot verify a change, or null when they can. Mirrors verifyVendorChange. */

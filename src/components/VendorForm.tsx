@@ -112,7 +112,8 @@ const VN_BANKS: Array<[string, string]> = [
  * One form for the vendor master: add a vendor, edit their profile, request new payout details, or (on the public
  * onboarding page) let the vendor enter their own. Payout fields are never saved straight onto the vendor.
  */
-export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasAccount = false, lang = "en" }: { mode: Mode; initial?: VendorFormValues; vendorId?: string; token?: string; hasAccount?: boolean; lang?: "en" | "vi" }) {
+export function VendorForm({ mode, initial: given = EMPTY_VENDOR, vendorId, token, hasAccount = false, lang = "en", defaultCountry }: { mode: Mode; initial?: VendorFormValues; vendorId?: string; token?: string; hasAccount?: boolean; lang?: "en" | "vi"; defaultCountry?: string }) {
+  const initial = defaultCountry ? { ...given, country: defaultCountry } : given;
   const tr = (en: string) => (lang === "vi" && (mode === "onboard-new" || mode === "onboard-existing") ? VI[en] ?? en : en);
   const [v, setV] = useState<VendorFormValues>(initial);
   const [note, setNote] = useState("");
@@ -293,7 +294,7 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasA
             <select id="v-rail" className="field" value={v.preferredRail} onChange={set("preferredRail")}>
               <option value="">{internal ? "Let the router choose" : tr("No preference")}</option>
               <option value="paypal">PayPal</option>
-              <option value="stellar">Stellar (PYUSD)</option>
+              {internal || v.country !== "VN" ? <option value="stellar">Stellar (PYUSD)</option> : null}
               <option value="wise">{tr("Bank transfer through Wise")}</option>
               <option value="bank_file">{tr("Bank transfer, domestic file (Vietnam)")}</option>
             </select>

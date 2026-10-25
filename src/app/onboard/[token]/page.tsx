@@ -1,7 +1,7 @@
 import { formatDate } from "@/lib/format";
 import { getDb } from "@/lib/db";
 import { lookupInvite } from "@/lib/engine/vendors";
-import { EMPTY_VENDOR, VendorForm } from "@/components/VendorForm";
+import { VendorForm } from "@/components/VendorForm";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Your payment details", robots: { index: false, follow: false } };
@@ -33,10 +33,10 @@ export default async function OnboardPage({ params, searchParams }: { params: Pr
       {view.ok ? (
         <>
           <p className="mt-2 text-ink-soft">
-            {view.vendorName ? t.known(view.vendorName) : t.unknown} {t.confirm} {t.once(formatDate(view.expiresAt))}
+            {view.vendorName ? t.known(view.vendorName) : t.unknown} {t.confirm} {t.once(lang === "vi" ? new Date(view.expiresAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) : formatDate(view.expiresAt))}
           </p>
           <div className="mt-6">
-            <VendorForm mode={view.vendorName ? "onboard-existing" : "onboard-new"} token={token} lang={lang} initial={{ ...EMPTY_VENDOR, country: view.vendorCountry ?? "VN" }} />
+            <VendorForm mode={view.vendorName ? "onboard-existing" : "onboard-new"} token={token} lang={lang} defaultCountry={view.vendorCountry ?? "VN"} />
           </div>
         </>
       ) : (

@@ -72,4 +72,11 @@ describe("day-to-day operations", () => {
     expect(preventedTotal(db).minor - before).toBe(6_000);
     void settlements;
   });
+
+  it("tells the verifier when the name on the account does not match the vendor", async () => {
+    const { createVendor, describeChange, pendingChanges } = await import("./vendors");
+    const vid = createVendor(db, DEMO_BUSINESS_ID, as("lan"), { name: "Nha nghi Sung La", role: "homestay", country: "VN" }, { bankAccountNumber: "0071000888999", bankCode: "VCB", accountHolder: "VANG THI MAY", bankCountry: "VN", bankCurrency: "VND" });
+    const row = pendingChanges(db, DEMO_BUSINESS_ID).find((c) => c.vendorId === vid)!;
+    expect(describeChange(db, row).warnings.join(" ")).toMatch(/VANG THI MAY\) does not match Nha nghi Sung La/);
+  });
 });
