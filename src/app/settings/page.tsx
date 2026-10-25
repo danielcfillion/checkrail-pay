@@ -14,6 +14,7 @@ import { TaxSettings } from "@/components/TaxSettings";
 import { fxAsOf, fxTable } from "@/lib/fx";
 import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
 import { usingDevKey } from "@/lib/crypto/dataKey";
+import { dualControlGap } from "@/lib/engine/orchestrator";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,7 @@ export default async function SettingsPage() {
   const ap = autopilotStatus(getDb(), biz.id);
   const symbol = formatMoneySymbol(0, cur).replace(/[\d.,\s]+$/, "");
   const mayChange = !viewer || viewer.can("settings");
+  const dualGap = dualControlGap(getDb(), biz.id);
   const team = listTeam(getDb(), biz.id)
     .filter((u) => isRole(u.role))
     .map((u) => ({ username: u.id, displayName: u.displayName, role: u.role, roleLabel: ROLE_LABEL[u.role as keyof typeof ROLE_LABEL], approvalLimitMinor: u.approvalLimitMinor, delegateTo: u.delegateTo, delegateUntil: u.delegateUntil, active: u.active, canApprove: can(u.role as keyof typeof ROLE_LABEL, "approve") }));
@@ -93,6 +95,7 @@ export default async function SettingsPage() {
         </Panel>
 
         <Panel title="Team" aside={viewer?.can("manage_users") ? "roles come from the login settings" : "the owner edits this"} className="lg:col-span-2">
+          {dualGap ? <p className="mb-3 rounded border border-attention bg-attention-soft px-3 py-2 text-sm text-ink" role="status">{dualGap}</p> : null}
           <TeamPanel rows={team} editable={Boolean(viewer?.can("manage_users"))} symbol={symbol} me={viewer?.actor.username ?? null} />
           <p className="mt-3 text-xs text-ink-soft">Whoever prepares a payment (creates it or changes its amount, payee or reference) cannot also approve it while someone else can. Cover while away hands that person&apos;s approvals and limit to the named colleague until the end date. Every change here is in the audit log.</p>
         </Panel>

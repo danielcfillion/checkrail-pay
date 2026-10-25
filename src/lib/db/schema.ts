@@ -77,6 +77,7 @@ export const vendorChanges = sqliteTable(
     proposedJson: text("proposed_json").notNull(),
     source: text("source").notNull(), // operator | onboarding
     requestedBy: text("requested_by").notNull(),
+    requestedLogin: text("requested_login"), // the real login when a demo persona asked
     status: text("status").notNull(), // pending | approved | rejected
     decidedBy: text("decided_by"),
     decidedAt: text("decided_at"),
@@ -186,6 +187,7 @@ export const approvals = sqliteTable("approvals", {
   decision: text("decision").notNull(), // approved | rejected | superseded
   note: text("note"),
   acknowledgedJson: text("acknowledged_json"), // warning rule ids on screen when the person approved; null on rows from before 0004
+  login: text("login"), // the real login behind the approval (differs from actor when a demo persona approved)
   createdAt: text("created_at").notNull(),
 });
 
@@ -301,6 +303,7 @@ export const paymentRuns = sqliteTable(
     name: text("name").notNull(),
     status: text("status").notNull(), // draft | releasing | released | cancelled
     createdBy: text("created_by").notNull(),
+    createdLogin: text("created_login"),
     releasedBy: text("released_by"),
     releasedAt: text("released_at"),
     cancelledBy: text("cancelled_by"),

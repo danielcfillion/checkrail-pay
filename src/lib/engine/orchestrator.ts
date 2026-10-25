@@ -8,6 +8,7 @@ import { billBalance, closeIfDone, createBill, findBill } from "./bills";
 import { expectedAmount } from "./rates";
 import { assertOpenPeriod } from "./books";
 import { taxFormWarning, withholdingFor } from "./taxes";
+import { currentLogin, humanOf } from "./requestContext";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
@@ -309,8 +310,9 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const myDocTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
   const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label, e.excerpt]), ...myDocTexts.map((d) => d.text?.slice(0, 4000)));
   // Distinct people, not rows: one person approving twice is still one approval.
-  const approvedRows = db.select({ actor: approvals.actor, ack: approvals.acknowledgedJson }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
-  const approvalsCount = new Set(approvedRows.map((a) => a.actor)).size;
+  const approvedRows = db.select({ actor: approvals.actor, ack: approvals.acknowledgedJson, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
+  // Distinct people: a demo persona approving is its owner's login, not a second person.
+  const approvalsCount = new Set(approvedRows.map((a) => humanOf(a.actor, a.login))).size;
   // Union of what the approvers saw. A row from before acknowledgements were recorded means "unknown": do not second-guess it.
   const acknowledgedWarnings = approvedRows.some((a) => a.ack == null) ? undefined : [...new Set(approvedRows.flatMap((a) => JSON.parse(a.ack!) as string[]))];
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -453,8 +455,9 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
   // Separation of duties: whoever prepared the request (created it, or changed its amount, payee or reference)
   // cannot also approve it, when someone else can. A one-person business has nobody else to ask.
   const preparers = preparersOf(db, obligationId);
-  if (!preparers.includes(actor)) return { refusal: null, selfApproval: false };
-  const others = approversFor(db, ob.businessId, amount).filter((u) => !preparers.includes(`user:${u}`));
+  const human = humanOf(actor, currentLogin());
+  if (!preparers.includes(human)) return { refusal: null, selfApproval: false };
+  const others = approversFor(db, ob.businessId, amount).filter((u) => !preparers.includes(u));
   const required = policy.requireSeparateApprover ?? others.length > 0;
   if (required) return { refusal: `You prepared this payment, so someone else approves it${others.length ? ` (${others.join(", ")} can)` : ""}`, selfApproval: false };
   return { refusal: null, selfApproval: true };
@@ -467,7 +470,8 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
   if (gate.refusal) throw new Error(gate.refusal);
   if (gate.selfApproval) audit(db, { obligationId, actor, action: "approval.self", detail: { reason: "no other approver can approve this amount" } });
   // One approval per person per version of the obligation.
-  const already = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"), eq(approvals.actor, actor))).get();
+  const human = humanOf(actor, currentLogin());
+  const already = db.select({ actor: approvals.actor, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().some((a) => a.actor === actor || humanOf(a.actor, a.login) === human);
   if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
   // What the page showed: the last policy evaluation on record. Policy is then run fresh. If the fresh run has a
   // warning the page did not show (another payee billed this reference since the page was evaluated), the person
@@ -486,7 +490,7 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
     throw new Error(`Something changed since this page was checked: ${unseen.map((r) => r.message).join("; ")}. Read it, then approve again.`);
   }
   const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint);
-  db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), createdAt: now() }).run();
+  db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), login: currentLogin(), createdAt: now() }).run();
   audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null, acknowledged } });
   // Approval does not bypass policy: a blocked obligation stays blocked until the input is fixed.
   const outcome = runPolicy(db, obligationId);
@@ -880,7 +884,15 @@ function settleFromRail(db: Db, ob: typeof obligations.$inferSelect, attemptId: 
     recordSettlement(db, ob.id, attemptId, rail, externalId, 0, ob.amountMinor, "PYUSD", "1", status.explorerUrl ?? null, "PYUSD sent on Stellar. Any recipient-currency (PHP) delivery through the anchor is modelled, not executed. Network fee not recorded on this path.");
     return;
   }
-  const note = mode === "mock" ? null : "Fee and recipient figures are modelled from the published fee schedule, not reported by the provider.";
+  // Only live Stellar reports what arrived. Everywhere else the fee and received figures come from the quote.
+  const note =
+    mode === "mock"
+      ? rail === "wise" || rail === "bank_file" ? "Simulated payment: the fee and received amount come from the modelled price list, not from Wise or the bank." : null
+      : rail === "wise"
+        ? "Wise (beta): the fee and received amount are the quoted figures; check them against the Wise transfer record before closing the month."
+        : rail === "bank_file"
+          ? "Bank file: the fee is the modelled bank charge; check it against the bank statement."
+          : "Fee and recipient figures are modelled from the published fee schedule, not reported by the provider.";
   recordSettlement(db, ob.id, attemptId, rail, externalId, q?.feeMinor ?? 0, q?.receiveAmountMinor ?? null, q?.receiveCurrency ?? null, q?.fxRate ?? null, status.explorerUrl ?? null, note);
 }
 
@@ -921,6 +933,29 @@ export function mustGet(db: Db, id: string) {
   const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
   if (!ob) throw new Error(`Obligation ${id} not found`);
   return ob;
+}
+
+/** For the UI's write surface: the obligation must belong to the caller's business, or it does not exist for them. */
+export function assertOwnObligation(db: Db, businessId: string, id: string): void {
+  if (typeof id !== "string" || !db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.id, id), eq(obligations.businessId, businessId))).get()) throw new Error("Obligation not found");
+}
+
+/**
+ * Dual control that nobody can satisfy: above the dual-approval amount two different people must approve, each
+ * within their own limit. Null when the team can do it (or there is no dual threshold).
+ */
+export function dualControlGap(db: Db, businessId: string, amountBaseMinor?: number): string | null {
+  const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get();
+  if (!biz) return null;
+  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
+  const t = policy.dualApprovalThresholdMinor;
+  if (!t || t <= 0) return null;
+  const amount = amountBaseMinor ?? t + 1;
+  if (amount <= t) return null;
+  const who = approversFor(db, businessId, amount);
+  if (who.length >= 2) return null;
+  const what = amountBaseMinor === undefined ? `a payment above ${fmt(t, biz.baseCurrency)}` : `${fmt(amount, biz.baseCurrency)}`;
+  return `Two different people must approve ${what}, but only ${who.length ? who.join(", ") : "nobody"} can approve that much. Raise a second approver's limit in Settings, Team.`;
 }
 
 export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {

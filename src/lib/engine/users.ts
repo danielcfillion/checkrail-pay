@@ -4,6 +4,8 @@ import { auditEntries, users } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { now } from "../domain/ids";
 import { DEMO_PERSONAS, ROLE_LABEL, can, isRole, type Permission, type Role } from "../auth/roles";
+import { configuredUsers } from "../basicAuth";
+import { humanOf } from "./requestContext";
 
 /**
  * The person acting, as the server sees them. Built from the headers the middleware set (login or persona) and the
@@ -75,14 +77,33 @@ export function requirePermission(a: Actor, p: Permission, what: string): void {
   if (!actorCan(a, p)) throw new Error(`${whoIs(a)} cannot ${what}. Ask someone with the right role.`);
 }
 
-/** How many active people could approve a payment of this size. Separation of duties needs at least two. */
+/**
+ * The separate people who can act, as the business's users. With logins configured, only those logins count: demo
+ * persona rows (Minh, Lan) seeded into the table are played by an owner login and are not extra people. With no
+ * logins (an open development server) every active user row counts, since nothing ties them to one person.
+ */
+export function people(db: Db, businessId: string): Array<{ id: string; role: Role; approvalLimitMinor: number | null; active: boolean }> {
+  const rows = db.select().from(users).where(eq(users.businessId, businessId)).all();
+  const logins = configuredUsers() ?? [];
+  if (!logins.length) return rows.filter((u) => isRole(u.role)).map((u) => ({ id: u.id, role: u.role as Role, approvalLimitMinor: u.approvalLimitMinor, active: u.active }));
+  return logins.map((l) => {
+    const row = rows.find((u) => u.id === l.user);
+    // A login nobody has used yet still counts, with the default limit for its role.
+    return { id: l.user, role: l.role, approvalLimitMinor: row ? (l.role === "admin" ? null : row.approvalLimitMinor) : DEFAULT_LIMIT[l.role], active: row ? row.active : true };
+  });
+}
+
+/** Who could approve a payment of this size (base currency minor units): people with the right and a high enough limit. */
 export function approversFor(db: Db, businessId: string, amountMinor: number): string[] {
-  return db
-    .select()
-    .from(users)
-    .where(eq(users.businessId, businessId))
-    .all()
-    .filter((u) => u.active && isRole(u.role) && can(u.role, "approve") && (u.role === "admin" || u.approvalLimitMinor === null || (u.approvalLimitMinor ?? 0) >= amountMinor))
+  return people(db, businessId)
+    .filter((u) => u.active && can(u.role, "approve") && (u.role === "admin" || u.approvalLimitMinor === null || (u.approvalLimitMinor ?? 0) >= amountMinor))
+    .map((u) => u.id);
+}
+
+/** People other than `exclude` (usernames) holding a permission. */
+export function otherPeopleWith(db: Db, businessId: string, p: Permission, exclude: string[]): string[] {
+  return people(db, businessId)
+    .filter((u) => u.active && can(u.role, p) && !exclude.includes(u.id))
     .map((u) => u.id);
 }
 
@@ -140,17 +161,17 @@ export function seedDemoTeam(db: Db, businessId: string): void {
 }
 
 /** Everyone who took part in preparing an obligation: who created it and who changed its amount, payee or reference. */
+/** The people (usernames of real logins) who created the obligation or changed its amount, payee or reference. */
 export function preparersOf(db: Db, obligationId: string): string[] {
   return [
     ...new Set(
       db
-        .select({ actor: auditEntries.actor, action: auditEntries.action })
+        .select({ actor: auditEntries.actor, action: auditEntries.action, detail: auditEntries.detailJson })
         .from(auditEntries)
         .where(eq(auditEntries.obligationId, obligationId))
         .all()
-        .filter((a) => a.action === "obligation.created" || a.action === "obligation.amended")
-        .map((a) => a.actor)
-        .filter((a) => a.startsWith("user:")),
+        .filter((a) => (a.action === "obligation.created" || a.action === "obligation.amended") && a.actor.startsWith("user:"))
+        .map((a) => humanOf(a.actor, (a.detail ? (JSON.parse(a.detail) as { login?: string }).login : null) ?? null)),
     ),
   ];
 }

@@ -26,8 +26,14 @@ function key(): Buffer {
     return createHash("sha256").update(raw).digest();
   }
   if (realMoneyPossible()) throw new Error("CHECKRAIL_DATA_KEY is not set; full bank account numbers cannot be stored or read with live rails");
+  if (!warned && process.env.NODE_ENV !== "test") {
+    warned = true;
+    console.warn("[checkrail] CHECKRAIL_DATA_KEY is not set: bank account numbers are encrypted with the public development key. Fine for a mock demo; set a random key before storing anyone's real account.");
+  }
   return DEV_KEY;
 }
+
+let warned = false;
 
 export function usingDevKey(): boolean {
   return !process.env.CHECKRAIL_DATA_KEY?.trim();

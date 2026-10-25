@@ -1,3 +1,4 @@
+import { currentLogin } from "../engine/requestContext";
 import { and, eq, desc } from "drizzle-orm";
 import type { Db } from "../db";
 import { obligations, auditEntries } from "../db/schema";
@@ -12,6 +13,13 @@ export class IllegalTransition extends Error {
 
 export interface AuditDetail {
   [key: string]: unknown;
+}
+
+function viaDetail(actor: string, detail: AuditDetail | undefined): string | null {
+  const login = currentLogin();
+  const persona = login && actor.startsWith("user:") && actor.slice(5) !== login;
+  if (!persona) return detail ? JSON.stringify(detail) : null;
+  return JSON.stringify({ ...(detail ?? {}), login });
 }
 
 /**
@@ -35,7 +43,8 @@ export function audit(
           action: entry.action,
           fromState: entry.fromState ?? null,
           toState: entry.toState ?? null,
-          detailJson: entry.detail ? JSON.stringify(entry.detail) : null,
+          // When a demo persona acts, the row also names the real login behind it.
+          detailJson: viaDetail(entry.actor, entry.detail),
           createdAt: now(),
         })
         .run();

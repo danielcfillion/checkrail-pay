@@ -297,6 +297,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   if (cap > 0 && recent + amount > cap && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons: [`Payments to this vendor in the last 24h would total ${fmt(recent + amount, input.baseCurrency)}, above the ${fmt(cap, input.baseCurrency)} daily cap`], rules };
   }
+  // An invoice is the vendor's own claim, however it arrived. Nothing is paid without a person unless a record the
+  // vendor did not write supports it: a job sheet, booking or purchase order from the business's systems, or the
+  // rate card. This holds at every autonomy level.
+  const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
+  const selfAttested = (): PolicyOutcome => ({ decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"], rules });
   // Autonomy only removes the approval step. Everything above (blocks, holds, warnings, dual approval, vendor cap) has already applied.
   const level = effectiveAutonomy(policy);
   if (level === "review" && input.approvalsCount < 1) {
@@ -317,12 +322,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     if (bizRecent + amount > dayCap && input.approvalsCount < 1) {
       return { decision: "require_approval", reasons: [`Payments committed across the business in the last 24h total ${fmt(bizRecent, input.baseCurrency)}; this one would take it to ${fmt(bizRecent + amount, input.baseCurrency)}, above the ${fmt(dayCap, input.baseCurrency)} autopilot daily cap`], rules };
     }
-    // An invoice is the vendor's own claim, however it arrived. Autopilot pays only what a record the vendor did not
-    // write supports: a job sheet, booking or purchase order from the business's systems, or the rate card.
-    const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
-    if (!independent && input.approvalsCount < 1) {
-      return { decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; autopilot pays what a job sheet, booking or the rate card confirms, so a person approves this one"], rules };
-    }
+
     // Autopilot sends without a person, so it does not send what a person would want to see first: the first
     // payment to a vendor, or an amount far above what this vendor is usually paid.
     if (input.vendorSettledMinors && input.approvalsCount < 1) {
@@ -338,11 +338,13 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
         }
       }
     }
+    if (!independent && input.approvalsCount < 1) return selfAttested();
     return { decision: "auto_execute", reasons: [], rules };
   }
   if (amount > policy.autoExecuteThresholdMinor && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons: [`Amount exceeds auto-execute threshold ${fmt(policy.autoExecuteThresholdMinor, input.baseCurrency)}`], rules };
   }
+  if (!independent && input.approvalsCount < 1) return selfAttested();
   return { decision: "auto_execute", reasons: [], rules };
 }
 

@@ -7,12 +7,13 @@ import { getDb } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { businesses, obligations } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
 import { resolveActor, requirePermission, updateTeamMember, type Actor, type TeamChange } from "@/lib/engine/users";
 import { isLiveRails } from "@/lib/config";
+import { enterLogin } from "@/lib/engine/requestContext";
 import { exportPendingCsv } from "@/lib/accounting/record";
 import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
@@ -47,7 +48,18 @@ async function currentActor(): Promise<Actor> {
   const db = getDb();
   const biz = await db.query.businesses.findFirst();
   if (!biz) throw new Error("No business configured. Run the demo seed first.");
-  return resolveActor(db, biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined);
+  const actor = resolveActor(db, biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined);
+  // The rest of this request knows the real login: audit rows name it, and "another person" means another login.
+  enterLogin(actor.viaLogin ?? actor.username);
+  return actor;
+}
+
+/** The acting person on one obligation: refused unless it belongs to their business and their role allows `p`. */
+async function actOn(id: string, p: Permission | null, what: string): Promise<Actor> {
+  const a = p ? await act(p, what) : await currentActor();
+  const biz = await getDb().query.businesses.findFirst();
+  assertOwnObligation(getDb(), biz!.id, id);
+  return a;
 }
 
 /** The acting person, refused unless their role allows `p`. */
@@ -67,7 +79,7 @@ export type ActionResult = { ok: true; message: string } | { ok: false; message:
 export async function approveAction(id: string, note?: string, shownFingerprints?: string[]): Promise<ActionResult> {
   try {
     if (shownFingerprints && (!Array.isArray(shownFingerprints) || shownFingerprints.some((f) => typeof f !== "string" || f.length > 600))) throw new Error("Invalid page state");
-    const out = approveObligation(getDb(), id, (await act("approve", "approve payments")).id, note, shownFingerprints);
+    const out = approveObligation(getDb(), id, (await actOn(id, "approve", "approve payments")).id, note, shownFingerprints);
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: out.decision === "auto_execute" ? "Approved and ready to pay." : `Approval recorded. Policy says: ${out.decision.replace("_", " ")}.` };
@@ -80,7 +92,7 @@ export async function rejectAction(id: string, note?: string): Promise<ActionRes
   try {
     // Turning down a payment that is waiting for approval is an approver's call; cancelling a blocked or held one is cleanup a clerk may do.
     const state = getDb().select({ state: obligations.state }).from(obligations).where(eq(obligations.id, id)).get()?.state;
-    const who = state === "awaiting_approval" || state === "approved" ? await act("approve", "turn down a payment waiting for approval") : await act("amend", "cancel a request");
+    const who = state === "awaiting_approval" || state === "approved" ? await actOn(id, "approve", "turn down a payment waiting for approval") : await actOn(id, "amend", "cancel a request");
     rejectObligation(getDb(), id, who.id, note);
     done([`/obligations/${id}`]);
     done();
@@ -93,7 +105,7 @@ export async function rejectAction(id: string, note?: string): Promise<ActionRes
 export async function executeAction(id: string, rail?: Rail): Promise<ActionResult> {
   try {
     const db = getDb();
-    const r = await executeObligation(db, id, { actor: (await act("pay", "send payments")).id, rail });
+    const r = await executeObligation(db, id, { actor: (await actOn(id, "pay", "send payments")).id, rail });
     if (r.status === "submitted") await confirmSettlement(db, id, "post-execute");
     done([`/obligations/${id}`]);
     done();
@@ -110,7 +122,7 @@ export async function executeAction(id: string, rail?: Rail): Promise<ActionResu
 export async function reconcileAction(id: string): Promise<ActionResult> {
   try {
     const db = getDb();
-    const r = await retryAmbiguousExecution(db, id, { actor: (await act("pay", "reconcile payments")).id });
+    const r = await retryAmbiguousExecution(db, id, { actor: (await actOn(id, "pay", "reconcile payments")).id });
     if (r.status === "submitted") await confirmSettlement(db, id, "post-reconcile");
     done([`/obligations/${id}`]);
     done();
@@ -126,7 +138,7 @@ export async function reconcileAction(id: string): Promise<ActionResult> {
 /** A person checked the provider dashboard for a payment with an unclear outcome. */
 export async function resolveManuallyAction(id: string, found: string | null): Promise<ActionResult> {
   try {
-    const who = (await act("resolve_stuck", "resolve a payment by hand")).id;
+    const who = (await actOn(id, "resolve_stuck", "resolve a payment by hand")).id;
     const state = await resolveManually(getDb(), id, who, found ? { kind: "found", externalId: found } : { kind: "nothing_moved" });
     done([`/obligations/${id}`]);
     done();
@@ -139,7 +151,7 @@ export async function resolveManuallyAction(id: string, found: string | null): P
 /** Move a definitively failed payment back to approved so it can be sent again. */
 export async function retryFailedAction(id: string): Promise<ActionResult> {
   try {
-    retryFailed(getDb(), id, (await act("pay", "retry payments")).id);
+    retryFailed(getDb(), id, (await actOn(id, "pay", "retry payments")).id);
     done([`/obligations/${id}`]);
     return { ok: true, message: "Ready to retry." };
   } catch (e) {
@@ -149,7 +161,7 @@ export async function retryFailedAction(id: string): Promise<ActionResult> {
 
 export async function confirmAction(id: string): Promise<ActionResult> {
   try {
-    await currentActor();
+    await actOn(id, null, "check settlement");
     const state = await confirmSettlement(getDb(), id, "manual");
     done([`/obligations/${id}`]);
     done();
@@ -161,7 +173,7 @@ export async function confirmAction(id: string): Promise<ActionResult> {
 
 export async function amendAction(id: string, patch: { amountMinor?: number; sourceRef?: string; vendorId?: string }, note?: string): Promise<ActionResult> {
   try {
-    await amendObligation(getDb(), id, (await act("amend", "correct payment requests")).id, patch, note);
+    await amendObligation(getDb(), id, (await actOn(id, "amend", "correct payment requests")).id, patch, note);
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: "Obligation corrected and re-evaluated." };
@@ -259,7 +271,7 @@ export async function pauseAutopilotAction(paused: boolean): Promise<ActionResul
 
 export async function cancelReleaseAction(id: string): Promise<ActionResult> {
   try {
-    cancelAutopilotRelease(getDb(), id, (await act("stop", "cancel a scheduled payment")).id);
+    cancelAutopilotRelease(getDb(), id, (await actOn(id, "stop", "cancel a scheduled payment")).id);
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: "Release cancelled. The payment stays approved and can be sent by hand." };

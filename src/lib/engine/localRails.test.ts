@@ -88,7 +88,9 @@ describe("local currency", () => {
   it("pays by bank file when a Vietnamese source account is set: one line per payment, frozen on download, settled on confirm", async () => {
     process.env.BANK_FILE_SOURCE_ACCOUNT = "VCB 0071009999999 Ridgeline Vietnam";
     await vietnameseVendor();
-    const id = await vndInvoice(4_000_000, "HB-0003"); // about USD 157: auto-approved
+    const id = await vndInvoice(4_000_000, "HB-0003"); // about USD 157, but only the vendor's own invoice: a person approves
+    expect(ob(id).state).toBe("awaiting_approval");
+    approveObligation(db, id, "user:minh");
     expect(ob(id).selectedRail).toBe("bank_file"); // same bank as the source account: no fee, cheaper than Wise
     expect(ob(id).state).toBe("approved");
     await executeObligation(db, id, { actor: "user:lan" });

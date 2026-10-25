@@ -4,6 +4,7 @@ import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAll
 import { DEMO_PERSONAS, isRole, type Permission } from "./auth/roles";
 import { actorCan, resolveActor, type Actor } from "./engine/users";
 import { getBusiness } from "./queries";
+import { enterLogin } from "./engine/requestContext";
 
 export interface Viewer {
   actor: Actor;
@@ -22,6 +23,7 @@ export async function getViewer(): Promise<Viewer | null> {
   const biz = getBusiness();
   if (!biz) return null;
   const actor = resolveActor(getDb(), biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined);
+  enterLogin(actor.viaLogin ?? actor.username);
   const users = configuredUsers() ?? [];
   // The switch shows for an owner login, including one currently acting as someone else.
   const personasOn = (role === "admin" || h.get(PERSONA_HEADER) !== null) && personasAllowed(process.env, users.length > 0);

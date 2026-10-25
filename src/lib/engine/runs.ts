@@ -1,15 +1,15 @@
 import { fmt } from "../domain/policy";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, paymentRunItems, paymentRuns, users, vendors } from "../db/schema";
+import { obligations, paymentRunItems, paymentRuns, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import type { Rail } from "../domain/types";
 import { getRails } from "../rails";
 import { localDateString } from "../format";
-import { actorCan, requirePermission, whoIs, type Actor } from "./users";
+import { actorCan, otherPeopleWith, requirePermission, whoIs, type Actor } from "./users";
+import { currentLogin, humanOf } from "./requestContext";
 import { approvalGate, approveObligation, executeObligation } from "./orchestrator";
-import { can, isRole } from "../auth/roles";
 
 /**
  * Payment runs: the clerk gathers what is due into one list, the approver reviews the total and the funding, and
@@ -57,7 +57,7 @@ export function createRun(db: Db, businessId: string, by: Actor, input: { name?:
   const runId = newId("run");
   const ts = now();
   db.transaction((tx) => {
-    tx.insert(paymentRuns).values({ id: runId, businessId, name, status: "draft", createdBy: by.id, createdAt: ts }).run();
+    tx.insert(paymentRuns).values({ id: runId, businessId, name, status: "draft", createdBy: by.id, createdLogin: currentLogin(), createdAt: ts }).run();
     for (const id of ids) {
       const c = candidates.get(id)!;
       tx.insert(paymentRunItems).values({ id: newId("rni"), runId, obligationId: id, amountMinor: c.amountMinor!, currency: c.currency!, rail: c.selectedRail, status: "queued", createdAt: ts }).run();
@@ -125,14 +125,9 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
 
 function releaseBarrier(db: Db, businessId: string, by: Actor, run: typeof paymentRuns.$inferSelect): string | null {
   if (!actorCan(by, "release_run")) return `${whoIs(by)} cannot release payment runs. An approver or the owner does.`;
-  if (run.createdBy === by.id) {
-    const others = db
-      .select()
-      .from(users)
-      .where(and(eq(users.businessId, businessId), eq(users.active, true)))
-      .all()
-      .filter((u) => isRole(u.role) && can(u.role, "release_run") && `user:${u.id}` !== by.id)
-      .map((u) => u.id);
+  const builder = humanOf(run.createdBy, run.createdLogin);
+  if (run.createdBy === by.id || builder === humanOf(by.id, currentLogin())) {
+    const others = otherPeopleWith(db, businessId, "release_run", [builder]);
     if (others.length) return `You built this run, so someone else releases it (${others.join(", ")} can).`;
   }
   return null;

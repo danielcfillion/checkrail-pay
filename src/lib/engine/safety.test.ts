@@ -492,7 +492,8 @@ describe("H7: velocity cap and untrusted evidence", () => {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
       rawInput: `Invoice ${ref} from Kalaw Trekking Collective: porters for trip KAL-2D-${ref.replace(/\D/g, "").padStart(4, "0")}, total USD 250.`,
-      evidence: [{ kind: "invoice", label: `Invoice ${ref}`, amountMinor: 25_000, currency: "USD", reference: ref, excerpt: "Kalaw Trekking Collective, porters, USD 250.00" }],
+      // A job sheet from the business's own system: independent support, so a clean one under the line pays itself.
+      evidence: [{ kind: "job_sheet", label: `Trip sheet ${ref}`, amountMinor: 25_000, currency: "USD", reference: ref, excerpt: "Kalaw Trekking Collective, porters, USD 250.00" }],
       evidenceSource: source,
       actor: "system:email-ingest",
     });

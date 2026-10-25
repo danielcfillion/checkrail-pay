@@ -122,7 +122,7 @@ describe("evaluatePolicy", () => {
   });
 
   it("compares a local-currency amount with thresholds in the base currency", () => {
-    const ev = [{ id: "e1", kind: "invoice", label: "Invoice from Maria Santos", amountMinor: 1_080_000_000, currency: "VND", reference: "JOB-0921", excerpt: "Maria Santos, VND 10,800,000" }];
+    const ev = [{ id: "e1", kind: "job_sheet", label: "Trip sheet for Maria Santos", amountMinor: 1_080_000_000, currency: "VND", reference: "JOB-0921", excerpt: "Maria Santos, VND 10,800,000" }];
     const vnd = (baseAmountMinor: number) => evaluatePolicy(DEFAULT_POLICY, base({ obligation: { id: "o1", amountMinor: 1_080_000_000, currency: "VND", sourceRef: "JOB-0921", vendorId: "v1" }, evidence: ev, baseAmountMinor }));
     // VND 10,800,000 is about USD 425: above the USD 250 auto-approve line, so a person approves.
     const above = vnd(42_520);

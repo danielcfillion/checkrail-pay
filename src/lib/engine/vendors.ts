@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db";
-import { users, vendorChanges, vendorInvites, vendors } from "../db/schema";
+import { vendorChanges, vendorInvites, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
-import { can, isRole } from "../auth/roles";
-import { requirePermission, type Actor } from "./users";
+import { actorCan, otherPeopleWith, requirePermission, type Actor } from "./users";
+import { currentLogin, humanOf } from "./requestContext";
 import { payoutHashOf } from "./orchestrator";
 import { RAILS, type Rail } from "../domain/types";
 import { decryptField, encryptField, lastFour } from "../crypto/dataKey";
@@ -158,7 +158,7 @@ export function createVendor(db: Db, businessId: string, by: Actor, profileRaw: 
     tx.insert(vendors)
       .values({ id, businessId, ...profile, ...payout, detailsHash: payoutHashOf(payout), verifiedAt: null, status: "active", createdBy: by.id, createdAt: now() })
       .run();
-    tx.insert(vendorChanges).values({ id: newId("vch"), businessId, vendorId: id, kind: "initial", proposedJson: JSON.stringify(payout), source: "operator", requestedBy: by.id, status: "pending", createdAt: now() }).run();
+    tx.insert(vendorChanges).values({ id: newId("vch"), businessId, vendorId: id, kind: "initial", proposedJson: JSON.stringify(payout), source: "operator", requestedBy: by.id, requestedLogin: currentLogin(), status: "pending", createdAt: now() }).run();
   });
   audit(db, { obligationId: null, actor: by.id, action: "vendor.created", detail: { vendorId: id, name: profile.name, payout: maskPayout(payout) } });
   return id;
@@ -171,6 +171,12 @@ export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendo
   const profile = validateProfile(profileRaw);
   const changed = Object.fromEntries(Object.entries(profile).filter(([k, val]) => (v as Record<string, unknown>)[k] !== val));
   if (!Object.keys(changed).length) return;
+  // Tax details decide how much the vendor is actually paid: the person who prepares payments does not set them.
+  if (["taxType", "taxForm", "withholdingBps"].some((k) => k in changed) && !actorCan(by, "verify_vendor")) throw new Error("Tax form and withholding change how much a vendor is paid; an approver or the owner records them");
+  if ("name" in changed) {
+    const clash = db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.businessId, businessId), eq(vendors.name, profile.name))).all().some((x) => x.id !== vendorId);
+    if (clash) throw new Error("Another vendor already has this name");
+  }
   db.update(vendors).set({ ...changed, ...("taxForm" in changed ? { taxFormAt: now() } : {}) }).where(eq(vendors.id, vendorId)).run();
   audit(db, { obligationId: null, actor: by.id, action: "vendor.updated", detail: { vendorId, changed, previous: Object.fromEntries(Object.keys(changed).map((k) => [k, (v as Record<string, unknown>)[k]])) } });
 }
@@ -190,7 +196,7 @@ export function proposePayoutChange(db: Db, businessId: string, by: Actor | { id
     // A newer request replaces an older one still waiting: only one set of proposed details is ever live.
     tx.update(vendorChanges).set({ status: "superseded", decidedAt: now() }).where(and(eq(vendorChanges.vendorId, vendorId), eq(vendorChanges.status, "pending"))).run();
     tx.insert(vendorChanges)
-      .values({ id, businessId, vendorId, kind: "payout", proposedJson: JSON.stringify(payout), source: "role" in by ? "operator" : "onboarding", requestedBy: by.id, status: "pending", note: note ?? null, createdAt: now() })
+      .values({ id, businessId, vendorId, kind: "payout", proposedJson: JSON.stringify(payout), source: "role" in by ? "operator" : "onboarding", requestedBy: by.id, requestedLogin: "role" in by ? currentLogin() : null, status: "pending", note: note ?? null, createdAt: now() })
       .run();
   });
   audit(db, { obligationId: null, actor: by.id, action: "vendor.payout_change_requested", detail: { vendorId, changeId: id, proposed: maskPayout(payout) } });
@@ -198,14 +204,13 @@ export function proposePayoutChange(db: Db, businessId: string, by: Actor | { id
 }
 
 /** People who could verify a change requested by `requestedBy`: approvers and owners who are active and are not the requester. */
-function otherVerifiers(db: Db, businessId: string, requestedBy: string): string[] {
-  return db
-    .select()
-    .from(users)
-    .where(and(eq(users.businessId, businessId), eq(users.active, true)))
-    .all()
-    .filter((u) => isRole(u.role) && can(u.role, "verify_vendor") && `user:${u.id}` !== requestedBy)
-    .map((u) => u.id);
+function otherVerifiers(db: Db, businessId: string, requester: string): string[] {
+  return otherPeopleWith(db, businessId, "verify_vendor", [requester]);
+}
+
+/** Did this person ask for the change? Compared by real login, so a demo persona does not count as someone else. */
+function isRequester(ch: typeof vendorChanges.$inferSelect, actorId: string): boolean {
+  return ch.requestedBy === actorId || humanOf(ch.requestedBy, ch.requestedLogin) === humanOf(actorId, currentLogin());
 }
 
 /**
@@ -219,8 +224,8 @@ export function verifyVendorChange(db: Db, businessId: string, by: Actor, change
   if (!ch) throw new Error("No such change");
   if (ch.status !== "pending") throw new Error(`This change is already ${ch.status}`);
   let self = false;
-  if (ch.requestedBy === by.id) {
-    const others = otherVerifiers(db, businessId, ch.requestedBy);
+  if (isRequester(ch, by.id)) {
+    const others = otherVerifiers(db, businessId, humanOf(ch.requestedBy, ch.requestedLogin));
     if (others.length) throw new Error(`You asked for this change, so someone else verifies it (${others.join(", ")} can)`);
     self = true;
   }
@@ -371,7 +376,7 @@ export function describeChange(db: Db, ch: typeof vendorChanges.$inferSelect) {
 
 /** Why this person cannot verify a change, or null when they can. Mirrors verifyVendorChange. */
 export function verifyBarrier(db: Db, businessId: string, actorId: string, ch: typeof vendorChanges.$inferSelect): string | null {
-  if (ch.requestedBy !== actorId) return null;
-  const others = otherVerifiers(db, businessId, ch.requestedBy);
+  if (!isRequester(ch, actorId)) return null;
+  const others = otherVerifiers(db, businessId, humanOf(ch.requestedBy, ch.requestedLogin));
   return others.length ? `You asked for this, so someone else verifies it (${others.join(", ")} can).` : null;
 }
