@@ -107,6 +107,7 @@ export const obligations = sqliteTable(
     vendorId: text("vendor_id"),
     billId: text("bill_id"), // the bill this pays all or part of
     paymentKind: text("payment_kind"), // full | deposit | balance | part | advance
+    xeroBillExportedAt: text("xero_bill_exported_at"), // when this payment's bill went out in a Xero bills import file
     state: text("state").notNull(), // ObligationState
     sourceType: text("source_type").notNull(), // invoice | job_completion | operator_instruction | booking
     sourceRef: text("source_ref"), // e.g. INV-2026-0142, JOB-HG-4D-0921
@@ -375,6 +376,7 @@ export const bills = sqliteTable(
     note: text("note"),
     createdBy: text("created_by").notNull(),
     createdAt: text("created_at").notNull(),
+    xeroExportedAt: text("xero_exported_at"),
   },
   (t) => [index("bills_vendor").on(t.vendorId), uniqueIndex("bills_vendor_ref_kind_unique").on(t.vendorId, t.reference, t.kind)]
 );

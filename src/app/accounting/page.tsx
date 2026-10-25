@@ -3,11 +3,17 @@ import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
 import { formatDate, formatDateTime, pluralise } from "@/lib/format";
 import { EmptyState, PageHeader, RailTag } from "@/components/ui";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { ExportXeroBills } from "@/components/ExportXeroBills";
+import { xeroBillRows } from "@/lib/accounting/xeroBills";
+import { getDb } from "@/lib/db";
+import { getBusiness } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 export default function AccountingPage() {
   const rows = listAccountingSyncs();
+  const biz = getBusiness();
+  const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
   const pending = rows.filter((r) => r.status === "pending");
   const system = getSystemModes();
 
@@ -21,9 +27,13 @@ export default function AccountingPage() {
           </>
         }
         actions={
-          <ExportCsvButton pendingCount={pending.length} />
+          <div className="flex flex-wrap gap-2">
+            <ExportXeroBills count={newBills} />
+            <ExportCsvButton pendingCount={pending.length} />
+          </div>
         }
       />
+      <p className="mb-3 max-w-3xl text-ink-soft">Bills go to Xero when they are approved, not when they are paid, so aged payables are right while payments wait: the bills file follows Xero&apos;s import template with the account code, tax type and a Departure tracking category. A deposit and its balance are one bill. Payments then match from the bank feed or the settlement records below.</p>
       <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>
 
       {rows.length === 0 ? (

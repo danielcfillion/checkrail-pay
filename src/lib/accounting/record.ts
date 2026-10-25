@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, settlements, vendors, accountingSyncs } from "../db/schema";
+import { obligations, settlements, vendors, accountingSyncs, bills } from "../db/schema";
+import { localDateString } from "../format";
+import { departureCodeFor } from "../engine/rates";
 import { config } from "../config";
 
 /**
@@ -14,6 +16,8 @@ export interface AccountingPayload {
   vendorCountry: string;
   description: string;
   billDate: string;
+  /** When the vendor asked to be paid by; the bill date when no due date was given. */
+  dueDate?: string;
   paymentDate: string;
   grossAmount: string; // major units, decimal string
   grossCurrency: string;
@@ -27,6 +31,10 @@ export interface AccountingPayload {
   externalTransactionId: string;
   explorerUrl: string | null;
   accountCode: string; // suggested expense account
+  /** Departure code, for a Xero tracking category ("Departure") so cost per trip can be reported. */
+  departure?: string | null;
+  /** Xero tax type for the bill line (XERO_TAX_TYPE, default "Tax Exempt"); tax profiles refine it. */
+  taxType?: string;
   obligationId: string;
 }
 
@@ -37,6 +45,8 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
   const v = db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get();
   if (!v) return null;
   const major = (minor: number) => (minor / 100).toFixed(2);
+  const bill = ob.billId ? db.select().from(bills).where(eq(bills.id, ob.billId)).get() : null;
+  const billDate = bill?.billDate ?? localDateString(new Date(ob.createdAt));
   return {
     destination: config.accounting.destination,
     payload: {
@@ -44,8 +54,10 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       vendorName: v.name,
       vendorCountry: v.country,
       description: ob.description ?? "",
-      billDate: (ob.dueDate ?? ob.createdAt).slice(0, 10),
-      paymentDate: st.settledAt.slice(0, 10),
+      // The bill date is when the obligation was raised (or the bill's own date), never the due date; dates are local.
+      billDate: billDate,
+      dueDate: ob.dueDate ?? bill?.dueDate ?? billDate,
+      paymentDate: localDateString(new Date(st.settledAt)),
       grossAmount: major(st.grossMinor),
       grossCurrency: st.grossCurrency,
       feeAmount: major(st.feeMinor),
@@ -58,7 +70,9 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       rail: st.rail,
       externalTransactionId: st.externalId ?? "",
       explorerUrl: st.explorerUrl,
-      accountCode: accountCodeFor(v.role),
+      accountCode: v.defaultAccountCode ? v.defaultAccountCode : accountCodeFor(v.role),
+      departure: departureCodeFor(db, ob.businessId, [ob.rawInput, ob.sourceRef, ob.description]),
+      taxType: process.env.XERO_TAX_TYPE || "Tax Exempt",
       obligationId: ob.id,
     },
   };
@@ -99,6 +113,9 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "externalTransactionId",
   "explorerUrl",
   "accountCode",
+  "dueDate",
+  "departure",
+  "taxType",
   "obligationId",
 ];
 

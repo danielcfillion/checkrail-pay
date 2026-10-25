@@ -13,6 +13,7 @@ import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
 import { resolveActor, requirePermission, updateTeamMember, type Actor, type TeamChange } from "@/lib/engine/users";
 import { isLiveRails } from "@/lib/config";
 import { exportPendingCsv } from "@/lib/accounting/record";
+import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import type { Rail, SourceType } from "@/lib/domain/types";
@@ -553,6 +554,20 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
     const r = await withBusiness((db, b, who) => importDepartures(db, b, who, csv));
     done(["/departures"]);
     return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}.`, errors: r.errors };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: string }> {
+  try {
+    const who = await act("export", "export bills");
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const { csv, count } = exportNewXeroBills(db, biz.id, who.id);
+    done(["/accounting"]);
+    return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import.` : "No new bills since the last export.", csv: count ? csv : undefined };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

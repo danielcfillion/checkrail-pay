@@ -164,3 +164,12 @@ export function listDepartures(db: Db, businessId: string) {
   const names = new Map(db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, businessId)).all().map((v) => [v.id, v.name]));
   return deps.map((d) => ({ ...d, services: db.select().from(departureServices).where(eq(departureServices.departureId, d.id)).all().map((s) => ({ ...s, vendorName: names.get(s.vendorId) ?? s.vendorId })) }));
 }
+
+/** The departure a payment belongs to, for reporting: a code on file named in the text, else the first code-shaped token. */
+export function departureCodeFor(db: Db, businessId: string, texts: Array<string | null | undefined>): string | null {
+  const hay = texts.filter(Boolean).join(" ").toUpperCase();
+  const tokens = [...new Set(hay.match(/\b[A-Z]{2,4}-\d{1,2}D-\d{4}\b/g) ?? [])];
+  if (!tokens.length) return null;
+  const known = db.select({ code: departures.code }).from(departures).where(and(eq(departures.businessId, businessId), inArray(departures.code, tokens))).all();
+  return known[0]?.code ?? tokens[0];
+}
