@@ -255,7 +255,7 @@ function invoiceDatesFor(db: Db, ob: typeof obligations.$inferSelect, vendorId: 
 }
 
 /** A person sets the invoice and due dates (they do not change what is paid, so approvals stand). */
-export function setObligationDates(db: Db, obligationId: string, actor: string, raw: { invoiceDate?: unknown; dueDate?: unknown }): void {
+export function setObligationDates(db: Db, obligationId: string, actor: string, raw: { invoiceDate?: unknown; dueDate?: unknown }): { changedAfterExport: boolean } {
   const ob = mustGet(db, obligationId);
   if (["settled", "cancelled", "refunded"].includes(ob.state)) throw new Error("This payment is closed");
   const ok = (v: unknown) => v === null || v === "" || (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00Z`)));
@@ -263,9 +263,43 @@ export function setObligationDates(db: Db, obligationId: string, actor: string, 
   const invoiceDate = (raw.invoiceDate as string | null) || null;
   const dueDate = (raw.dueDate as string | null) || null;
   if (invoiceDate && dueDate && dueDate < invoiceDate) throw new Error("The due date is before the invoice date");
+  if (invoiceDate && invoiceDate > localDateString()) throw new Error("The invoice date is in the future; check the date on the invoice");
+  // A closed month stays closed: neither the date being replaced nor the new one may fall in it.
+  if (invoiceDate !== ob.invoiceDate) for (const d of [ob.invoiceDate, invoiceDate]) if (d) assertOpenPeriod(db, ob.businessId, d, "an invoice");
   db.update(obligations).set({ invoiceDate, dueDate, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  // Already in Xero with the old dates: the accountant changes it there too. Recorded so the Accounting page lists it.
+  if (ob.xeroBillExportedAt && (invoiceDate !== ob.invoiceDate || dueDate !== ob.dueDate)) audit(db, { obligationId, actor, action: "accounting.changed_after_export", detail: { what: "dates", invoiceDate, dueDate, exportedAt: ob.xeroBillExportedAt } });
   if (ob.billId) db.update(bills).set({ billDate: invoiceDate ?? undefined, dueDate: dueDate ?? undefined }).where(eq(bills.id, ob.billId)).run();
   audit(db, { obligationId, actor, action: "obligation.dates_set", detail: { invoiceDate, dueDate, previous: { invoiceDate: ob.invoiceDate, dueDate: ob.dueDate } } });
+  return { changedAfterExport: Boolean(ob.xeroBillExportedAt) };
+}
+
+/**
+ * A payment that came back (an unclaimed or reversed payout) is owed again. This starts a new request for it, with the
+ * same text and records, through every check again: the vendor's details, the duplicate check (a refunded payment
+ * does not count as paid), approval. The refunded one stays as it is, for the books.
+ */
+export async function repayRefunded(db: Db, obligationId: string, actor: string): Promise<string> {
+  const ob = mustGet(db, obligationId);
+  if (ob.state !== "refunded") throw new Error("Only a payment that came back can be paid again");
+  if (ob.billId) throw new Error("This was part of a bill: pay what is open on the bill from the vendor's page");
+  const again = db.select({ id: obligations.id }).from(auditEntries).innerJoin(obligations, eq(obligations.id, auditEntries.obligationId)).where(and(eq(auditEntries.action, "obligation.repays"), eq(auditEntries.detailJson, JSON.stringify({ refunded: obligationId })))).all().filter((r) => r.id);
+  const live = again.map((r) => mustGet(db, r.id)).find((o) => !["cancelled", "failed", "refunded"].includes(o.state));
+  if (live) throw new Error(`Already requested again (${live.id})`);
+  const ev = listEvidence(db, obligationId);
+  // Copied records keep their weight: anything that was not from an integration becomes the operator's claim.
+  const source = ev.every((e) => e.provenance === "system") ? "system" : "operator";
+  const id = await ingestObligation(db, {
+    businessId: ob.businessId,
+    sourceType: ob.sourceType as SourceType,
+    sourceRef: ob.sourceRef,
+    rawInput: ob.rawInput,
+    evidence: ev.map(({ id: _id, provenance: _p, ...e }) => (void _id, void _p, e)),
+    evidenceSource: source,
+    actor,
+  });
+  audit(db, { obligationId: id, actor, action: "obligation.repays", detail: { refunded: obligationId } });
+  return id;
 }
 
 /**
@@ -531,12 +565,19 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
     if (row && isRole(row.role)) {
       const who = resolveActor(db, ob.businessId, row.id, row.role);
       if (!actorCan(who, "approve")) return { refusal: `${whoIs(who)} cannot approve payments. An approver or the owner does.`, selfApproval: false };
-      if (who.approvalLimitMinor !== null && amount > who.approvalLimitMinor) {
+      // Above the dual-approval amount the second signature is a check, not the authority: it may come from any
+      // approver once someone whose limit covers the amount has approved. Two different people still sign.
+      const secondSigner = policy.dualApprovalThresholdMinor > 0 && amount > policy.dualApprovalThresholdMinor && coveringApprovalBy(db, obligationId, ob.businessId, amount, humanOf(actor, currentLogin()));
+      if (who.approvalLimitMinor !== null && amount > who.approvalLimitMinor && !secondSigner) {
         const higher = approversFor(db, ob.businessId, amount).filter((u) => u !== row.id);
-        return { refusal: `${ob.currency && ob.currency !== biz.baseCurrency ? `${fmt(ob.amountMinor ?? 0, ob.currency)} (about ${fmt(amount, biz.baseCurrency)})` : fmt(amount, biz.baseCurrency)} is above ${who.displayName}'s approval limit of ${fmt(who.approvalLimitMinor, biz.baseCurrency)}; someone with a higher limit approves this one${higher.length ? ` (${higher.join(", ")} can)` : ""}`, selfApproval: false };
+        return { refusal: `${ob.currency && ob.currency !== biz.baseCurrency ? `${fmt(ob.amountMinor ?? 0, ob.currency)} (about ${fmt(amount, biz.baseCurrency)})` : fmt(amount, biz.baseCurrency)} is above ${who.displayName}'s approval limit of ${fmt(who.approvalLimitMinor, biz.baseCurrency)}; someone with a higher limit approves this one${higher.length ? ` (${higher.join(", ")} can)` : ""}${policy.dualApprovalThresholdMinor > 0 && amount > policy.dualApprovalThresholdMinor ? ", and then you can give the second approval" : ""}`, selfApproval: false };
       }
     }
   }
+  // One approval per person: the page says so instead of offering a button that will refuse.
+  const me = humanOf(actor, currentLogin());
+  if (db.select({ actor: approvals.actor, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().some((a) => a.actor === actor || humanOf(a.actor, a.login) === me))
+    return { refusal: "You have already approved this; the next approval comes from a different person", selfApproval: false };
   // Separation of duties: whoever prepared the request (created it, or changed its amount, payee or reference)
   // cannot also approve it, when someone else can. A one-person business has nobody else to ask.
   const preparers = preparersOf(db, obligationId);
@@ -546,6 +587,18 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
   const required = policy.requireSeparateApprover ?? others.length > 0;
   if (required) return { refusal: `You prepared this payment, so someone else approves it${others.length ? ` (${others.join(", ")} can)` : ""}`, selfApproval: false };
   return { refusal: null, selfApproval: true };
+}
+
+/** Whether a person other than `notHuman` has already approved this, within their own limit for `amount`. */
+function coveringApprovalBy(db: Db, obligationId: string, businessId: string, amount: number, notHuman: string): boolean {
+  const rows = db.select({ actor: approvals.actor, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
+  return rows.some((a) => {
+    if (humanOf(a.actor, a.login) === notHuman || !a.actor.startsWith("user:")) return false;
+    const u = db.select().from(users).where(and(eq(users.id, a.actor.slice(5)), eq(users.businessId, businessId))).get();
+    if (!u || !isRole(u.role)) return false;
+    const p = resolveActor(db, businessId, u.id, u.role);
+    return actorCan(p, "approve") && (p.approvalLimitMinor === null || p.approvalLimitMinor >= amount);
+  });
 }
 
 export function approveObligation(db: Db, obligationId: string, actor: string, note?: string, shownFingerprints?: string[]): PolicyOutcome {
@@ -690,7 +743,7 @@ const OPEN_ATTEMPT = ["pending", "unknown", "submitted", "confirmed"];
  *    execution_pending with an "unknown" attempt instead of failing it.
  */
 export async function executeObligation(db: Db, obligationId: string, opts: ExecuteOptions): Promise<{ attemptId: string; status: string }> {
-  const ob = mustGet(db, obligationId);
+  let ob = mustGet(db, obligationId);
   if (ob.state !== "approved") throw new Error(`Obligation must be approved before execution (state: ${ob.state})`);
 
   const outcome = runPolicy(db, obligationId);
@@ -701,7 +754,13 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   }
 
   // Quotes from more than six hours ago (or before a rail was set up) are refreshed before the router's choice is used.
-  if (!opts.rail) await refreshQuotesIfStale(db, obligationId, 6 * 3600_000);
+  // And always when the quote was for a different amount than will be sent (tax withheld since, a short pay), so the
+  // fee and what the vendor receives are recorded for the amount that actually goes.
+  const quoted = db.select({ send: routeQuotes.sendAmountMinor }).from(routeQuotes).where(and(eq(routeQuotes.obligationId, obligationId), eq(routeQuotes.rail, opts.rail ?? ob.selectedRail ?? ""))).get();
+  if (quoted && quoted.send !== payableMinor(mustGet(db, obligationId))) await refreshQuotesIfStale(db, obligationId, 0);
+  else if (!opts.rail) await refreshQuotesIfStale(db, obligationId, 6 * 3600_000);
+  // Policy just recomputed the tax kept back: what is sent below is the obligation as it stands now.
+  ob = mustGet(db, obligationId);
   const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : undefined;
   if (!vendorRow) throw new Error("Obligation has no vendor");
   refuseIfPayoutChanged(db, ob, vendorRow);
@@ -1048,10 +1107,13 @@ export function dualControlGap(db: Db, businessId: string, amountBaseMinor?: num
   if (!t || t <= 0) return null;
   const amount = amountBaseMinor ?? t + 1;
   if (amount <= t) return null;
-  const who = approversFor(db, businessId, amount);
-  if (who.length >= 2) return null;
+  // One person whose limit covers it, plus any second approver as the check.
+  const covering = approversFor(db, businessId, amount);
+  const anyApprover = approversFor(db, businessId, 0);
   const what = amountBaseMinor === undefined ? `a payment above ${fmt(t, biz.baseCurrency)}` : `${fmt(amount, biz.baseCurrency)}`;
-  return `Two different people must approve ${what}, but only ${who.length ? who.join(", ") : "nobody"} can approve that much. Raise a second approver's limit in Settings, Team.`;
+  if (!covering.length) return `Nobody can approve ${what}: raise someone's approval limit in Settings, Team.`;
+  if (anyApprover.length >= 2) return null;
+  return `Two different people must approve ${what}, but only ${anyApprover.join(", ")} can approve payments. Add a second approver in the login settings.`;
 }
 
 export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
@@ -1073,7 +1135,14 @@ export async function addEvidence(db: Db, obligationId: string, actor: string, i
   const newEvidenceId = newId("evd");
   // A vendor's revised invoice or receipt replaces their earlier one; the business's own records are never replaced.
   const replaced = item.provenance === "vendor" && (item.kind === "invoice" || item.kind === "receipt")
-    ? db.select({ id: evidenceTable.id }).from(evidenceTable).where(and(eq(evidenceTable.obligationId, obligationId), eq(evidenceTable.kind, item.kind), isNull(evidenceTable.supersededBy))).all().map((e) => e.id)
+    ? db
+        .select({ id: evidenceTable.id, provenance: evidenceTable.provenance, reference: evidenceTable.reference })
+        .from(evidenceTable)
+        .where(and(eq(evidenceTable.obligationId, obligationId), eq(evidenceTable.kind, item.kind), isNull(evidenceTable.supersededBy)))
+        .all()
+        // A record that came in through an integration is replaced only by a revision of the same invoice number.
+        .filter((e) => (e.provenance && e.provenance !== "system") || (!!item.reference && e.reference?.toUpperCase() === item.reference.toUpperCase()))
+        .map((e) => e.id)
     : [];
   db.transaction((tx) => {
     if (replaced.length) tx.update(evidenceTable).set({ supersededBy: newEvidenceId }).where(inArray(evidenceTable.id, replaced)).run();

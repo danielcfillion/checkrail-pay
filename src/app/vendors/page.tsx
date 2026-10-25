@@ -1,3 +1,4 @@
+import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { listVendors } from "@/lib/queries";
 import { countryName, formatDate, roleLabel } from "@/lib/format";
@@ -39,7 +40,7 @@ export default async function VendorsPage() {
           <div className="space-y-6">
             {pending.map((c) => (
               <div key={c.id} className="border-b pb-5 last:border-0 last:pb-0 hairline">
-                <PendingChange c={describeChange(db, c)} canVerify={!viewer || viewer.can("verify_vendor")} mine={viewer ? verifyBarrier(db, biz.id, viewer.actor.id, c) : null} />
+                <PendingChange c={describeChange(db, c)} canVerify={!viewer || viewer.can("verify_vendor")} mine={viewer ? runAs(viewer.login, () => verifyBarrier(db, biz.id, viewer.actor.id, c)) : null} />
                 {c.vendorId ? (
                   <Link href={`/vendors/${c.vendorId}`} className="link mt-2 inline-block text-xs">
                     Open vendor

@@ -65,23 +65,40 @@ describe("books", () => {
 });
 
 describe("returned payouts", () => {
-  it("marks a payout PayPal returned as refunded, so the vendor shows as owed again, and flags a fee that differs", async () => {
+  async function paid() {
     const db2 = openTestDb();
     const { story: s2 } = await seedDemo(db2, { history: false });
-    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
     await executeObligation(db2, s2.paypal, { actor: "user:lan" });
     await confirmSettlement(db2, s2.paypal);
     const st = db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!;
     const email = db2.select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!.paypalEmail!.toLowerCase();
     const [y, m, d] = st.settledAt.slice(0, 10).split("-");
-    const csv = [
-      '"Date","Name","Type","Status","Currency","Gross","Fee","To Email Address","Transaction ID","Subject","Note"',
-      `"${m}/${d}/${y}","Maria Santos","Mass Pay Payment","Completed","USD","-180.00","-2.50","${email}","9AB1","",""`,
-      `"${m}/${d}/${y}","Maria Santos","Payout Reversal","Completed","USD","180.00","0.00","${email}","9AB2","","Unclaimed payout returned"`,
-    ].join("\n");
-    const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv(csv));
+    const head = '"Date","Name","Type","Status","Currency","Gross","Fee","From Email Address","To Email Address","Transaction ID","Reference Txn ID","Subject","Note"';
+    const payout = `"${m}/${d}/${y}","Maria Santos","Mass Pay Payment","Completed","USD","-180.00","-2.50","ap@ridgeline.example","${email}","9AB1","","",""`;
+    // As PayPal writes it: from the vendor, to the business, naming the payout it reverses.
+    const reversal = (ref: string) => `"${m}/${d}/${y}","Maria Santos","Payout Reversal","Completed","USD","180.00","0.00","${email}","ap@ridgeline.example","9AB2","${ref}","","Unclaimed payout returned"`;
+    return { db2, s2, head, payout, reversal };
+  }
+
+  it("ties a reversal to the payout it names, marks it refunded and flags a fee that differs", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n")));
     expect(result.returned).toHaveLength(1);
+    expect(result.statementOnly).toHaveLength(0);
     expect(result.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
     expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+  });
+
+  it("does not refund on a line that names no payout of ours, and a clerk's upload only lists it", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    const forged = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, reversal("")].join("\n"))).result;
+    expect(forged.returned).toHaveLength(0);
+    expect(forged.returnedUnmatched?.[0].why).toMatch(/names no original transaction/);
+    const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");
+    const byClerk = reconcilePayPal(db2, DEMO_BUSINESS_ID, lan, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n"))).result;
+    expect(byClerk.returned?.[0].applied).toBe(false);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
   });
 });

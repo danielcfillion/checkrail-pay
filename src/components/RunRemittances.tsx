@@ -32,7 +32,7 @@ export function RunRemittances({ runId }: { runId: string }) {
         start(async () => {
           const r = await runRemittancesAction(runId);
           if (!r.ok || !r.items) return toast(r.message, "error");
-          setItems(r.items.map((i) => ({ vendorName: i.vendorName, text: i.text.replace("{link}", `${window.location.origin}${i.path}`) })));
+          setItems(r.items.map((i) => ({ vendorName: i.vendorName, text: i.paths.reduce((t, p, n) => t.replace(`{link${n}}`, `${window.location.origin}${p}`), i.text) })));
         })
       }
     >

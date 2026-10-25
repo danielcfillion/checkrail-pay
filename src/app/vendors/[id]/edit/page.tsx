@@ -11,7 +11,7 @@ export const metadata = { title: "Edit vendor" };
 export default async function EditVendorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const viewer = await getViewer();
-  if (viewer && !viewer.can("edit_vendor")) redirect(`/vendors/${id}`);
+  if (viewer && !viewer.can("edit_vendor") && !viewer.can("verify_vendor")) redirect(`/vendors/${id}`);
   const d = getVendorDetail(id);
   if (!d) notFound();
   const v = d.vendor;
@@ -57,9 +57,11 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
         <Panel title="Profile" aside="saved straight away">
           <VendorForm mode="profile" initial={initial} vendorId={v.id} />
         </Panel>
-        <Panel title="Payout details" aside="needs a second person">
-          <VendorForm mode="payout" initial={initial} vendorId={v.id} hasAccount={Boolean(v.bankAccountEnc)} />
-        </Panel>
+        {!viewer || viewer.can("edit_vendor") ? (
+          <Panel title="Payout details" aside="needs a second person">
+            <VendorForm mode="payout" initial={initial} vendorId={v.id} hasAccount={Boolean(v.bankAccountEnc)} />
+          </Panel>
+        ) : null}
       </div>
     </>
   );

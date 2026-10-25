@@ -178,13 +178,14 @@ export function createVendor(db: Db, businessId: string, by: Actor, profileRaw: 
 
 /** Name, role, contact, notes and account code change directly. Payout details do not: see proposePayoutChange. */
 export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendorId: string, profileRaw: unknown): void {
-  requirePermission(by, "edit_vendor", "edit vendors");
+  // The clerk keeps vendor records; an approver records what needs a checker (tax status, country, phone, retainer).
+  if (!actorCan(by, "verify_vendor")) requirePermission(by, "edit_vendor", "edit vendors");
   const v = mustVendor(db, businessId, vendorId);
   const profile = validateProfile(profileRaw);
   const changed = Object.fromEntries(Object.entries(profile).filter(([k, val]) => (v as Record<string, unknown>)[k] !== val));
   if (!Object.keys(changed).length) return;
   // Tax details decide how much the vendor is actually paid: the person who prepares payments does not set them.
-  if (["taxType", "taxForm", "withholdingBps"].some((k) => k in changed) && !actorCan(by, "verify_vendor")) throw new Error("Tax form and withholding change how much a vendor is paid; an approver or the owner records them");
+  if (["taxType", "taxForm", "withholdingBps", "country"].some((k) => k in changed) && !actorCan(by, "verify_vendor")) throw new Error("Country, tax form and withholding change how much tax is kept back; an approver or the owner records them");
   if ("retainerMinor" in changed && !actorCan(by, "verify_vendor")) throw new Error("A retainer stops the same-amount warning; an approver or the owner sets it");
   // The phone on file is what a verifier calls to confirm new bank details; whoever requests changes does not set it.
   if ("phone" in changed && v.phone && !actorCan(by, "verify_vendor")) throw new Error("The phone number is used to confirm bank details by calling back; an approver or the owner changes it");

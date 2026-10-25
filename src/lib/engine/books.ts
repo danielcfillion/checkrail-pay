@@ -1,12 +1,12 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { businesses, obligations, reconciliations, settlements, vendors } from "../db/schema";
+import { auditEntries, businesses, obligations, reconciliations, settlements, vendors } from "../db/schema";
 import { audit, transition } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { localDateString } from "../format";
 import { toBaseOrZero } from "../fx";
 import { actorCan, requirePermission, type Actor } from "./users";
-import { openBills } from "./bills";
+import { openBills, reopenBill } from "./bills";
 
 /**
  * The accountant's side: does the provider's statement agree with what the app says it paid, what is owed and how
@@ -26,6 +26,10 @@ export interface StatementLine {
   name: string;
   transactionId: string;
   note: string;
+  /** Who the money came from (for an incoming line, the vendor). */
+  fromEmail?: string;
+  /** For a reversal or refund, the transaction it reverses. */
+  referenceTxnId?: string;
 }
 
 /** Parse PayPal's activity download (CSV). Header names are matched case-insensitively; extra columns are ignored. */
@@ -38,7 +42,7 @@ export function parsePayPalCsv(text: string): StatementLine[] {
     const i = head.findIndex((h) => names.includes(h));
     return i;
   };
-  const c = { date: col("date"), type: col("type"), status: col("status"), currency: col("currency"), gross: col("gross"), fee: col("fee"), to: col("to email address", "to email"), name: col("name"), id: col("transaction id"), subject: col("subject"), note: col("note") };
+  const c = { date: col("date"), type: col("type"), status: col("status"), currency: col("currency"), gross: col("gross"), fee: col("fee"), to: col("to email address", "to email"), from: col("from email address", "from email"), ref: col("reference txn id", "reference transaction id"), name: col("name"), id: col("transaction id"), subject: col("subject"), note: col("note") };
   if (c.date < 0 || c.gross < 0 || c.currency < 0 || c.id < 0) throw new Error("This does not look like a PayPal activity download: it needs Date, Currency, Gross and Transaction ID columns");
   const money = (v: string | undefined) => {
     const n = Number((v ?? "").replace(/[,\s]/g, "").replace(/^\((.*)\)$/, "-$1"));
@@ -61,6 +65,8 @@ export function parsePayPalCsv(text: string): StatementLine[] {
       grossMinor: money(r[c.gross]),
       feeMinor: money(r[c.fee]),
       toEmail: (r[c.to] ?? "").trim().toLowerCase(),
+      fromEmail: c.from >= 0 ? (r[c.from] ?? "").trim().toLowerCase() : "",
+      referenceTxnId: c.ref >= 0 ? (r[c.ref] ?? "").trim() : "",
       name: (r[c.name] ?? "").trim(),
       transactionId: (r[c.id] ?? "").trim(),
       note: `${r[c.subject] ?? ""} ${r[c.note] ?? ""}`.trim(),
@@ -106,7 +112,9 @@ export interface ReconResult {
   /** Payments the app recorded as paid by PayPal in the period that the statement does not show. */
   appOnly: Array<{ settlementId: string; obligationId: string; vendorName: string; amountMinor: number; currency: string; settledAt: string }>;
   /** Payouts that came back (unclaimed, reversed, returned): the vendor is owed again. */
-  returned?: Array<{ obligationId: string; vendorName: string; amountMinor: number; currency: string; date: string; transactionId: string; type: string }>;
+  returned?: Array<{ obligationId: string; vendorName: string; amountMinor: number; currency: string; date: string; transactionId: string; type: string; applied?: boolean }>;
+  /** Money that came back but could not be tied to one of our payouts: a person looks it up. */
+  returnedUnmatched?: Array<{ date: string; name: string; amountMinor: number; currency: string; transactionId: string; referenceTxnId: string; type: string; why: string }>;
   /** Matched payouts whose statement fee differs from the fee recorded here. */
   feeDiffs?: Array<{ obligationId: string; vendorName: string; statementFeeMinor: number; recordedFeeMinor: number; currency: string }>;
   feesMinor: Record<string, number>;
@@ -135,7 +143,7 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     .where(and(eq(obligations.businessId, businessId), eq(settlements.rail, "paypal")))
     .all();
   const used = new Set<string>();
-  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], returned: [], feeDiffs: [], feesMinor: {}, periodFrom, periodTo };
+  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], returned: [], returnedUnmatched: [], feeDiffs: [], feesMinor: {}, periodFrom, periodTo };
   for (const l of out) {
     const amount = -l.grossMinor;
     result.feesMinor[l.currency] = (result.feesMinor[l.currency] ?? 0) + Math.abs(l.feeMinor);
@@ -148,17 +156,28 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
       if (l.feeMinor && Math.abs(l.feeMinor) !== m.s.feeMinor) result.feeDiffs!.push({ obligationId: m.s.obligationId, vendorName: m.vendorName, statementFeeMinor: Math.abs(l.feeMinor), recordedFeeMinor: m.s.feeMinor, currency: l.currency });
     } else result.statementOnly.push({ date: l.date, name: l.name, toEmail: l.toEmail, amountMinor: amount, currency: l.currency, transactionId: l.transactionId, type: l.type });
   }
-  // Money coming back: an unclaimed payout returned after 30 days, a reversal. The payment it belongs to is no longer paid.
+  // Money coming back: an unclaimed payout returned after 30 days, a reversal. It is tied to a payment only through
+  // the transaction it reverses (PayPal's "Reference Txn ID"), and only to a payout line this business already matched
+  // to one of its own settlements. An amount and an email are not enough: two payouts of the same amount to the same
+  // vendor would be indistinguishable, and a hand-made line could reopen a paid invoice.
   const backs = lines.filter((l) => l.grossMinor > 0 && RETURN_TYPE.test(`${l.type} ${l.status} ${l.note}`));
+  const byTxn = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (r.s.statementRef) byTxn.set(r.s.statementRef, r);
+  for (const m of result.matched) {
+    const r = rows.find((x) => x.s.id === m.settlementId);
+    if (r) byTxn.set(m.statementRef, r);
+  }
   const returnedIds = new Set<string>();
+  const canRefund = actorCan(by, "reconcile");
   for (const l of backs) {
-    const m = rows.find((r) => !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && (!l.toEmail || (r.email ?? "").toLowerCase() === l.toEmail || !r.email));
-    if (!m) {
-      result.statementOnly.push({ date: l.date, name: l.name, toEmail: l.toEmail, amountMinor: -l.grossMinor, currency: l.currency, transactionId: l.transactionId, type: l.type });
+    const r = l.referenceTxnId ? byTxn.get(l.referenceTxnId) : undefined;
+    const fits = r && !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && (!l.fromEmail || !r.email || r.email.toLowerCase() === l.fromEmail);
+    if (!r || !fits) {
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
       continue;
     }
-    returnedIds.add(m.s.id);
-    result.returned!.push({ obligationId: m.s.obligationId, vendorName: m.vendorName, amountMinor: l.grossMinor, currency: l.currency, date: l.date, transactionId: l.transactionId, type: l.type });
+    returnedIds.add(r.s.id);
+    result.returned!.push({ obligationId: r.s.obligationId, vendorName: r.vendorName, amountMinor: l.grossMinor, currency: l.currency, date: l.date, transactionId: l.transactionId, type: l.type, applied: canRefund });
   }
   if (periodFrom && periodTo) {
     for (const r of rows) {
@@ -172,10 +191,15 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     for (const m of result.matched) tx.update(settlements).set({ reconciledAt: ts, statementRef: m.statementRef.slice(0, 64) }).where(eq(settlements.id, m.settlementId)).run();
   });
   for (const r of result.returned!) {
-    const o = db.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, r.obligationId)).get();
+    // Marking a payment refunded reopens what is owed, so it is the reconciler's call (accountant, approver, owner),
+    // not the clerk's who prepares payments. A clerk's upload lists it for them.
+    if (!r.applied) continue;
+    const o = db.select({ state: obligations.state, billId: obligations.billId }).from(obligations).where(eq(obligations.id, r.obligationId)).get();
+    if (o?.state !== "settled") continue;
     // The money is back with the business: the payment stands as refunded, its bill (if any) is open again, and the
-    // vendor's job can be requested again once their details are checked.
-    if (o?.state === "settled") transition(db, r.obligationId, "refunded", by.id, "settlement.returned", { amountMinor: r.amountMinor, currency: r.currency, statementRef: r.transactionId, type: r.type, date: r.date });
+    // vendor can be paid again (with the same checks as any payment).
+    transition(db, r.obligationId, "refunded", by.id, "settlement.returned", { amountMinor: r.amountMinor, currency: r.currency, statementRef: r.transactionId, type: r.type, date: r.date });
+    if (o.billId) reopenBill(db, o.billId);
   }
   const id = newId("rec");
   db.insert(reconciliations).values({ id, businessId, source: "paypal_csv", fileName: fileName?.slice(0, 120) ?? null, periodFrom, periodTo, summaryJson: JSON.stringify(result), createdBy: by.id, createdAt: ts }).run();
@@ -236,10 +260,13 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
     .select({ o: obligations, vendorName: vendors.name })
     .from(obligations)
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
-    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence"])))
+    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence", "refunded"])))
     .all();
+  // A payment that came back is owed again until it has been requested again.
+  const repaid = new Set(db.select({ d: auditEntries.detailJson }).from(auditEntries).where(eq(auditEntries.action, "obligation.repays")).all().map((r) => (JSON.parse(r.d ?? "{}") as { refunded?: string }).refunded));
   for (const { o, vendorName } of obs) {
     if (o.billId || !o.amountMinor || !o.currency) continue;
+    if (o.state === "refunded" && repaid.has(o.id)) continue;
     const due = o.dueDate ?? localDateString(new Date(o.createdAt));
     rows.push({ kind: "payment", id: o.id, vendorId: o.vendorId!, vendorName, reference: o.sourceRef ?? o.id, amountMinor: o.amountMinor, currency: o.currency, baseMinor: toBaseOrZero(o.amountMinor, o.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: o.state });
   }

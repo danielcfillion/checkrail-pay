@@ -212,3 +212,13 @@ export function openBills(db: Db, businessId: string) {
     .all()
     .map((r) => ({ ...r.bill, vendorName: r.vendorName, balance: billBalance(db, r.bill.id) }));
 }
+
+/** A payment on this bill came back (a reversed payout): if anything is owed again, the bill is open again. */
+export function reopenBill(db: Db, billId: string): void {
+  const b = db.select().from(bills).where(eq(bills.id, billId)).get();
+  if (!b || b.status !== "closed") return;
+  if (billBalance(db, billId).openMinor > 0) {
+    db.update(bills).set({ status: "open" }).where(eq(bills.id, billId)).run();
+    audit(db, { obligationId: null, actor: "system", action: "bill.reopened", detail: { billId, reason: "a payment on it came back" } });
+  }
+}

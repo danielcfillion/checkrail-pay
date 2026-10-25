@@ -15,6 +15,7 @@ export const metadata = { title: "Daily close" };
 const KIND: Record<AttentionItem["kind"], { label: string; tone: string; next: string }> = {
   unknown_outcome: { label: "Outcome unclear", tone: "var(--blocked)", next: "Do not pay again. Open it and reconcile with the provider." },
   payout_exception: { label: "Payout needs attention", tone: "var(--attention)", next: "Sent but not received. Do not pay again; sort it out with the vendor." },
+  returned: { label: "Money came back", tone: "var(--blocked)", next: "The vendor is owed again. Check their details, then pay it again." },
   failed: { label: "Payment failed", tone: "var(--blocked)", next: "Nothing moved. Retry, switch rail or cancel." },
   refused: { label: "Stopped at the last check", tone: "var(--attention)", next: "Something changed after it was scheduled. No money moved." },
   slow_settlement: { label: "Slow to settle", tone: "var(--attention)", next: "Sent, not yet confirmed by the provider." },

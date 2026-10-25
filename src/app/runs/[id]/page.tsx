@@ -1,3 +1,4 @@
+import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
@@ -22,7 +23,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const viewer = await getViewer();
   let v;
   try {
-    v = await viewRun(getDb(), biz.id, id, viewer?.actor ?? null);
+    v = await runAs(viewer?.login ?? null, () => viewRun(getDb(), biz.id, id, viewer?.actor ?? null));
   } catch {
     notFound();
   }

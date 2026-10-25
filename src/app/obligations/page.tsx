@@ -1,3 +1,4 @@
+import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { listObligations, waitingIdsFor } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
@@ -19,7 +20,7 @@ const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }>
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
   const { filter = "all" } = await searchParams;
   const viewer = await getViewer();
-  const mineIds = viewer ? new Set(waitingIdsFor(viewer.actor)) : null;
+  const mineIds = viewer ? new Set(runAs(viewer.login, () => waitingIdsFor(viewer.actor))) : null;
   const filters = mineIds ? [{ key: "mine", label: "Waiting for you" }, ...FILTERS] : FILTERS;
   const active = filters.find((f) => f.key === filter) ?? FILTERS[0];
   const rows = active.key === "mine" && mineIds ? listObligations({ limit: 1000 }).filter((r) => mineIds.has(r.id)) : listObligations({ states: active.states, limit: 500 });

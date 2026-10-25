@@ -102,7 +102,20 @@ export default async function BooksPage() {
                         <Link href={`/obligations/${l.obligationId}`} className="link">
                           {l.vendorName}
                         </Link>{" "}
-                        {formatMoney(l.amountMinor, l.currency)} on {l.date} ({l.type || "returned"}). Marked refunded; check their details, then request it again.
+                        {formatMoney(l.amountMinor, l.currency)} on {l.date} ({l.type || "returned"}).{" "}
+                        {l.applied === false ? "Not applied: someone who reconciles (the accountant, an approver or the owner) uploads this statement to mark it." : "Marked refunded; check their details, then pay it again from the payment page."}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {last.result.returnedUnmatched?.length ? (
+                <div>
+                  <p className="font-medium text-attention">Money came back but could not be tied to one of our payouts. Look these up in PayPal:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {last.result.returnedUnmatched.map((l) => (
+                      <li key={l.transactionId} className="num text-xs">
+                        {l.date} {formatMoney(l.amountMinor, l.currency)} from {l.name || "unknown"} ({l.transactionId}{l.referenceTxnId ? `, reverses ${l.referenceTxnId}` : ""}): {l.why}
                       </li>
                     ))}
                   </ul>

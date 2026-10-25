@@ -69,7 +69,7 @@ export function BillsPanel({ vendorId, rows, position, canIngest, canAmend, defa
 
 function BillItem({ r, credits, canIngest, canAmend }: { r: BillRow; credits: BillRow[]; canIngest: boolean; canAmend: boolean }) {
   const [mode, setMode] = useState<null | "pay" | "credit" | "settle">(null);
-  const [amount, setAmount] = useState((r.balance.openMinor / 100).toFixed(r.currency === "VND" ? 0 : 2));
+  const [amount, setAmount] = useState(fmtInput(r.balance.openMinor, r.currency));
   const [creditId, setCreditId] = useState(credits[0]?.id ?? "");
   const [note, setNote] = useState("");
   const [pending, start] = useTransition();
@@ -121,7 +121,7 @@ function BillItem({ r, credits, canIngest, canAmend }: { r: BillRow; credits: Bi
             </button>
           ) : null}
           {canAmend && r.kind === "invoice" && credits.length && r.balance.openMinor > 0 ? (
-            <button type="button" className="btn btn-sm" onClick={() => setMode("credit")}>
+            <button type="button" className="btn btn-sm" onClick={() => { const c = credits.find((x) => x.id === creditId) ?? credits[0]; setAmount(fmtInput(Math.min(c.balance.openMinor, r.balance.openMinor), r.currency)); setMode("credit"); }}>
               Apply a credit
             </button>
           ) : null}
@@ -148,7 +148,7 @@ function BillItem({ r, credits, canIngest, canAmend }: { r: BillRow; credits: Bi
               <label className="lbl" htmlFor={`cr-${r.id}`}>
                 Credit note
               </label>
-              <select id={`cr-${r.id}`} className="field" value={creditId} onChange={(e) => setCreditId(e.target.value)}>
+              <select id={`cr-${r.id}`} className="field" value={creditId} onChange={(e) => { setCreditId(e.target.value); const c = credits.find((x) => x.id === e.target.value); if (c) setAmount(fmtInput(Math.min(c.balance.openMinor, r.balance.openMinor), r.currency)); }}>
                 {credits.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.reference} ({formatMoney(c.balance.openMinor, c.currency)} left)
@@ -258,4 +258,9 @@ function AddBill({ vendorId, defaultCurrency, onDone }: { vendorId: string; defa
       </div>
     </form>
   );
+}
+
+/** An amount for an input box: what the credit or bill leaves, in the currency's usual decimals. */
+function fmtInput(minor: number, currency: string): string {
+  return (minor / 100).toFixed(currency === "VND" ? 0 : 2);
 }

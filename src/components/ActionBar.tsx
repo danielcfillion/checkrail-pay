@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, recheckAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, recheckAction, repayAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -29,6 +29,7 @@ type Props = {
   /** Why this viewer cannot approve this one (role, limit, or they prepared it), when they cannot. */
   approveRefusal?: string | null;
   vendorId?: string | null;
+  billId?: string | null;
   /** Vendors to pick from when the request names nobody the business knows. */
   vendorChoices?: Array<{ id: string; name: string }>;
 };
@@ -261,6 +262,20 @@ export function ActionBar(p: Props) {
 
     case "settled":
       return <p className="text-ink-soft">{p.hasAccounting ? "Paid and recorded. Nothing left to do." : "Paid. Waiting for the accounting record."}</p>;
+
+    case "refunded":
+      return (
+        <div className="space-y-3">
+          <p className="text-ink-soft">The money came back to the business (an unclaimed or reversed payout), so the vendor is owed again. Check their payout details with them first; an unclaimed payout often means the address is wrong.</p>
+          {p.billId ? (
+            <p className="text-ink-soft">This was part of a bill: pay what is open on it from the vendor&apos;s page.</p>
+          ) : can.amend ? (
+            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("repay", () => repayAction(p.id), (r) => { if (r.ok && (r as { id?: string }).id) window.location.href = `/obligations/${(r as { id?: string }).id}`; })}>
+              {busy === "repay" ? "Requesting" : "Pay it again"}
+            </button>
+          ) : null}
+        </div>
+      );
 
     case "cancelled":
       return <p className="text-ink-soft">Cancelled. No money moved.</p>;

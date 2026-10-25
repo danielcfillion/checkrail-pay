@@ -4,7 +4,7 @@ import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAll
 import { DEMO_PERSONAS, isRole, type Permission } from "./auth/roles";
 import { actorCan, resolveActor, type Actor } from "./engine/users";
 import { getBusiness } from "./queries";
-import { enterLogin } from "./engine/requestContext";
+
 
 export interface Viewer {
   actor: Actor;
@@ -12,6 +12,8 @@ export interface Viewer {
   can: (p: Permission) => boolean;
   /** The demo team, when switching persona is allowed here. */
   personas: typeof DEMO_PERSONAS | null;
+  /** The real login behind this page (the owner, when acting as a demo persona). Checks that compare people run as it. */
+  login: string;
 }
 
 /** The person viewing this page, from the headers the middleware set. Null on public pages or with no business. */
@@ -23,11 +25,10 @@ export async function getViewer(): Promise<Viewer | null> {
   const biz = getBusiness();
   if (!biz) return null;
   const actor = resolveActor(getDb(), biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined);
-  enterLogin(actor.viaLogin ?? actor.username);
   const users = configuredUsers() ?? [];
   // The switch shows for an owner login, including one currently acting as someone else.
   const personasOn = (role === "admin" || h.get(PERSONA_HEADER) !== null) && personasAllowed(process.env, users.length > 0);
-  return { actor, can: (p) => actorCan(actor, p), personas: personasOn ? DEMO_PERSONAS : null };
+  return { actor, can: (p) => actorCan(actor, p), personas: personasOn ? DEMO_PERSONAS : null, login: h.get(PERSONA_HEADER) ?? username };
 }
 
 export async function isPublicPage(): Promise<boolean> {

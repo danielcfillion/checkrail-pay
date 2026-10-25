@@ -7,6 +7,8 @@ import { ExportXeroBills } from "@/components/ExportXeroBills";
 import { xeroBillRows } from "@/lib/accounting/xeroBills";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
+import { auditEntries, obligations } from "@/lib/db/schema";
+import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,15 @@ export default function AccountingPage() {
   const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
   const pending = rows.filter((r) => r.status === "pending");
   const system = getSystemModes();
+  // Bills changed here after they went to Xero: the accountant makes the same change there.
+  const changed = getDb()
+    .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
+    .from(auditEntries)
+    .innerJoin(obligations, eq(obligations.id, auditEntries.obligationId))
+    .where(eq(auditEntries.action, "accounting.changed_after_export"))
+    .orderBy(desc(auditEntries.seq))
+    .limit(20)
+    .all();
 
   return (
     <>
@@ -33,6 +44,24 @@ export default function AccountingPage() {
           </div>
         }
       />
+      {changed.length ? (
+        <div className="panel mb-5 border-attention px-4 py-3 text-sm">
+          <p className="font-medium text-attention">Changed here after it went to Xero: make the same change in Xero.</p>
+          <ul className="mt-1 space-y-0.5">
+            {changed.map((c) => {
+              const d = JSON.parse(c.detail ?? "{}") as { invoiceDate?: string | null; dueDate?: string | null };
+              return (
+                <li key={`${c.obligationId}-${c.at}`} className="num text-xs">
+                  <Link href={`/obligations/${c.obligationId}`} className="link">
+                    {c.ref ?? c.obligationId}
+                  </Link>{" "}
+                  on {formatDateTime(c.at)}: invoice date {d.invoiceDate ?? "none"}, due {d.dueDate ?? "none"}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
       <p className="mb-3 max-w-3xl text-ink-soft">Bills go to Xero when they are approved, not when they are paid, so aged payables are right while payments wait: the bills file follows Xero&apos;s import template with the account code, tax type and a Departure tracking category. A deposit and its balance are one bill. Payments then match from the bank feed or the settlement records below.</p>
       <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>
 

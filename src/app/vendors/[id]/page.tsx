@@ -1,3 +1,4 @@
+import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBusiness, getVendorDetail, listSettlements } from "@/lib/queries";
@@ -80,7 +81,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
           {pendingRows.length ? (
             <Panel title="Waiting for verification" aside="payments use the details on file until then">
               {pendingRows.map((c) => (
-                <PendingChange key={c.id} c={describeChange(db, c)} canVerify={canVerify} mine={viewer ? verifyBarrier(db, v.businessId, viewer.actor.id, c) : null} />
+                <PendingChange key={c.id} c={describeChange(db, c)} canVerify={canVerify} mine={viewer ? runAs(viewer.login, () => verifyBarrier(db, v.businessId, viewer.actor.id, c)) : null} />
               ))}
             </Panel>
           ) : null}
@@ -106,9 +107,9 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
             </p>
             {canEdit || canVerify ? (
               <div className="mt-3 flex flex-wrap gap-2 border-t pt-3 hairline">
-                {canEdit ? (
+                {canEdit || canVerify ? (
                   <Link href={`/vendors/${v.id}/edit`} className="btn btn-sm">
-                    Edit
+                    {canEdit ? "Edit" : "Tax, country and phone"}
                   </Link>
                 ) : null}
                 {canVerify ? <BlockToggle vendorId={v.id} status={v.status} /> : null}

@@ -29,7 +29,7 @@ export interface CloseItem {
 }
 
 export interface AttentionItem extends CloseItem {
-  kind: "unknown_outcome" | "payout_exception" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
+  kind: "returned" | "unknown_outcome" | "payout_exception" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
 }
 
 export interface DailyClose {
@@ -136,6 +136,7 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   for (const e of entries) {
     if (!e.obligationId) continue;
     const detail = e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : {};
+    if (e.action === "settlement.returned") flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again from the payment page.`);
     if (e.action === "autopilot.refused") flag("refused", e.obligationId, e.createdAt, String(detail.reason ?? "Policy refused at the last moment. No money moved."));
     if (e.action === "autopilot.cancelled") flag("cancelled_release", e.obligationId, e.createdAt, `Scheduled release cancelled by ${e.actor.replace(/^user:/, "")}.`);
     if (e.action === "execution.failed" || e.action === "settlement.failed") {
@@ -151,6 +152,9 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     .from(settlements)
     .all();
   const settledById = new Map(settledHistory.map((h) => [h.obligationId, h]));
+  // One line per vendor for things that are about the vendor, not the payment: a first payment, a missing tax form.
+  const newVendorSeen = new Set<string>();
+  const taxWarnedSeen = new Set<string>();
   for (const [id, s] of started) {
     const o = byId.get(id);
     if (!o || !o.vendorId || !["sent", "settled"].includes(o.state)) continue;
@@ -164,7 +168,10 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     const before = obs.filter((x) => x.vendorId === o.vendorId && x.id !== id && settledById.has(x.id) && settledById.get(x.id)!.settledAt < s.at);
     const rail = settledById.get(id)?.rail ?? o.selectedRail;
     const median = earlier.length >= 2 ? earlier[Math.floor(earlier.length / 2)] : 0;
-    if (before.length === 0) {
+    if (before.length === 0 && newVendorSeen.has(o.vendorId)) {
+      // Already flagged for this vendor in this close.
+    } else if (before.length === 0) {
+      newVendorSeen.add(o.vendorId);
       flag("new_vendor", id, s.at, `First payment ever to ${name}. Check the payout details were confirmed with them directly.`);
     } else if (median > 0 && o.amountMinor && o.amountMinor >= median * 2) {
       const times = (o.amountMinor / median).toFixed(1);
@@ -174,13 +181,16 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
       const was = [...new Set(before.map((x) => railLabel(settledById.get(x.id)!.rail)))].join(", ");
       flag("new_vendor", id, s.at, `First payment to ${name}'s bank account (earlier ones went by ${was}). Check the account was confirmed with them directly.`);
     }
-    const warned = latestWarnings(db, id);
+    const taxOnly = (w: string) => /W-8BEN|W-9|tax form/i.test(w);
+    let warned = latestWarnings(db, id);
+    if (taxWarnedSeen.has(o.vendorId)) warned = warned.filter((w) => !taxOnly(w));
+    if (warned.some(taxOnly)) taxWarnedSeen.add(o.vendorId);
     if (warned.length && !s.actor.startsWith("agent:")) {
       flag("approved_over_warning", id, s.at, `Approved over ${warned.length} warning${warned.length === 1 ? "" : "s"}: ${warned.slice(0, 2).join("; ")}${warned.length > 2 ? "; ..." : ""}`);
     }
   }
 
-  const order: AttentionItem["kind"][] = ["unknown_outcome", "payout_exception", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
+  const order: AttentionItem["kind"][] = ["returned", "unknown_outcome", "payout_exception", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
   attention.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.at.localeCompare(a.at));
 
   const waitingOnYou = obs

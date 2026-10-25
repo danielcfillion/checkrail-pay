@@ -7,9 +7,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 const store = new AsyncLocalStorage<{ login: string }>();
 
-/** Set by the server action layer once it knows the login; carries through the rest of that request. */
-export function enterLogin(login: string): void {
-  store.enterWith({ login });
+/**
+ * Run `fn` with this login as the request's real person. Everything `fn` awaits sees it. (Setting it from inside a
+ * helper with enterWith does not work: the value stays in the helper's own async context and the caller never sees
+ * it, which is how the first version of this silently recorded nothing.)
+ */
+export function runAs<T>(login: string | null, fn: () => T): T {
+  return login ? store.run({ login }, fn) : fn();
 }
 
 export function currentLogin(): string | null {

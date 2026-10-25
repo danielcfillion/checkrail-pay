@@ -4,7 +4,7 @@ import { openTestDb, type Db } from "../db";
 import { approvals, auditEntries, obligations } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { approveObligation, ingestObligation } from "./orchestrator";
-import { enterLogin } from "./requestContext";
+import { currentLogin, runAs } from "./requestContext";
 
 const big = (db: Db, actor: string) =>
   ingestObligation(db, {
@@ -25,18 +25,19 @@ describe("one person is one person, whatever persona they act as (security re-au
     const db = openTestDb();
     await seedDemo(db, { history: false });
     const id = await big(db, "system:booking-webhook");
-    enterLogin("owner");
+    await runAs("owner", async () => {
     approveObligation(db, id, "user:owner");
     expect(() => approveObligation(db, id, "user:daniel")).toThrow(/already approved/);
     expect(db.select().from(obligations).where(eq(obligations.id, id)).get()!.state).toBe("awaiting_approval");
     expect(db.select().from(approvals).where(eq(approvals.obligationId, id)).all()[0].login).toBe("owner");
+    });
   });
 
   it("with one login, personas are not other people: preparing as Lan and approving as Minh is a recorded self-approval", async () => {
     process.env.CHECKRAIL_USERS = "owner:pw:admin";
     const db = openTestDb();
     await seedDemo(db, { history: false });
-    enterLogin("owner");
+    await runAs("owner", async () => {
     const id = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
@@ -49,13 +50,14 @@ describe("one person is one person, whatever persona they act as (security re-au
     expect(rows.some((r) => r.action === "approval.self")).toBe(true);
     const granted = rows.find((r) => r.action === "approval.granted")!;
     expect(JSON.parse(granted.detailJson!).login).toBe("owner");
+    });
   });
 
   it("seeded demo people are not counted as approvers a real deployment does not have", async () => {
     process.env.CHECKRAIL_USERS = "solo:pw:admin";
     const db = openTestDb();
     await seedDemo(db, { history: false });
-    enterLogin("solo");
+    await runAs("solo", async () => {
     const id = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
@@ -64,5 +66,20 @@ describe("one person is one person, whatever persona they act as (security re-au
       actor: "user:solo",
     });
     expect(() => approveObligation(db, id, "user:solo")).not.toThrow();
+    });
+  });
+});
+
+describe("the real login reaches code that runs after awaits and inside helpers", () => {
+  it("is visible after awaits inside runAs, and gone outside it", async () => {
+    const helper = async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      return currentLogin();
+    };
+    expect(await runAs("owner", async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      return helper();
+    })).toBe("owner");
+    expect(currentLogin()).toBeNull();
   });
 });

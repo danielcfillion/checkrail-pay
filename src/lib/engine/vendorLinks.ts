@@ -81,7 +81,7 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     reference: ob.sourceRef ?? ob.id,
     amount: fmt(ob.amountMinor ?? 0, ob.currency ?? "USD"),
     received: st?.receivedMinor != null && st.receivedCurrency ? fmt(st.receivedMinor, st.receivedCurrency) : null,
-    rail: railLabel(st?.rail ?? ob.selectedRail),
+    rail: v.country === "VN" ? railVi(st?.rail ?? ob.selectedRail) : railLabel(st?.rail ?? ob.selectedRail),
     date: formatDate(st?.settledAt ?? ob.updatedAt),
     providerRef: st?.externalId ?? null,
     status: ob.state === "settled" ? "paid" : "on its way",
@@ -90,6 +90,10 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     shortPaid: shortPaidOf(db, ob),
     history: ob.billId ? billHistory(db, ob.billId, ob.id) : null,
   };
+}
+
+function railVi(rail: string | null): string {
+  return rail === "bank_file" ? "chuyển khoản ngân hàng" : rail === "wise" ? "chuyển khoản qua Wise" : railLabel(rail);
 }
 
 function shortPaidOf(db: Db, ob: typeof obligations.$inferSelect): Remittance["shortPaid"] {
@@ -113,9 +117,26 @@ function billHistory(db: Db, billId: string, current: string): Remittance["histo
 
 /** The message to paste into Zalo, WhatsApp or email alongside the link. Vietnamese for Vietnamese vendors. */
 export function remittanceMessage(r: Remittance, url: string): string {
+  return remittanceMessageFor([r], [url]);
+}
+
+/**
+ * One message per vendor, however many of their payments went out together (a bank file merges them into one
+ * transfer). "Paid" only once the provider or the bank has confirmed; until then it says the money is on its way.
+ */
+export function remittanceMessageFor(rs: Remittance[], urls: string[]): string {
+  const r = rs[0];
+  const paid = rs.every((x) => x.status === "paid");
+  const sameCurrency = rs.every((x) => x.amount.split(" ")[0] === r.amount.split(" ")[0]);
+  const total = rs.length > 1 && sameCurrency ? fmt(rs.reduce((a, x) => a + Math.round(Number(x.amount.split(" ")[1].replace(/,/g, "")) * 100), 0), r.amount.split(" ")[0]) : r.amount;
+  const refs = rs.map((x) => x.reference).join(", ");
+  const amount = rs.length > 1 && !sameCurrency ? rs.map((x) => `${x.amount} (${x.reference})`).join(", ") : total;
+  const links = urls.join(" ");
+  const shorts = rs.filter((x) => x.shortPaid);
+  const left = rs.length === 1 && r.history ? r.history.left : null;
   if (r.language === "vi")
-    return `Chào ${r.vendorName}, ${r.businessName} đã ${r.status === "paid" ? "thanh toán" : "chuyển"} ${r.amount} cho ${r.reference} qua ${r.rail} ngày ${r.date}${r.providerRef ? ` (mã giao dịch ${r.providerRef})` : ""}.${r.shortPaid ? ` Hóa đơn ghi ${r.shortPaid.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${r.shortPaid.basis}).` : ""}${r.history ? ` Còn lại: ${r.history.left}.` : ""} Chi tiết: ${url}`;
-  return `Hi ${r.vendorName}, ${r.businessName} ${r.status === "paid" ? "has paid" : "has sent"} ${r.amount} for ${r.reference} by ${r.rail} on ${r.date}${r.providerRef ? ` (reference ${r.providerRef})` : ""}.${r.shortPaid ? ` Your invoice says ${r.shortPaid.invoiced}; we paid the agreed rate (${r.shortPaid.basis}).` : ""}${r.history ? ` Left on the invoice: ${r.history.left}.` : ""} Details: ${url}`;
+    return `Chào ${r.vendorName}, ${r.businessName} ${paid ? "đã thanh toán" : "đang chuyển"} ${amount} cho ${refs} qua ${r.rail}${paid ? ` ngày ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (mã giao dịch ${r.providerRef})` : ""}.${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
+  return `Hi ${r.vendorName}, ${r.businessName} ${paid ? "has paid" : "is sending"} ${amount} for ${refs} by ${r.rail}${paid ? ` on ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (reference ${r.providerRef})` : ""}.${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
 }
 
 export interface EvidenceRequestView {

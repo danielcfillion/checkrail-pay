@@ -1,3 +1,4 @@
+import { runAs } from "@/lib/engine/requestContext";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
@@ -45,7 +46,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   }
   let businessName: string | null = null;
   let system = null;
-  let viewer = null;
+  let viewer: Awaited<ReturnType<typeof getViewer>> = null;
   let waiting = 0;
   let vendorChecks = 0;
   let runsToRelease = 0;
@@ -53,11 +54,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     businessName = getBusiness()?.name ?? null;
     system = getSystemModes();
     viewer = await getViewer();
-    if (viewer) waiting = waitingFor(viewer.actor);
+    if (viewer) { const v = viewer; waiting = runAs(v.login, () => waitingFor(v.actor)); }
     const bizId = getBusiness()?.id;
     if (viewer && bizId && viewer.can("verify_vendor")) {
       const db = getDb();
-      vendorChecks = pendingChanges(db, bizId).filter((c) => !verifyBarrier(db, bizId, viewer!.actor.id, c)).length;
+      vendorChecks = runAs(viewer.login, () => pendingChanges(db, bizId).filter((c) => !verifyBarrier(db, bizId, viewer!.actor.id, c)).length);
     }
     if (viewer && bizId && viewer.can("release_run")) runsToRelease = listRuns(getDb(), bizId).filter((r) => r.status === "draft" && r.createdBy !== viewer!.actor.id).length;
   } catch {

@@ -7,13 +7,13 @@ import { getDb } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { businesses, obligations, paymentRunItems, paymentRuns, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
 import { resolveActor, requirePermission, updateTeamMember, type Actor, type TeamChange } from "@/lib/engine/users";
 import { isLiveRails } from "@/lib/config";
-import { enterLogin } from "@/lib/engine/requestContext";
+import { runAs } from "@/lib/engine/requestContext";
 import { exportPendingCsv } from "@/lib/accounting/record";
 import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
@@ -26,7 +26,7 @@ import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
 import { importDepartures, setRate } from "@/lib/engine/rates";
 import { parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
-import { createEvidenceRequest, createRemittanceLink, remittanceMessage, viewRemittance } from "@/lib/engine/vendorLinks";
+import { createEvidenceRequest, createRemittanceLink, remittanceMessage, remittanceMessageFor, viewRemittance } from "@/lib/engine/vendorLinks";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -35,6 +35,23 @@ import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, se
  * orchestrator. None of them talks to a rail directly. The engine checks approval limits and separation of
  * duties again, so a direct call cannot get around them.
  */
+
+/**
+ * Every action below runs inside this: the real login (not a demo persona) is the request's person, so audit rows
+ * name it and "another person" for dual approval, separation of duties and maker-checker means another login.
+ */
+async function inRequest<T>(fn: () => Promise<T>): Promise<T> {
+  // Outside a request (a script, a test) there is no login; the action's own sign-in check then refuses as usual.
+  let h: Awaited<ReturnType<typeof headers>> | null = null;
+  try {
+    h = await headers();
+  } catch {
+    h = null;
+  }
+  // With a demo persona active the actor header names the persona and the persona header names the real login.
+  const login = !h || h.get("x-checkrail-public") === "1" ? null : h.get(PERSONA_HEADER) ?? h.get(ACTOR_HEADER);
+  return runAs(login, fn);
+}
 
 /** The acting person for this request. */
 async function currentActor(): Promise<Actor> {
@@ -49,8 +66,6 @@ async function currentActor(): Promise<Actor> {
   const biz = await db.query.businesses.findFirst();
   if (!biz) throw new Error("No business configured. Run the demo seed first.");
   const actor = resolveActor(db, biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined);
-  // The rest of this request knows the real login: audit rows name it, and "another person" means another login.
-  enterLogin(actor.viaLogin ?? actor.username);
   return actor;
 }
 
@@ -77,6 +92,7 @@ function done(paths: string[] = ["/", "/obligations", "/ledger", "/accounting", 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string };
 
 export async function approveAction(id: string, note?: string, shownFingerprints?: string[]): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     if (shownFingerprints && (!Array.isArray(shownFingerprints) || shownFingerprints.some((f) => typeof f !== "string" || f.length > 600))) throw new Error("Invalid page state");
     const out = approveObligation(getDb(), id, (await actOn(id, "approve", "approve payments")).id, note, shownFingerprints);
@@ -86,9 +102,11 @@ export async function approveAction(id: string, note?: string, shownFingerprints
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function rejectAction(id: string, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     // Turning down a payment that is waiting for approval is an approver's call; cancelling a blocked or held one is cleanup a clerk may do.
     const state = getDb().select({ state: obligations.state }).from(obligations).where(eq(obligations.id, id)).get()?.state;
@@ -100,9 +118,11 @@ export async function rejectAction(id: string, note?: string): Promise<ActionRes
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function executeAction(id: string, rail?: Rail): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const r = await executeObligation(db, id, { actor: (await actOn(id, "pay", "send payments")).id, rail });
@@ -116,10 +136,12 @@ export async function executeAction(id: string, rail?: Rail): Promise<ActionResu
     done();
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Resolve a payment whose rail outcome was unknown. Same key, never a new one. */
 export async function reconcileAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const r = await retryAmbiguousExecution(db, id, { actor: (await actOn(id, "pay", "reconcile payments")).id });
@@ -133,10 +155,12 @@ export async function reconcileAction(id: string): Promise<ActionResult> {
     done([`/obligations/${id}`]);
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** A person checked the provider dashboard for a payment with an unclear outcome. */
 export async function resolveManuallyAction(id: string, found: string | null): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const who = (await actOn(id, "resolve_stuck", "resolve a payment by hand")).id;
     const state = await resolveManually(getDb(), id, who, found ? { kind: "found", externalId: found } : { kind: "nothing_moved" });
@@ -146,10 +170,12 @@ export async function resolveManuallyAction(id: string, found: string | null): P
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Move a definitively failed payment back to approved so it can be sent again. */
 export async function retryFailedAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     retryFailed(getDb(), id, (await actOn(id, "pay", "retry payments")).id);
     done([`/obligations/${id}`]);
@@ -157,9 +183,11 @@ export async function retryFailedAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function confirmAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await actOn(id, null, "check settlement");
     const state = await confirmSettlement(getDb(), id, "manual");
@@ -169,21 +197,39 @@ export async function confirmAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Invoice and due dates: they decide when a payment is due and what the books show, not what is paid. */
 export async function setDatesAction(id: string, dates: { invoiceDate: string | null; dueDate: string | null }): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
-    setObligationDates(getDb(), id, (await actOn(id, "amend", "change invoice dates")).id, { invoiceDate: dates?.invoiceDate ?? null, dueDate: dates?.dueDate ?? null });
-    done([`/obligations/${id}`, "/runs", "/books"]);
-    return { ok: true, message: "Dates saved." };
+    const r = setObligationDates(getDb(), id, (await actOn(id, "amend", "change invoice dates")).id, { invoiceDate: dates?.invoiceDate ?? null, dueDate: dates?.dueDate ?? null });
+    done([`/obligations/${id}`, "/runs", "/books", "/accounting"]);
+    return { ok: true, message: r.changedAfterExport ? "Dates saved. This bill is already in Xero with the old dates: change it there too (it is listed on the Accounting page)." : "Dates saved." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
+}
+
+/** A payment that came back: request it again, through every check. */
+export async function repayAction(id: string): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
+  try {
+    const newId = await repayRefunded(getDb(), id, (await actOn(id, "ingest", "request payments")).id);
+    done([`/obligations/${id}`]);
+    done();
+    return { ok: true, message: "Requested again. It goes through every check like a new payment.", id: newId };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+  });
 }
 
 /** Quote every rail again (a rail was set up since, or the quotes are old). */
 export async function requoteAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await actOn(id, "pay", "quote payments again");
     await refreshQuotesIfStale(getDb(), id, 0);
@@ -192,10 +238,12 @@ export async function requoteAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Run the checks again after something outside the request was fixed (details verified, a rate card added). */
 export async function recheckAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const state = await recheckObligation(getDb(), id, (await actOn(id, "amend", "check payments again")).id);
     done([`/obligations/${id}`]);
@@ -204,9 +252,11 @@ export async function recheckAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function amendAction(id: string, patch: { amountMinor?: number; sourceRef?: string; vendorId?: string }, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await amendObligation(getDb(), id, (await actOn(id, "amend", "correct payment requests")).id, patch, note);
     done([`/obligations/${id}`]);
@@ -215,9 +265,11 @@ export async function amendAction(id: string, patch: { amountMinor?: number; sou
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function ingestAction(input: { sourceType: SourceType; rawInput: string; evidence?: Array<{ kind: string; label: string; amountMinor: number | null; currency: string | null; reference: string | null; excerpt: string | null; attachmentId?: string | null }> }): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -228,9 +280,11 @@ export async function ingestAction(input: { sourceType: SourceType; rawInput: st
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function exportCsvAction(): Promise<ActionResult & { csv?: string }> {
+  return inRequest(async () => {
   try {
     await act("export", "export accounting records");
     const { csv, count } = exportPendingCsv(getDb());
@@ -239,9 +293,11 @@ export async function exportCsvAction(): Promise<ActionResult & { csv?: string }
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function resetDemoAction(): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     // Resetting wipes obligations, payment attempts, settlements and the audit log. Never with real rails.
     if (isLiveRails()) return { ok: false, message: "Demo reset is disabled when RAIL_MODE=live." };
@@ -252,10 +308,12 @@ export async function resetDemoAction(): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Upload a source document (PDF, image, text). It is read and stored; the proposed evidence rows come back for review. */
 export async function uploadEvidenceAction(form: FormData): Promise<(ActionResult & { upload?: UploadResult })> {
+  return inRequest(async () => {
   try {
     const file = form.get("file");
     if (!(file instanceof File)) return { ok: false, message: "No file received." };
@@ -268,11 +326,13 @@ export async function uploadEvidenceAction(form: FormData): Promise<(ActionResul
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Autonomy. Every change here is made by a signed-in person and lands in the audit log; the agent cannot call these. */
 
 export async function setAutonomyAction(change: AutonomyChange): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -287,9 +347,11 @@ export async function setAutonomyAction(change: AutonomyChange): Promise<ActionR
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function pauseAutopilotAction(paused: boolean): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -302,9 +364,11 @@ export async function pauseAutopilotAction(paused: boolean): Promise<ActionResul
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function cancelReleaseAction(id: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     cancelAutopilotRelease(getDb(), id, (await actOn(id, "stop", "cancel a scheduled payment")).id);
     done([`/obligations/${id}`]);
@@ -313,10 +377,12 @@ export async function cancelReleaseAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Run one autopilot pass now. The heartbeat does this on its own; the UI calls it when a countdown reaches zero. */
 export async function tickAutopilotAction(): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await currentActor();
     const r = await runAutopilot(getDb());
@@ -325,9 +391,11 @@ export async function tickAutopilotAction(): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function signOffCloseAction(throughSeq: number): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -338,12 +406,14 @@ export async function signOffCloseAction(throughSeq: number): Promise<ActionResu
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Team and demo personas. */
 
 /** Act as one of the demo team. Only takes effect where personas are allowed (never with real money); the middleware decides. */
 export async function setPersonaAction(username: string | null): Promise<ActionResult> {
+  return inRequest(async () => {
   if ((await headers()).get("x-checkrail-public") === "1") return { ok: false, message: "Not signed in" };
   const jar = await cookies();
   if (!username) {
@@ -359,9 +429,11 @@ export async function setPersonaAction(username: string | null): Promise<ActionR
   jar.set(PERSONA_COOKIE, p.username, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
   done();
   return { ok: true, message: `Now acting as ${p.name}.` };
+  });
 }
 
 export async function updateTeamAction(change: TeamChange): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -372,6 +444,7 @@ export async function updateTeamAction(change: TeamChange): Promise<ActionResult
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Vendor master. Payout details change only through a verified request; see lib/engine/vendors.ts. */
@@ -384,6 +457,7 @@ async function withBusiness<T>(fn: (db: ReturnType<typeof getDb>, businessId: st
 }
 
 export async function createVendorAction(profile: unknown, payout: unknown): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     const id = await withBusiness((db, b, who) => createVendor(db, b, who, profile, payout));
     done(["/vendors", `/vendors/${id}`]);
@@ -391,9 +465,11 @@ export async function createVendorAction(profile: unknown, payout: unknown): Pro
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function updateVendorAction(vendorId: string, profile: unknown): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => updateVendorProfile(db, b, who, vendorId, profile));
     done(["/vendors", `/vendors/${vendorId}`]);
@@ -401,9 +477,11 @@ export async function updateVendorAction(vendorId: string, profile: unknown): Pr
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function proposePayoutAction(vendorId: string, payout: unknown, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => proposePayoutChange(db, b, who, vendorId, payout, typeof note === "string" ? note.slice(0, 300) : undefined));
     done(["/vendors", `/vendors/${vendorId}`]);
@@ -411,9 +489,11 @@ export async function proposePayoutAction(vendorId: string, payout: unknown, not
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function verifyVendorChangeAction(changeId: string, method: string, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const rechecked = await withBusiness(async (db, b, who) => {
       verifyVendorChange(db, b, who, changeId, method, typeof note === "string" ? note.slice(0, 300) : undefined);
@@ -426,9 +506,11 @@ export async function verifyVendorChangeAction(changeId: string, method: string,
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function rejectVendorChangeAction(changeId: string, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => rejectVendorChange(db, b, who, changeId, typeof note === "string" ? note.slice(0, 300) : undefined));
     done(["/vendors"]);
@@ -436,9 +518,11 @@ export async function rejectVendorChangeAction(changeId: string, note?: string):
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function setVendorStatusAction(vendorId: string, status: "active" | "blocked", reason: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     if (status !== "active" && status !== "blocked") throw new Error("Unknown status");
     await withBusiness((db, b, who) => setVendorStatus(db, b, who, vendorId, status, reason));
@@ -447,21 +531,25 @@ export async function setVendorStatusAction(vendorId: string, status: "active" |
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Returns the link once. Only its hash is kept, so it cannot be shown again. */
 export async function createInviteAction(opts: { vendorId?: string | null; label?: string | null }): Promise<ActionResult & { path?: string; expiresAt?: string }> {
+  return inRequest(async () => {
   try {
     const r = await withBusiness((db, b, who) => createInvite(db, b, who, { vendorId: typeof opts?.vendorId === "string" ? opts.vendorId : null, label: typeof opts?.label === "string" ? opts.label : null }));
     return { ok: true, message: "Link created. Copy it now: it is shown only once.", path: `/onboard/${r.token}`, expiresAt: r.expiresAt };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Payment runs. */
 
 export async function createRunAction(name: string, obligationIds: string[]): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     const id = await withBusiness((db, b, who) => createRun(db, b, who, { name, obligationIds }));
     done(["/runs"]);
@@ -469,9 +557,11 @@ export async function createRunAction(name: string, obligationIds: string[]): Pr
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function removeRunItemAction(runId: string, itemId: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => removeRunItem(db, b, who, runId, itemId));
     done([`/runs/${runId}`, "/runs"]);
@@ -479,9 +569,11 @@ export async function removeRunItemAction(runId: string, itemId: string): Promis
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function cancelRunAction(runId: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => cancelRun(db, b, who, runId));
     done(["/runs", `/runs/${runId}`]);
@@ -489,9 +581,11 @@ export async function cancelRunAction(runId: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function releaseRunAction(runId: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -504,11 +598,13 @@ export async function releaseRunAction(runId: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Bank files. */
 
 export async function confirmBankFileAction(batchId: string, bankRef: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -520,9 +616,11 @@ export async function confirmBankFileAction(batchId: string, bankRef: string): P
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function returnBankLineAction(lineId: string, reason: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -534,11 +632,13 @@ export async function returnBankLineAction(lineId: string, reason: string): Prom
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Bills: invoices paid in parts, credit notes, advances. */
 
 export async function createBillAction(vendorId: string, bill: { kind: string; reference: string; totalMinor: number; currency: string; dueDate?: string | null; note?: string | null }): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     const id = await withBusiness((db, b, who) => createBill(db, b, who, vendorId, bill));
     done([`/vendors/${vendorId}`]);
@@ -546,9 +646,11 @@ export async function createBillAction(vendorId: string, bill: { kind: string; r
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function payBillAction(billId: string, amountMinor: number, note?: string): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -559,9 +661,11 @@ export async function payBillAction(billId: string, amountMinor: number, note?: 
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function applyCreditAction(creditBillId: string, billId: string, amountMinor: number): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => applyCredit(db, b, who, creditBillId, billId, amountMinor));
     done(["/vendors"]);
@@ -569,9 +673,11 @@ export async function applyCreditAction(creditBillId: string, billId: string, am
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: number, note?: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const r = await withBusiness((db, b, who) => settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined));
     done(["/vendors"]);
@@ -579,9 +685,11 @@ export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: 
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function voidBillAction(billId: string, reason: string): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => voidBill(db, b, who, billId, typeof reason === "string" ? reason : ""));
     done(["/vendors"]);
@@ -589,11 +697,13 @@ export async function voidBillAction(billId: string, reason: string): Promise<Ac
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Rate cards and departures. */
 
 export async function setRateAction(vendorId: string, rate: { unit: string; rateMinor: number; currency: string; validFrom: string; validTo?: string | null; note?: string | null }): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const n = await withBusiness(async (db, b, who) => {
       setRate(db, b, who, vendorId, rate);
@@ -605,9 +715,11 @@ export async function setRateAction(vendorId: string, rate: { unit: string; rate
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function importDeparturesAction(csv: string): Promise<ActionResult & { errors?: string[] }> {
+  return inRequest(async () => {
   try {
     if (typeof csv !== "string") throw new Error("Choose a CSV file");
     const r = await withBusiness((db, b, who) => importDepartures(db, b, who, csv));
@@ -616,9 +728,11 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: string }> {
+  return inRequest(async () => {
   try {
     const who = await act("export", "export bills");
     const db = getDb();
@@ -630,11 +744,13 @@ export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: st
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Books: statement reconciliation and period lock. */
 
 export async function reconcilePayPalAction(fileName: string, csv: string): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
   try {
     if (typeof csv !== "string") throw new Error("Choose the PayPal activity CSV");
     const db = getDb();
@@ -646,9 +762,11 @@ export async function reconcilePayPalAction(fileName: string, csv: string): Prom
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function setPeriodLockAction(through: string | null): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     await withBusiness((db, b, who) => setPeriodLock(db, b, who, through || null));
     done(["/books"]);
@@ -656,11 +774,13 @@ export async function setPeriodLockAction(through: string | null): Promise<Actio
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /* Vendor links: remittance advice and evidence requests. */
 
 export async function createVendorLinkAction(kind: "remittance" | "evidence", obligationId: string, note?: string): Promise<ActionResult & { path?: string; text?: string }> {
+  return inRequest(async () => {
   try {
     if (kind !== "remittance" && kind !== "evidence") throw new Error("Unknown link");
     const db = getDb();
@@ -678,10 +798,12 @@ export async function createVendorLinkAction(kind: "remittance" | "evidence", ob
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 /** Remittance advice for every payment a released run sent: one message per vendor to paste into their channel. */
-export async function runRemittancesAction(runId: string): Promise<ActionResult & { items?: Array<{ vendorName: string; path: string; text: string }> }> {
+export async function runRemittancesAction(runId: string): Promise<ActionResult & { items?: Array<{ vendorName: string; paths: string[]; text: string }> }> {
+  return inRequest(async () => {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
@@ -690,19 +812,24 @@ export async function runRemittancesAction(runId: string): Promise<ActionResult 
     const run = db.select().from(paymentRuns).where(and(eq(paymentRuns.id, runId), eq(paymentRuns.businessId, biz.id))).get();
     if (!run || run.status !== "released") throw new Error("Remittance advice is for a released run");
     const items = db.select().from(paymentRunItems).where(eq(paymentRunItems.runId, runId)).all().filter((i) => i.status === "paid" || i.status === "with_bank");
-    const out: Array<{ vendorName: string; path: string; text: string }> = [];
+    // One message per vendor: their payments in this run, each with its own link.
+    const byVendor = new Map<string, Array<{ r: NonNullable<ReturnType<typeof viewRemittance>>; path: string }>>();
     for (const i of items) {
       const token = createRemittanceLink(db, biz.id, who, i.obligationId);
       const r = viewRemittance(db, token)!;
-      out.push({ vendorName: r.vendorName, path: `/remit/${token}`, text: remittanceMessage(r, "{link}") });
+      byVendor.set(r.vendorName, [...(byVendor.get(r.vendorName) ?? []), { r, path: `/remit/${token}` }]);
     }
+    const out: Array<{ vendorName: string; paths: string[]; text: string }> = [];
+    for (const [vendorName, list] of byVendor) out.push({ vendorName, paths: list.map((x) => x.path), text: remittanceMessageFor(list.map((x) => x.r), list.map((_, n) => `{link${n}}`)) });
     return { ok: true, message: `${out.length} remittance message${out.length === 1 ? "" : "s"} ready. Copy them now: each link is shown once.`, items: out };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
 
 export async function setTaxSettingsAction(change: { withholdVnPit: boolean; withholdPhEwt: boolean }): Promise<ActionResult> {
+  return inRequest(async () => {
   try {
     const who = await act("settings", "change tax settings");
     const db = getDb();
@@ -717,4 +844,5 @@ export async function setTaxSettingsAction(change: { withholdVnPit: boolean; wit
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
+  });
 }
