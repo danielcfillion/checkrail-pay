@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getViewer } from "@/lib/viewer";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
@@ -24,7 +25,8 @@ const KIND: Record<AttentionItem["kind"], { label: string; tone: string; next: s
   new_vendor: { label: "New vendor", tone: "var(--ink-soft)", next: "Paid. Confirm the vendor received it." },
 };
 
-export default function DailyClosePage() {
+export default async function DailyClosePage() {
+  const viewer = await getViewer();
   const biz = getBusiness();
   if (!biz) {
     return (
@@ -49,7 +51,7 @@ export default function DailyClosePage() {
             Everything since {c.sinceIsSignOff ? "the last sign-off" : "this time yesterday"} (<span className="num">{formatDateTime(c.since)}</span>). What needs a look comes first.
           </>
         }
-        actions={<SignOffButton throughSeq={c.throughSeq} attention={c.attention.length} />}
+        actions={!viewer || viewer.can("sign_off") ? <SignOffButton throughSeq={c.throughSeq} attention={c.attention.length} /> : <span className="dense text-ink-soft">An approver or the owner signs off</span>}
       />
 
       <dl className="grid grid-cols-2 gap-y-4 border-y hairline py-4 lg:grid-cols-4 lg:divide-x lg:divide-[color:var(--rule)]">
@@ -125,7 +127,7 @@ export default function DailyClosePage() {
 
           {c.scheduled.length ? (
             <Panel title="About to go out" aside={`${c.scheduled.length} scheduled`} padded={false}>
-              <ScheduledReleases rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
+              <ScheduledReleases canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
             </Panel>
           ) : null}
 

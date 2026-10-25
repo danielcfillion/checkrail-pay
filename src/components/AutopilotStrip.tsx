@@ -6,7 +6,7 @@ import { ScheduledReleases } from "./ScheduledReleases";
 import { PauseButton } from "./PauseButton";
 
 /** Autonomy at a glance on the overview: the level, what is used of today's cap, what is about to go out, and the stop control. */
-export function AutopilotStrip({ businessId, currency }: { businessId: string; currency: string }) {
+export function AutopilotStrip({ businessId, currency, can = { stop: true, settings: true } }: { businessId: string; currency: string; can?: { stop: boolean; settings: boolean } }) {
   const ap = autopilotStatus(getDb(), businessId);
   const on = ap.level === "autopilot" && !ap.paused;
   const name = ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot on") : ap.level === "review" ? "Review everything" : "Assist";
@@ -28,18 +28,20 @@ export function AutopilotStrip({ businessId, currency }: { businessId: string; c
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {ap.level === "autopilot" ? <PauseButton paused={ap.paused} /> : null}
+          {ap.level === "autopilot" && (ap.paused ? can.settings : can.stop) ? <PauseButton paused={ap.paused} /> : null}
           <Link href="/close" className="btn btn-sm">
             Daily close
           </Link>
-          <Link href="/settings" className="btn btn-sm">
-            Change
-          </Link>
+          {can.settings ? (
+            <Link href="/settings" className="btn btn-sm">
+              Change
+            </Link>
+          ) : null}
         </div>
       </div>
       {ap.scheduled.length ? (
         <div className="border-t hairline">
-          <ScheduledReleases rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
+          <ScheduledReleases canCancel={can.stop} rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
         </div>
       ) : null}
     </section>

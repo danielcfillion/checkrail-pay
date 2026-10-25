@@ -35,7 +35,66 @@ export const vendors = sqliteTable("vendors", {
   verifiedAt: text("verified_at"),
   notes: text("notes"),
   createdAt: text("created_at").notNull(),
+  status: text("status").notNull().default("active"), // active | blocked
+  verifiedBy: text("verified_by"), // who checked the payout details (never the person who entered them)
+  verificationMethod: text("verification_method"), // callback | penny_test | in_person | document | onboarding_confirmed
+  createdBy: text("created_by"),
+  defaultAccountCode: text("default_account_code"),
 });
+
+/** People who use the app. Logins come from configuration; this table holds what the app needs to know about them. */
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(), // the login username
+  businessId: text("business_id").notNull(),
+  displayName: text("display_name").notNull(),
+  role: text("role").notNull(), // admin | approver | clerk | accountant
+  approvalLimitMinor: integer("approval_limit_minor"), // base currency; null = no limit (admins)
+  delegateTo: text("delegate_to"), // username covering this person's approvals while they are away
+  delegateUntil: text("delegate_until"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * A proposed change to a vendor: a new vendor, or new payout details for an existing one. Payout details never
+ * change in place: they wait here until a second person verifies them (maker-checker), then they apply.
+ */
+export const vendorChanges = sqliteTable(
+  "vendor_changes",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    vendorId: text("vendor_id"),
+    kind: text("kind").notNull(), // create | payout
+    proposedJson: text("proposed_json").notNull(),
+    source: text("source").notNull(), // operator | onboarding
+    requestedBy: text("requested_by").notNull(),
+    status: text("status").notNull(), // pending | approved | rejected
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    method: text("method"),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("vendor_changes_business_status").on(t.businessId, t.status)]
+);
+
+/** A single-use onboarding link sent to a vendor. Only a hash of the token is stored. */
+export const vendorInvites = sqliteTable(
+  "vendor_invites",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    vendorId: text("vendor_id"),
+    label: text("label"),
+    createdBy: text("created_by").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    usedAt: text("used_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("vendor_invites_token_hash_unique").on(t.tokenHash)]
+);
 
 export const obligations = sqliteTable(
   "obligations",

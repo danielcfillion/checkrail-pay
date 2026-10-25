@@ -18,8 +18,13 @@ services:
         value: ./data/checkrail-pay.sqlite
       # One shared demo database. Basic auth keeps the open internet out (put the credential in the Devpost
       # testing instructions). It does not separate judges from each other: that is what the idle reset is for.
-      - key: CHECKRAIL_BASIC_AUTH
+      # Logins with roles, e.g. judge:<pw>:admin. With personas on, one login can act as each of the demo team.
+      - key: CHECKRAIL_USERS
         sync: false
+      - key: CHECKRAIL_DEMO_PERSONAS
+        value: "1"
+      - key: NEXT_PUBLIC_CHECKRAIL_TIMEZONE
+        value: Asia/Ho_Chi_Minh
       # After 30 minutes with no one clicking, the heartbeat restores the four opening requests, so a judge who
       # arrives later starts clean. Two judges in the same half hour still share state; Reset demo puts it back.
       - key: DEMO_AUTO_RESET_MINUTES
@@ -36,6 +41,8 @@ services:
       - key: PAYPAL_CLIENT_SECRET
         sync: false
       - key: DEMO_PAYPAL_RECIPIENT
+        sync: false
+      - key: DEMO_PAYPAL_RECIPIENT_ROSA
         sync: false
       # mock = rule-based reader; live = Claude (set the key below; cap spend in the Anthropic console).
       - key: AI_MODE

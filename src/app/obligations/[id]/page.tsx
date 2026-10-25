@@ -1,7 +1,10 @@
 import { warningFingerprint, type PolicyRuleResult } from "@/lib/domain/types";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getObligationDetail } from "@/lib/queries";
+import { getObligationDetail, listVendors } from "@/lib/queries";
+import { getViewer } from "@/lib/viewer";
+import { approvalGate } from "@/lib/engine/orchestrator";
+import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
 import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, stateLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
@@ -25,6 +28,10 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const hasAccounting = Boolean(d.accounting);
   const availableRails = d.quotes.filter((q) => q.available).map((q) => q.rail as Rail);
   const caption = o.state === "blocked" && o.blockedReason ? shortReason(o.blockedReason) : undefined;
+  const viewer = await getViewer();
+  const perms = viewer ? { approve: viewer.can("approve"), pay: viewer.can("pay"), amend: viewer.can("amend"), resolveStuck: viewer.can("resolve_stuck") } : undefined;
+  const approveRefusal = viewer && o.state === "awaiting_approval" ? approvalGate(getDb(), o.id, viewer.actor.id).refusal : null;
+  const vendorChoices = !o.vendorId && o.state === "blocked" ? listVendors().map((v) => ({ id: v.id, name: v.name })) : undefined;
 
   return (
     <ObligationStageProvider>
@@ -242,7 +249,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </Panel>
           ) : null}
           <Panel title="Actions" aside={stateLabel(o.state)}>
-            <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} />
+            <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} vendorChoices={vendorChoices} />
           </Panel>
 
           {d.settlement ? (

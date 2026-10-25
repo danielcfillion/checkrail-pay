@@ -15,7 +15,7 @@ function left(iso: string, nowMs: number): string {
 }
 
 /** Payments autopilot has scheduled, each with a live countdown and a cancel button. */
-export function ScheduledReleases({ rows, compact = false }: { rows: ScheduledRow[]; compact?: boolean }) {
+export function ScheduledReleases({ rows, compact = false, canCancel = true }: { rows: ScheduledRow[]; compact?: boolean; canCancel?: boolean }) {
   const [nowMs, setNowMs] = useState<number | null>(null);
   const [pending, start] = useTransition();
   const fired = useRef<Set<string>>(new Set());
@@ -53,6 +53,7 @@ export function ScheduledReleases({ rows, compact = false }: { rows: ScheduledRo
             <span className="num text-ink-soft" aria-live="off">
               {nowMs === null ? "scheduled" : left(r.releaseAt, nowMs) === "sending" ? "sending now" : `sends in ${left(r.releaseAt, nowMs)}`}
             </span>
+            {canCancel ? (
             <button
               type="button"
               className="btn btn-sm"
@@ -67,6 +68,7 @@ export function ScheduledReleases({ rows, compact = false }: { rows: ScheduledRo
             >
               Cancel
             </button>
+            ) : null}
           </span>
         </li>
       ))}

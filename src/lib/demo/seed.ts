@@ -1,8 +1,9 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
+import { seedDemoTeam } from "../engine/users";
 import { hashPayoutDetails, newId } from "../domain/ids";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation } from "../engine/orchestrator";
 import { withMockRails } from "../rails";
@@ -49,7 +50,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendors, businesses]) {
+  for (const t of [auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -59,6 +60,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   resetDemo(db);
   const ts = new Date().toISOString();
   db.insert(businesses).values({ id: DEMO_BUSINESS_ID, name: "Ridgeline Expeditions LLC", baseCurrency: "USD", country: "US", policyJson: JSON.stringify(DEFAULT_POLICY), createdAt: ts }).run();
+  seedDemoTeam(db, DEMO_BUSINESS_ID);
   for (const v of DEMO_VENDORS) {
     db.insert(vendors)
       .values({ ...v, businessId: DEMO_BUSINESS_ID, detailsHash: hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]), verifiedAt: "2026-08-14T09:00:00.000Z", createdAt: ts })

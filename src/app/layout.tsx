@@ -3,7 +3,9 @@ import localFont from "next/font/local";
 import "./globals.css";
 import { Shell } from "@/components/Shell";
 import { ToastProvider } from "@/components/Toast";
-import { getBusiness, getSystemModes } from "@/lib/queries";
+import { getBusiness, getSystemModes, waitingFor } from "@/lib/queries";
+import { getViewer, isPublicPage } from "@/lib/viewer";
+import { ROLE_LABEL } from "@/lib/auth/roles";
 
 /*
  * Archivo variable (weight 100 to 900, width 62 to 125), the same file Google
@@ -25,12 +27,28 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  // Vendor-facing pages (onboarding, evidence upload) carry a token, not a login: no navigation, no business data.
+  if (await isPublicPage()) {
+    return (
+      <html lang="en" className={archivo.variable}>
+        <body>
+          <ToastProvider>
+            <main className="mx-auto w-full max-w-xl px-4 py-10">{children}</main>
+          </ToastProvider>
+        </body>
+      </html>
+    );
+  }
   let businessName: string | null = null;
   let system = null;
+  let viewer = null;
+  let waiting = 0;
   try {
     businessName = getBusiness()?.name ?? null;
     system = getSystemModes();
+    viewer = await getViewer();
+    if (viewer) waiting = waitingFor(viewer.actor);
   } catch {
     // Database unavailable: render the shell without a business.
   }
@@ -38,7 +56,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en" className={archivo.variable}>
       <body>
         <ToastProvider>
-          <Shell businessName={businessName} system={system}>
+          <Shell
+            businessName={businessName}
+            system={system}
+            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting } : null}
+          >
             {children}
           </Shell>
         </ToastProvider>

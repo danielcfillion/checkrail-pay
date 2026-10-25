@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { NavLinks } from "./NavLinks";
+import { WhoAmI } from "./WhoAmI";
 import { railLabel } from "@/lib/format";
 
 export type SystemModes = { railModes: Record<string, string>; ai: string; accounting: string };
@@ -17,7 +18,9 @@ export const NAV = [
   { href: "/settings", label: "Settings", icon: "settings" },
 ] as const;
 
-export function Shell({ businessName, system, children }: { businessName: string | null; system: SystemModes | null; children: ReactNode }) {
+export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number };
+
+export function Shell({ businessName, system, who, children }: { businessName: string | null; system: SystemModes | null; who?: WhoProps | null; children: ReactNode }) {
   return (
     <div className="min-h-screen md:grid md:grid-cols-[64px_1fr] lg:grid-cols-[220px_1fr]">
       <aside className="hidden md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
@@ -35,6 +38,7 @@ export function Shell({ businessName, system, children }: { businessName: string
         <nav className="flex-1 px-2 lg:px-3" aria-label="Main">
           <NavLinks items={NAV} />
         </nav>
+        {who ? <WhoAmI {...who} /> : null}
         <SystemFooter system={system} />
       </aside>
       <div className="min-w-0">

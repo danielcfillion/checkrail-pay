@@ -6,10 +6,15 @@ import { AutonomyControl } from "@/components/AutonomyControl";
 import { CapMeter } from "@/components/CapMeter";
 import { autopilotStatus } from "@/lib/engine/autopilot";
 import { getDb } from "@/lib/db";
+import { getViewer } from "@/lib/viewer";
+import { listTeam, whoIs } from "@/lib/engine/users";
+import { ROLE_LABEL, can, isRole } from "@/lib/auth/roles";
+import { TeamPanel } from "@/components/TeamPanel";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const viewer = await getViewer();
   const biz = getBusiness();
   const system = getSystemModes();
   if (!biz) {
@@ -24,6 +29,10 @@ export default function SettingsPage() {
   const cur = biz.baseCurrency;
   const ap = autopilotStatus(getDb(), biz.id);
   const symbol = formatMoneySymbol(0, cur).replace(/[\d.,\s]+$/, "");
+  const mayChange = !viewer || viewer.can("settings");
+  const team = listTeam(getDb(), biz.id)
+    .filter((u) => isRole(u.role))
+    .map((u) => ({ username: u.id, displayName: u.displayName, role: u.role, roleLabel: ROLE_LABEL[u.role as keyof typeof ROLE_LABEL], approvalLimitMinor: u.approvalLimitMinor, delegateTo: u.delegateTo, delegateUntil: u.delegateUntil, active: u.active, canApprove: can(u.role as keyof typeof ROLE_LABEL, "approve") }));
 
   const sentences: string[] = [
     `On Assist, pre-approve up to ${formatMoney(policy.autoExecuteThresholdMinor, cur)} when evidence matches. Above that, a person approves.`,
@@ -41,10 +50,16 @@ export default function SettingsPage() {
       <PageHeader title="Settings" lede="Choose how much the agent does without asking. The approval rules underneath stay the same at every level." />
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Autonomy" aside={ap.level === "autopilot" ? (ap.paused ? "autopilot paused" : "autopilot on") : ap.level === "review" ? "a person approves everything" : "a person sends"} className="lg:col-span-2">
+          {mayChange ? (
           <AutonomyControl
             key={`${ap.level}-${ap.paused}-${ap.perPaymentCapMinor}-${ap.dailyCapMinor}-${ap.cancelWindowSeconds}`}
             view={{ level: ap.level, paused: ap.paused, perPaymentCapMinor: ap.perPaymentCapMinor, dailyCapMinor: ap.dailyCapMinor, cancelWindowSeconds: ap.cancelWindowSeconds, committed24hMinor: ap.committed24hMinor, autoApproveMinor: policy.autoExecuteThresholdMinor, dualApprovalMinor: policy.dualApprovalThresholdMinor, symbol }}
           />
+          ) : (
+            <p className="text-ink-soft">
+              {ap.level === "autopilot" ? `Autopilot${ap.paused ? " (paused)" : ""}: up to ${formatMoney(ap.perPaymentCapMinor, cur)} a payment and ${formatMoney(ap.dailyCapMinor, cur)} a day, with a ${Math.round(ap.cancelWindowSeconds / 60)} minute cancel window.` : ap.level === "review" ? "Review: a person approves and sends every payment." : "Assist: clean small payments are approved for you; a person sends them."} Only the owner changes this.
+            </p>
+          )}
           {ap.level === "autopilot" ? (
             <div className="mt-5 max-w-md border-t pt-4 hairline">
               <CapMeter label="Sent or scheduled in the last 24 hours" usedMinor={ap.committed24hMinor} capMinor={ap.dailyCapMinor} currency={cur} />
@@ -58,7 +73,7 @@ export default function SettingsPage() {
               ["Name", biz.name],
               ["Base currency", cur],
               ["Country", countryName(biz.country)],
-              ["Operator", "Daniel (user:daniel)"],
+              ["You", viewer ? `${whoIs(viewer.actor)}${viewer.actor.viaLogin ? `, signed in as ${viewer.actor.viaLogin}` : ""}` : "not signed in"],
             ]}
           />
         </Panel>
@@ -71,6 +86,11 @@ export default function SettingsPage() {
               ["Accounting", system.accounting === "xero" ? "Xero (live destination)" : "CSV export, Xero record shape"],
             ]}
           />
+        </Panel>
+
+        <Panel title="Team" aside={viewer?.can("manage_users") ? "roles come from the login settings" : "the owner edits this"} className="lg:col-span-2">
+          <TeamPanel rows={team} editable={Boolean(viewer?.can("manage_users"))} symbol={symbol} me={viewer?.actor.username ?? null} />
+          <p className="mt-3 text-xs text-ink-soft">Whoever prepares a payment (creates it or changes its amount, payee or reference) cannot also approve it while someone else can. Cover while away hands that person&apos;s approvals and limit to the named colleague until the end date. Every change here is in the audit log.</p>
         </Panel>
 
         <Panel title="Approval rules" aside="apply at every autonomy level" className="lg:col-span-2">

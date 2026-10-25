@@ -5,6 +5,8 @@ import type { ObligationState, Rail } from "./domain/types";
 import { railModes } from "./rails";
 import { config, isLiveAi } from "./config";
 import { startOfLocalDay } from "./format";
+import { actorCan, type Actor } from "./engine/users";
+import { approvalGate } from "./engine/orchestrator";
 
 /**
  * Read models for the operator dashboard. Plain functions over the DB, no
@@ -285,4 +287,31 @@ export function findObligationsBySourceRef(refs: string[], db: Db = getDb()): Ob
 export function obligationCountsByState(db: Db = getDb()): Record<string, number> {
   const rows = db.select({ state: obligations.state, n: sql<number>`count(*)` }).from(obligations).groupBy(obligations.state).all();
   return Object.fromEntries(rows.map((r) => [r.state, r.n]));
+}
+
+/**
+ * The obligations waiting on this person's next step, by what their role lets them do: approvers see payments within
+ * their limit that they did not prepare or already approve; people who send see approved payments; clerks see blocked,
+ * evidence-missing and failed ones to fix.
+ */
+export function waitingIdsFor(actor: Actor, db: Db = getDb()): string[] {
+  const ids = new Set<string>();
+  const open = db.select().from(obligations).where(inArray(obligations.state, ["awaiting_approval", "approved", "blocked", "needs_evidence", "failed"])).all();
+  const mayApprove = actorCan(actor, "approve");
+  for (const o of open) {
+    if (o.state === "awaiting_approval" && mayApprove) {
+      const mine = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, o.id), eq(approvals.decision, "approved"), eq(approvals.actor, actor.id))).get();
+      if (mine || approvalGate(db, o.id, actor.id).refusal) continue;
+      ids.add(o.id);
+    } else if ((o.state === "approved" || o.state === "failed") && actorCan(actor, "pay")) {
+      ids.add(o.id);
+    } else if ((o.state === "blocked" || o.state === "needs_evidence") && actorCan(actor, "amend")) {
+      ids.add(o.id);
+    }
+  }
+  return [...ids];
+}
+
+export function waitingFor(actor: Actor, db: Db = getDb()): number {
+  return waitingIdsFor(actor, db).length;
 }

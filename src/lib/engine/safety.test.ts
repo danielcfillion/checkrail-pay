@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, settlements, vendors, accountingSyncs } from "../db/schema";
+import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, settlements, users, vendors, accountingSyncs } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { amendObligation, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, resolveManually, runPolicy } from "./orchestrator";
+import { amendObligation, approvalGate, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, resolveManually, runPolicy } from "./orchestrator";
 import { IllegalTransition, transition } from "../domain/stateMachine";
 import { DEFAULT_POLICY, type ExecutionRequest, type ExecutionResult, type PaymentRail, type Rail, type SettlementStatus } from "../domain/types";
 import { hashPayoutDetails } from "../domain/ids";
+import { resolveActor } from "./users";
+import { waitingIdsFor } from "../queries";
+import type { Role } from "../auth/roles";
 import { config } from "../config";
 import { getRails, resetRails, setRailsForTest } from "../rails";
 import { MockStellarRail } from "../rails/mock";
@@ -347,21 +350,84 @@ describe("H3: approvals are people, and the ingester cannot approve", () => {
       actor: "user:daniel",
     });
     expect(get(id).state).toBe("awaiting_approval");
-    expect(() => approveObligation(db, id, "user:daniel")).toThrow(/cannot approve/);
+    expect(() => approveObligation(db, id, "user:daniel")).toThrow(/someone else approves/);
     approveObligation(db, id, "user:rianne");
     expect(get(id).state).toBe("approved");
   });
 
-  it("with the policy field unset, the single-operator demo can still approve its own request (mock mode)", async () => {
+  it("with the policy field unset, the preparer cannot approve while someone else can", async () => {
     const id = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
       rawInput: "Invoice INV-JM-9003 Jake Morrison: edit package, total USD 400.",
-      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9003", amountMinor: 40_000, currency: "USD", reference: "INV-JM-9003", excerpt: "USD 400.00" }],
+      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9003", amountMinor: 40_000, currency: "USD", reference: "INV-JM-9003", excerpt: "Jake Morrison, USD 400.00" }],
+      actor: "user:daniel",
+    });
+    expect(() => approveObligation(db, id, "user:daniel")).toThrow(/someone else approves it \(minh can\)/);
+    approveObligation(db, id, "user:minh");
+    expect(get(id).state).toBe("approved");
+  });
+
+  it("a one-person business can approve its own request, and the audit says so", async () => {
+    db.update(users).set({ active: false }).where(eq(users.id, "minh")).run();
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice INV-JM-9004 Jake Morrison: edit package, total USD 400.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9004", amountMinor: 40_000, currency: "USD", reference: "INV-JM-9004", excerpt: "Jake Morrison, USD 400.00" }],
       actor: "user:daniel",
     });
     approveObligation(db, id, "user:daniel");
     expect(get(id).state).toBe("approved");
+    expect(actionsOf(id)).toContain("approval.self");
+  });
+
+  it("an approver cannot approve above their limit, and a clerk cannot approve at all", async () => {
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice INV-JM-9005 Jake Morrison: edit package, total USD 1,400.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9005", amountMinor: 140_000, currency: "USD", reference: "INV-JM-9005", excerpt: "Jake Morrison, USD 1,400.00" }],
+      actor: "system:email-ingest",
+    });
+    expect(() => approveObligation(db, id, "user:minh")).toThrow(/above Minh .* approval limit/);
+    expect(() => approveObligation(db, id, "user:lan")).toThrow(/cannot approve payments/);
+    approveObligation(db, id, "user:daniel");
+    expect(get(id).state).toBe("approved");
+  });
+
+  it("explains a missing Approve button the same way approval refuses, and lists only work this person can do", async () => {
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice INV-JM-9006 Jake Morrison: edit package, total USD 1,400.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9006", amountMinor: 140_000, currency: "USD", reference: "INV-JM-9006", excerpt: "Jake Morrison, USD 1,400.00" }],
+      actor: "user:lan",
+    });
+    expect(get(id).state).toBe("awaiting_approval");
+    expect(approvalGate(db, id, "user:minh").refusal).toMatch(/above Minh .* approval limit.*daniel can/);
+    expect(approvalGate(db, id, "user:lan").refusal).toMatch(/cannot approve/);
+    expect(approvalGate(db, id, "user:daniel").refusal).toBeNull();
+    const as = (u: string) => resolveActor(db, DEMO_BUSINESS_ID, u, db.select().from(users).where(eq(users.id, u)).get()!.role as Role);
+    expect(waitingIdsFor(as("daniel"), db)).toContain(id);
+    expect(waitingIdsFor(as("minh"), db)).not.toContain(id);
+    expect(waitingIdsFor(as("thu"), db)).toEqual([]);
+  });
+
+  it("an approved payment can still have its amount corrected, and the correction needs approval again", async () => {
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice INV-JM-9007 Jake Morrison: edit package, total USD 400.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-JM-9007", amountMinor: 40_000, currency: "USD", reference: "INV-JM-9007", excerpt: "Jake Morrison, USD 400.00" }],
+      actor: "system:email-ingest",
+    });
+    approveObligation(db, id, "user:minh");
+    expect(get(id).state).toBe("approved");
+    await amendObligation(db, id, "user:lan", { amountMinor: 39_000 }, "Agreed discount");
+    expect(get(id).state).not.toBe("approved");
+    expect(get(id).amountMinor).toBe(39_000);
+    expect(db.select().from(approvals).where(and(eq(approvals.obligationId, id), eq(approvals.decision, "approved"))).all()).toHaveLength(0);
   });
 });
 

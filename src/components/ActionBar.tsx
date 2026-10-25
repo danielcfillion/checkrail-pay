@@ -24,13 +24,27 @@ type Props = {
   selectedRail: string | null;
   availableRails: Rail[];
   hasAccounting: boolean;
+  /** What the viewer may do. The server checks again; this only hides buttons that would be refused. */
+  perms?: { approve: boolean; pay: boolean; amend: boolean; resolveStuck: boolean };
+  /** Why this viewer cannot approve this one (role, limit, or they prepared it), when they cannot. */
+  approveRefusal?: string | null;
+  vendorId?: string | null;
+  /** Vendors to pick from when the request names nobody the business knows. */
+  vendorChoices?: Array<{ id: string; name: string }>;
 };
+
+const ALL = { approve: true, pay: true, amend: true, resolveStuck: true };
+
+function Waiting({ children }: { children: React.ReactNode }) {
+  return <p className="rounded border px-3 py-2 text-ink-soft hairline">{children}</p>;
+}
 
 /**
  * The actions a person can take, by state. Each button names the action.
  * On a successful payment the check line marker travels to paid, then reconciled.
  */
 export function ActionBar(p: Props) {
+  const can = p.perms ?? ALL;
   const [pending, start] = useTransition();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,21 +76,35 @@ export function ActionBar(p: Props) {
     case "awaiting_approval":
       return (
         <div className="space-y-3">
-          <div>
-            <label className="lbl" htmlFor="approval-note">
-              Note (optional)
-            </label>
-            <input id="approval-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Checked against the trip sheet" />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
-              {busy === "approve" ? "Approving" : "Approve"}
-            </button>
-            <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, note || undefined))}>
-              {busy === "reject" ? "Rejecting" : "Reject"}
-            </button>
-          </div>
-          <p className="text-xs text-ink-soft">Approving does not pay. Policy re-checks, then the obligation becomes ready to pay.</p>
+          {can.approve && !p.approveRefusal ? (
+            <>
+              <div>
+                <label className="lbl" htmlFor="approval-note">
+                  Note (optional)
+                </label>
+                <input id="approval-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Checked against the trip sheet" />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
+                  {busy === "approve" ? "Approving" : "Approve"}
+                </button>
+                <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, note || undefined))}>
+                  {busy === "reject" ? "Rejecting" : "Reject"}
+                </button>
+              </div>
+              <p className="text-xs text-ink-soft">Approving does not pay. Policy re-checks, then the obligation becomes ready to pay.</p>
+            </>
+          ) : (
+            <>
+              <Waiting>{p.approveRefusal ?? "Waiting for an approver. Your role does not approve payments."}</Waiting>
+              {can.approve ? (
+                <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Turned down"))}>
+                  {busy === "reject" ? "Rejecting" : "Reject"}
+                </button>
+              ) : null}
+            </>
+          )}
+          {can.amend ? <AmendDetails id={p.id} amountMinor={p.amountMinor} currency={p.currency} pending={pending} busy={busy} run={run} /> : null}
         </div>
       );
 
@@ -85,34 +113,46 @@ export function ActionBar(p: Props) {
       const others = p.availableRails.filter((r) => r !== primary);
       return (
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-2">
-            {primary ? (
-              <button type="button" className="btn btn-primary" disabled={pending} onClick={() => pay(primary)}>
-                {busy === `pay-${primary}` ? `Paying with ${railLabel(primary)}` : `Pay with ${railLabel(primary)}`}
-              </button>
-            ) : null}
-            {others.map((r) => (
-              <button key={r} type="button" className="btn" disabled={pending} onClick={() => pay(r)}>
-                {busy === `pay-${r}` ? `Paying with ${railLabel(r)}` : `Pay with ${railLabel(r)}`}
-              </button>
-            ))}
-            {!primary ? <p className="text-ink-soft">No rail can serve this vendor. Check the route comparison.</p> : null}
-          </div>
-          <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled before payment"))}>
-            {busy === "reject" ? "Cancelling" : "Cancel"}
-          </button>
-          <p className="text-xs text-ink-soft">
-            {p.selectedRail ? `${railLabel(p.selectedRail)} is the router's choice. ` : ""}
-            Paying {formatMoney(p.amountMinor, p.currency)} moves the marker to paid, then to reconciled once the books record it.
-          </p>
+          {can.pay ? (
+            <div className="flex flex-wrap gap-2">
+              {primary ? (
+                <button type="button" className="btn btn-primary" disabled={pending} onClick={() => pay(primary)}>
+                  {busy === `pay-${primary}` ? `Paying with ${railLabel(primary)}` : `Pay with ${railLabel(primary)}`}
+                </button>
+              ) : null}
+              {others.map((r) => (
+                <button key={r} type="button" className="btn" disabled={pending} onClick={() => pay(r)}>
+                  {busy === `pay-${r}` ? `Paying with ${railLabel(r)}` : `Pay with ${railLabel(r)}`}
+                </button>
+              ))}
+              {!primary ? <p className="text-ink-soft">No rail can serve this vendor. Check the route comparison.</p> : null}
+            </div>
+          ) : (
+            <Waiting>Approved and ready to send. Someone who sends payments sends it.</Waiting>
+          )}
+          {can.approve ? (
+            <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled before payment"))}>
+              {busy === "reject" ? "Cancelling" : "Cancel"}
+            </button>
+          ) : null}
+          {can.pay ? (
+            <p className="text-xs text-ink-soft">
+              {p.selectedRail ? `${railLabel(p.selectedRail)} is the router's choice. ` : ""}
+              Paying {formatMoney(p.amountMinor, p.currency)} moves the marker to paid, then to reconciled once the books record it.
+            </p>
+          ) : null}
+          {can.amend ? <AmendDetails id={p.id} amountMinor={p.amountMinor} currency={p.currency} pending={pending} busy={busy} run={run} note="Changing the amount sends it back for approval." /> : null}
         </div>
       );
     }
 
     case "blocked":
+      if (!can.amend) return <Waiting>Blocked: {p.blockedReason ?? "a check failed"}. A clerk or the owner fixes the request or cancels it.</Waiting>;
+      if (!p.vendorId && /not a known vendor/i.test(p.blockedReason ?? "")) return <PickVendor id={p.id} choices={p.vendorChoices ?? []} pending={pending} busy={busy} run={run} />;
       return <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} />;
 
     case "failed":
+      if (!can.pay) return <Waiting>The rail rejected this payment and nothing moved. Someone who sends payments retries or cancels it.</Waiting>;
       return (
         <div className="space-y-3">
           <p className="text-ink-soft">The rail rejected the payment and nothing moved. Retry on the same rail, try the other, or cancel. A retry re-checks the payout destination and runs policy again before any rail is called.</p>
@@ -134,14 +174,17 @@ export function ActionBar(p: Props) {
                 {busy === `pay-${r}` ? `Retrying with ${railLabel(r)}` : `Retry with ${railLabel(r)}`}
               </button>
             ))}
-            <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled after failed payment"))}>
-              {busy === "reject" ? "Cancelling" : "Cancel"}
-            </button>
+            {can.amend ? (
+              <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled after failed payment"))}>
+                {busy === "reject" ? "Cancelling" : "Cancel"}
+              </button>
+            ) : null}
           </div>
         </div>
       );
 
     case "needs_evidence":
+      if (!can.amend) return <Waiting>Held until a job sheet, invoice or contract is attached. A clerk or the owner adds it.</Waiting>;
       return (
         <div className="space-y-3">
           <p className="text-ink-soft">Policy is holding this until a job sheet, invoice or contract is attached. There is no evidence form on this page yet: re-create the obligation with the records attached and cancel this one.</p>
@@ -162,9 +205,12 @@ export function ActionBar(p: Props) {
           <p className="text-ink-soft">
             {railLabel(p.selectedRail) || "The rail"} did not give a clear answer, so this payment may or may not have gone through. Nothing here will pay it again: Reconcile asks {railLabel(p.selectedRail) || "the rail"} about the same payment under the same idempotency key and records what it finds.
           </p>
-          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
-            {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
-          </button>
+          {can.pay ? (
+            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
+              {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
+            </button>
+          ) : null}
+          {can.resolveStuck ? (
           <details className="text-sm">
             <summary className="cursor-pointer text-ink-soft hover:text-ink">Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
             <div className="mt-3 space-y-3">
@@ -190,6 +236,7 @@ export function ActionBar(p: Props) {
               />
             </div>
           </details>
+          ) : null}
         </div>
       );
 
@@ -276,5 +323,77 @@ function CorrectReference({ id, pending, busy, run }: { id: string; pending: boo
         {busy === "amend" ? "Correcting" : "Correct reference"}
       </button>
     </form>
+  );
+}
+
+/** A correction tucked away on screens where the usual next step is approve or pay. */
+function AmendDetails({ id, amountMinor, currency, pending, busy, run, note }: { id: string; amountMinor: number | null; currency: string | null; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void; note?: string }) {
+  const [value, setValue] = useState(amountMinor !== null ? (amountMinor / 100).toFixed(2) : "");
+  const minor = value.trim() ? Math.round(Number(value.replace(/,/g, "")) * 100) : NaN;
+  const valid = Number.isFinite(minor) && minor > 0 && minor !== amountMinor;
+  return (
+    <details className="border-t pt-3 text-sm hairline">
+      <summary className="cursor-pointer text-ink-soft hover:text-ink">Correct the amount</summary>
+      <form
+        className="mt-3 flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid) run("amend", () => amendAction(id, { amountMinor: minor }, `Amount corrected to ${formatMoney(minor, currency)}`));
+        }}
+      >
+        <div>
+          <label className="lbl" htmlFor="amend-amount">
+            Amount ({currency ?? "USD"})
+          </label>
+          <input id="amend-amount" className="field num w-40" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} />
+        </div>
+        <button type="submit" className="btn" disabled={pending || !valid}>
+          {busy === "amend" ? "Correcting" : "Correct and re-check"}
+        </button>
+      </form>
+      <p className="mt-2 text-xs text-ink-soft">{note ?? "Any approval already given no longer counts; policy runs again on the new amount."}</p>
+    </details>
+  );
+}
+
+/** The request names someone the business does not pay yet: attach it to a vendor on file, or add the vendor first. */
+function PickVendor({ id, choices, pending, busy, run }: { id: string; choices: Array<{ id: string; name: string }>; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void }) {
+  const [vendorId, setVendorId] = useState("");
+  return (
+    <div className="space-y-3">
+      <p className="text-ink-soft">Nobody on file matches this payee. If it is a vendor you already pay under another name, pick them; policy then runs again. If it is someone new, add them as a vendor first, so their payout details are verified before any money goes to them.</p>
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (vendorId) run("amend", () => amendAction(id, { vendorId }, "Payee matched to a vendor on file"));
+        }}
+      >
+        <div>
+          <label className="lbl" htmlFor="pick-vendor">
+            Vendor on file
+          </label>
+          <select id="pick-vendor" className="field w-64" value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+            <option value="">Choose a vendor</option>
+            {choices.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={pending || !vendorId}>
+          {busy === "amend" ? "Matching" : "Use this vendor"}
+        </button>
+      </form>
+      <div className="flex flex-wrap gap-2">
+        <Link href="/vendors/new" className="btn">
+          Add a new vendor
+        </Link>
+        <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(id, "Payee is not a known vendor"))}>
+          {busy === "reject" ? "Cancelling" : "Cancel request"}
+        </button>
+      </div>
+    </div>
   );
 }

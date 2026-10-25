@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { listObligations } from "@/lib/queries";
+import { listObligations, waitingIdsFor } from "@/lib/queries";
+import { getViewer } from "@/lib/viewer";
 import type { ObligationState } from "@/lib/domain/types";
 import { ObligationTable } from "@/components/ObligationList";
 import { EmptyState, PageHeader } from "@/components/ui";
@@ -17,9 +18,13 @@ const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }>
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
   const { filter = "all" } = await searchParams;
-  const active = FILTERS.find((f) => f.key === filter) ?? FILTERS[0];
-  const rows = listObligations({ states: active.states, limit: 500 });
-  const counts = Object.fromEntries(FILTERS.map((f) => [f.key, listObligations({ states: f.states, limit: 1000 }).length]));
+  const viewer = await getViewer();
+  const mineIds = viewer ? new Set(waitingIdsFor(viewer.actor)) : null;
+  const filters = mineIds ? [{ key: "mine", label: "Waiting for you" }, ...FILTERS] : FILTERS;
+  const active = filters.find((f) => f.key === filter) ?? FILTERS[0];
+  const rows = active.key === "mine" && mineIds ? listObligations({ limit: 1000 }).filter((r) => mineIds.has(r.id)) : listObligations({ states: active.states, limit: 500 });
+  const counts: Record<string, number> = Object.fromEntries(FILTERS.map((f) => [f.key, listObligations({ states: f.states, limit: 1000 }).length]));
+  if (mineIds) counts.mine = mineIds.size;
 
   return (
     <>
@@ -27,13 +32,15 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         title="Inbox"
         lede="Every obligation the business has been asked to pay, from first mention to the books."
         actions={
-          <Link href="/obligations/new" className="btn btn-primary">
-            New obligation
-          </Link>
+          !viewer || viewer.can("ingest") ? (
+            <Link href="/obligations/new" className="btn btn-primary">
+              New obligation
+            </Link>
+          ) : undefined
         }
       />
       <nav aria-label="Filter" className="mb-4 flex flex-wrap gap-1 border-b hairline">
-        {FILTERS.map((f) => {
+        {filters.map((f) => {
           const on = f.key === active.key;
           return (
             <Link
@@ -52,11 +59,11 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         <ObligationTable rows={rows} />
       ) : (
         <EmptyState
-          title={active.key === "all" ? "No obligations yet" : `Nothing ${active.label.toLowerCase()}`}
+          title={active.key === "all" ? "No obligations yet" : active.key === "mine" ? "Nothing waiting for you" : `Nothing ${active.label.toLowerCase()}`}
           body={active.key === "all" ? "Paste an invoice, a job sheet or a chat message and the agent will read it." : "Switch filter, or add a new obligation."}
           action={
-            <Link href="/obligations/new" className="btn">
-              New obligation
+            <Link href={active.key === "mine" ? "/obligations" : "/obligations/new"} className="btn">
+              {active.key === "mine" ? "See everything" : "New obligation"}
             </Link>
           }
         />

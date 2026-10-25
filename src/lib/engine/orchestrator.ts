@@ -1,13 +1,15 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, vendors } from "../db/schema";
+import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors } from "../db/schema";
+import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
+import { isRole } from "../auth/roles";
+import { fmt } from "../domain/policy";
 import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
 import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
-import { isLiveRails } from "../config";
 import { runObligationAgent } from "../ai/agent";
 import { getRails } from "../rails";
 import { buildAccountingRecord } from "../accounting/record";
@@ -369,16 +371,43 @@ function targetState(outcome: PolicyOutcome, current: ObligationState): Obligati
   }
 }
 
+/**
+ * Whether this person may approve this obligation, before any policy run: their role (or a delegation), their approval
+ * limit, and separation of duties. Pages call it to explain a missing Approve button; approveObligation enforces it.
+ */
+export function approvalGate(db: Db, obligationId: string, actor: string): { refusal: string | null; selfApproval: boolean } {
+  const ob = mustGet(db, obligationId);
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
+  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
+  const amount = ob.amountMinor ?? 0;
+  // A known person approving: they need the approve permission (their own or delegated) and a limit that covers it.
+  if (actor.startsWith("user:")) {
+    const row = db.select().from(users).where(and(eq(users.id, actor.slice(5)), eq(users.businessId, ob.businessId))).get();
+    if (row && isRole(row.role)) {
+      const who = resolveActor(db, ob.businessId, row.id, row.role);
+      if (!actorCan(who, "approve")) return { refusal: `${whoIs(who)} cannot approve payments. An approver or the owner does.`, selfApproval: false };
+      if (who.approvalLimitMinor !== null && amount > who.approvalLimitMinor) {
+        const higher = approversFor(db, ob.businessId, amount).filter((u) => u !== row.id);
+        return { refusal: `${fmt(amount, biz.baseCurrency)} is above ${who.displayName}'s approval limit of ${fmt(who.approvalLimitMinor, biz.baseCurrency)}; someone with a higher limit approves this one${higher.length ? ` (${higher.join(", ")} can)` : ""}`, selfApproval: false };
+      }
+    }
+  }
+  // Separation of duties: whoever prepared the request (created it, or changed its amount, payee or reference)
+  // cannot also approve it, when someone else can. A one-person business has nobody else to ask.
+  const preparers = preparersOf(db, obligationId);
+  if (!preparers.includes(actor)) return { refusal: null, selfApproval: false };
+  const others = approversFor(db, ob.businessId, amount).filter((u) => !preparers.includes(`user:${u}`));
+  const required = policy.requireSeparateApprover ?? others.length > 0;
+  if (required) return { refusal: `You prepared this payment, so someone else approves it${others.length ? ` (${others.join(", ")} can)` : ""}`, selfApproval: false };
+  return { refusal: null, selfApproval: true };
+}
+
 export function approveObligation(db: Db, obligationId: string, actor: string, note?: string, shownFingerprints?: string[]): PolicyOutcome {
   const ob = mustGet(db, obligationId);
   if (!["awaiting_approval", "verified", "blocked"].includes(ob.state)) throw new Error(`Cannot approve an obligation in state ${ob.state}`);
-  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
-  const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
-  // Separation of duties: whoever ingested the request cannot also approve it.
-  if (policy.requireSeparateApprover ?? isLiveRails()) {
-    const created = db.select({ actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
-    if (created && created.actor === actor) throw new Error("The person who ingested an obligation cannot approve it; ask a second person");
-  }
+  const gate = approvalGate(db, obligationId, actor);
+  if (gate.refusal) throw new Error(gate.refusal);
+  if (gate.selfApproval) audit(db, { obligationId, actor, action: "approval.self", detail: { reason: "no other approver can approve this amount" } });
   // One approval per person per version of the obligation.
   const already = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"), eq(approvals.actor, actor))).get();
   if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
@@ -460,7 +489,7 @@ export function validateAmendPatch(db: Db, businessId: string, patch: unknown): 
 /** Correct an obligation's amount or reference after human review, then re-run the pipeline from policy. */
 export async function amendObligation(db: Db, obligationId: string, actor: string, rawPatch: AmendPatch, note?: string): Promise<void> {
   const ob = mustGet(db, obligationId);
-  if (!["blocked", "needs_evidence", "awaiting_approval", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
+  if (!["blocked", "needs_evidence", "awaiting_approval", "approved", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
   const patch = validateAmendPatch(db, ob.businessId, rawPatch);
   // Changing the payee of an obligation that already has one is not a correction, it is a different payment.
   if (patch.vendorId && ob.vendorId && patch.vendorId !== ob.vendorId) throw new Error("This payment already has a payee; cancel it and create a new request for the other vendor");

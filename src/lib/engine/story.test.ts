@@ -70,7 +70,7 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
 
   it("refuses to execute a blocked obligation even if someone approves it", () => {
     const ob = get(story.blockedMismatch);
-    const outcome = approveObligation(db, ob.id, "user:daniel", "just pay it");
+    const outcome = approveObligation(db, ob.id, "user:minh", "just pay it");
     expect(outcome.decision).toBe("block");
     expect(get(ob.id).state).toBe("blocked");
   });
@@ -80,7 +80,8 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     await amendObligation(db, ob.id, "user:daniel", { amountMinor: 80_000 }, "Corrected to trip sheet: 4 x 200");
     const fixed = get(ob.id);
     expect(fixed.state).toBe("awaiting_approval"); // $800 is above the $250 auto threshold
-    approveObligation(db, ob.id, "user:daniel");
+    // Daniel corrected it, so he prepared it: Minh (approver, limit $1,000) approves.
+    approveObligation(db, ob.id, "user:minh");
     expect(get(ob.id).state).toBe("approved");
     expect(get(ob.id).selectedRail).toBe("paypal"); // VN has no Stellar off-ramp
     const r = await executeObligation(db, ob.id, { actor: "user:daniel" });

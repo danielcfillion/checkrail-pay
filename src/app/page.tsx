@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getViewer } from "@/lib/viewer";
 import { getOverview, listObligations, listPaymentPoints } from "@/lib/queries";
 import { formatMoneySymbol, humaniseAction, humaniseActor, pluralise } from "@/lib/format";
 import { BookLine } from "@/components/BookLine";
@@ -11,7 +12,8 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
 
-export default function OverviewPage() {
+export default async function OverviewPage() {
+  const viewer = await getViewer();
   const o = getOverview();
   const all = listObligations({ limit: 1000 });
   const base = o.business?.baseCurrency ?? "USD";
@@ -29,10 +31,10 @@ export default function OverviewPage() {
             {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
           </p>
         </div>
-        <ResetDemoButton />
+        {!viewer || viewer.can("reset_demo") ? <ResetDemoButton /> : null}
       </header>
 
-      {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} /> : null}
+      {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} can={viewer ? { stop: viewer.can("stop"), settings: viewer.can("settings") } : undefined} /> : null}
 
       <BookLine rows={all} />
 

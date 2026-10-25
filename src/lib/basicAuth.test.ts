@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
-import { ACTOR_HEADER, checkBasicAuth, parseCredential, safeEqual } from "./basicAuth";
+import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, parseCredential, safeEqual } from "./basicAuth";
 import { middleware } from "../middleware";
 import { resetDemoAction } from "../app/actions";
 import { config } from "./config";
@@ -38,52 +38,108 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const prev = process.env.CHECKRAIL_BASIC_AUTH;
-  const prevOld = process.env.DUELINE_BASIC_AUTH;
-  afterEach(() => {
-    if (prev === undefined) delete process.env.CHECKRAIL_BASIC_AUTH;
-    else process.env.CHECKRAIL_BASIC_AUTH = prev;
-    if (prevOld === undefined) delete process.env.DUELINE_BASIC_AUTH;
-    else process.env.DUELINE_BASIC_AUTH = prevOld;
+  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV"] as const;
+  const saved: Record<string, string | undefined> = {};
+  const env = process.env as Record<string, string | undefined>;
+  beforeEach(() => {
+    for (const k of keys) saved[k] = env[k];
+    for (const k of keys) delete env[k];
   });
-  const req = (headers: Record<string, string> = {}) => new NextRequest("http://localhost/obligations", { headers });
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete env[k];
+      else env[k] = saved[k];
+    }
+    env.NODE_ENV = "test";
+  });
+  const req = (headers: Record<string, string> = {}, path = "/obligations") => new NextRequest(`http://localhost${path}`, { headers });
+  const fwd = (res: Response, h: string) => res.headers.get(`x-middleware-request-${h}`);
 
-  it("is a no-op when CHECKRAIL_BASIC_AUTH is unset, and strips a client-supplied actor header", () => {
-    delete process.env.CHECKRAIL_BASIC_AUTH;
-    const res = middleware(req({ [ACTOR_HEADER]: "forged" }));
+  it("open in development: acts as the demo owner and ignores forged identity headers", () => {
+    const res = middleware(req({ [ACTOR_HEADER]: "forged", [ROLE_HEADER]: "admin" }));
     expect(res.status).toBe(200);
-    expect(res.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBeNull();
-    expect((res.headers.get("x-middleware-override-headers") ?? "").split(",")).not.toContain(ACTOR_HEADER); // the forged header is not forwarded to the app
+    expect(fwd(res, ACTOR_HEADER)).toBe("daniel");
+    expect(fwd(res, ROLE_HEADER)).toBe("admin");
+  });
+
+  it("refuses to run open in production or with live rails (security audit F3)", () => {
+    env.NODE_ENV = "production";
+    expect(middleware(req()).status).toBe(503);
+    env.CHECKRAIL_INSECURE_DEMO = "1";
+    expect(middleware(req()).status).toBe(200);
+    env.RAIL_MODE = "live";
+    expect(middleware(req()).status).toBe(503);
   });
 
   it("returns 401 with a challenge when auth is on and credentials are missing or wrong", () => {
-    process.env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
+    env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
     const none = middleware(req());
     expect(none.status).toBe(401);
     expect(none.headers.get("WWW-Authenticate")).toMatch(/^Basic/);
     expect(middleware(req({ authorization: basic("rianne", "nope") })).status).toBe(401);
   });
 
-  it("passes the authenticated username to the app and ignores a forged actor header", () => {
-    process.env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
-    const res = middleware(req({ authorization: basic("rianne", "pw"), [ACTOR_HEADER]: "daniel" }));
+  it("the single credential is an admin and a forged actor or role header is overwritten", () => {
+    env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
+    const res = middleware(req({ authorization: basic("rianne", "pw"), [ACTOR_HEADER]: "daniel", [ROLE_HEADER]: "clerk" }));
     expect(res.status).toBe(200);
-    expect(res.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBe("rianne");
+    expect(fwd(res, ACTOR_HEADER)).toBe("rianne");
+    expect(fwd(res, ROLE_HEADER)).toBe("admin");
+  });
+
+  it("named users get their own role", () => {
+    env.CHECKRAIL_USERS = "minh:pw1:approver,lan:pw2:clerk";
+    const lan = middleware(req({ authorization: basic("lan", "pw2") }));
+    expect(fwd(lan, ACTOR_HEADER)).toBe("lan");
+    expect(fwd(lan, ROLE_HEADER)).toBe("clerk");
+    expect(middleware(req({ authorization: basic("lan", "pw1") })).status).toBe(401);
   });
 
   it("still enforces auth when only the pre-rename variable DUELINE_BASIC_AUTH is set", () => {
-    delete process.env.CHECKRAIL_BASIC_AUTH;
-    process.env.DUELINE_BASIC_AUTH = "rianne:pw";
+    env.DUELINE_BASIC_AUTH = "rianne:pw";
     expect(middleware(req()).status).toBe(401);
     const ok = middleware(req({ authorization: basic("rianne", "pw") }));
     expect(ok.status).toBe(200);
-    expect(ok.headers.get(`x-middleware-request-${ACTOR_HEADER}`)).toBe("rianne");
+    expect(fwd(ok, ACTOR_HEADER)).toBe("rianne");
   });
 
-  it("refuses everything when the setting is malformed, instead of leaving the app open", () => {
-    process.env.CHECKRAIL_BASIC_AUTH = "oops";
+  it("refuses everything when a setting is malformed, instead of leaving the app open", () => {
+    env.CHECKRAIL_BASIC_AUTH = "oops";
     expect(middleware(req()).status).toBe(503);
-    expect(middleware(req({ authorization: basic("oops", "") })).status).toBe(503);
+    delete env.CHECKRAIL_BASIC_AUTH;
+    env.CHECKRAIL_USERS = "minh:pw:boss";
+    expect(middleware(req()).status).toBe(503);
+  });
+
+  it("demo personas apply only when switched on and never with real money", () => {
+    env.CHECKRAIL_USERS = "judge:pw:admin";
+    const asLan = { authorization: basic("judge", "pw"), cookie: "checkrail_persona=lan" };
+    expect(fwd(middleware(req(asLan)), ACTOR_HEADER)).toBe("judge");
+    env.CHECKRAIL_DEMO_PERSONAS = "1";
+    const res = middleware(req(asLan));
+    expect(fwd(res, ACTOR_HEADER)).toBe("lan");
+    expect(fwd(res, ROLE_HEADER)).toBe("clerk");
+    expect(fwd(res, PERSONA_HEADER)).toBe("judge");
+    env.PAYPAL_ENV = "live";
+    expect(fwd(middleware(req(asLan)), ACTOR_HEADER)).toBe("judge");
+  });
+
+  it("only an owner login can act as someone else", () => {
+    env.CHECKRAIL_USERS = "lan:pw:clerk";
+    env.CHECKRAIL_DEMO_PERSONAS = "1";
+    const res = middleware(req({ authorization: basic("lan", "pw"), cookie: "checkrail_persona=daniel" }));
+    expect(fwd(res, ACTOR_HEADER)).toBe("lan");
+    expect(fwd(res, ROLE_HEADER)).toBe("clerk");
+    expect(fwd(res, PERSONA_HEADER)).toBeNull();
+  });
+
+  it("exempts only the exact webhook path and token-shaped vendor pages (security audit F11)", () => {
+    env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
+    expect(middleware(req({}, "/api/webhooks/paypal")).status).toBe(200);
+    expect(middleware(req({}, "/api/webhooks/paypalx")).status).toBe(401);
+    expect(middleware(req({}, "/favicon.icox")).status).toBe(401);
+    expect(middleware(req({}, "/onboard/" + "a".repeat(32))).status).toBe(200);
+    expect(middleware(req({}, "/onboard/short")).status).toBe(401);
   });
 });
 

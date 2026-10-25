@@ -1,11 +1,53 @@
 /**
- * Optional HTTP Basic auth for the whole app. Active only when CHECKRAIL_BASIC_AUTH=user:pass
- * is set. Pure functions so they can run in the Edge middleware and in tests.
- * This is a single shared credential, not RBAC: it gives each request a username
- * (used as the audit actor) and keeps strangers out.
+ * HTTP Basic auth for the whole app, with named users and roles. Pure functions so they run in the Edge
+ * middleware and in tests.
+ *
+ *  - CHECKRAIL_USERS="daniel:pw:admin,minh:pw:approver,lan:pw:clerk,thu:pw:accountant" gives each person a login
+ *    and a role. The username is the audit actor; the role decides what they may do (src/lib/auth/roles.ts).
+ *  - CHECKRAIL_BASIC_AUTH="user:pass" (the older single credential) still works and is an admin.
  */
+import { isRole, type Role } from "./auth/roles";
 
 export const ACTOR_HEADER = "x-checkrail-user";
+export const ROLE_HEADER = "x-checkrail-role";
+/** Set by the middleware when the role came from a demo persona rather than a login. */
+export const PERSONA_HEADER = "x-checkrail-persona";
+export const PERSONA_COOKIE = "checkrail_persona";
+
+export type UserCredential = { user: string; pass: string; role: Role };
+
+/** Every configured login. Null when a setting is present but malformed: a malformed setting must refuse, not open. */
+export function configuredUsers(env: Record<string, string | undefined> = process.env): UserCredential[] | null {
+  const out: UserCredential[] = [];
+  const list = env.CHECKRAIL_USERS;
+  if (list) {
+    for (const entry of list.split(",").map((x) => x.trim()).filter(Boolean)) {
+      const last = entry.lastIndexOf(":");
+      const role = entry.slice(last + 1);
+      const cred = parseCredential(entry.slice(0, last));
+      if (last < 0 || !cred || !isRole(role)) return null;
+      if (out.some((u) => u.user === cred.user)) return null;
+      out.push({ ...cred, role });
+    }
+  }
+  const single = basicAuthSetting(env);
+  if (single) {
+    const cred = parseCredential(single);
+    if (!cred) return null;
+    if (!out.some((u) => u.user === cred.user)) out.push({ ...cred, role: "admin" });
+  }
+  return out;
+}
+
+/** Check a Basic header against every configured login, comparing all of them so timing does not reveal which matched. */
+export function authenticate(authorization: string | null | undefined, users: UserCredential[]): UserCredential | null {
+  let hit: UserCredential | null = null;
+  for (const u of users) {
+    const ok = checkBasicAuth(authorization, `${u.user}:${u.pass}`);
+    if (ok && !hit) hit = u;
+  }
+  return hit;
+}
 
 /**
  * The configured credential. DUELINE_BASIC_AUTH is the variable's name from before the
@@ -53,4 +95,13 @@ export function checkBasicAuth(authorization: string | null | undefined, setting
   const userOk = safeEqual(user, cred.user);
   const passOk = safeEqual(pass, cred.pass);
   return userOk && passOk ? cred.user : null;
+}
+
+/**
+ * Whether the "act as" demo switch is on: never when a live PayPal or public Stellar network is configured (even in
+ * mock mode, to be safe), and only when asked for or when no logins exist (open development server).
+ */
+export function personasAllowed(env: Record<string, string | undefined> = process.env, loginsConfigured: boolean): boolean {
+  if (env.PAYPAL_ENV === "live" || env.STELLAR_NETWORK === "public") return false;
+  return env.CHECKRAIL_DEMO_PERSONAS === "1" || !loginsConfigured;
 }
