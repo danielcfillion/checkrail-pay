@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, recheckAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -149,7 +149,12 @@ export function ActionBar(p: Props) {
     case "blocked":
       if (!can.amend) return <Waiting>Blocked: {p.blockedReason ?? "a check failed"}. A clerk or the owner fixes the request or cancels it.</Waiting>;
       if (!p.vendorId && /not a known vendor/i.test(p.blockedReason ?? "")) return <PickVendor id={p.id} choices={p.vendorChoices ?? []} pending={pending} busy={busy} run={run} />;
-      return <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} />;
+      return (
+        <div className="space-y-3">
+          <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} />
+          <CheckAgain id={p.id} pending={pending} busy={busy} run={run} />
+        </div>
+      );
 
     case "failed":
       if (!can.pay) return <Waiting>The rail rejected this payment and nothing moved. Someone who sends payments retries or cancels it.</Waiting>;
@@ -196,6 +201,7 @@ export function ActionBar(p: Props) {
               {busy === "reject" ? "Cancelling" : "Cancel"}
             </button>
           </div>
+          <CheckAgain id={p.id} pending={pending} busy={busy} run={run} />
         </div>
       );
 
@@ -265,6 +271,7 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
   const evidenced = evidencedAmountFromReason(blockedReason);
   const [value, setValue] = useState(evidenced !== null ? (evidenced / 100).toFixed(2) : amountMinor !== null ? (amountMinor / 100).toFixed(2) : "");
   const duplicate = /already used/.test(blockedReason ?? "");
+  const rateCard = /^Rate card/.test(blockedReason ?? "");
   const minor = value.trim() ? Math.round(Number(value.replace(/,/g, "")) * 100) : NaN;
   const valid = Number.isFinite(minor) && minor > 0 && minor !== amountMinor;
 
@@ -273,7 +280,13 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
       {duplicate ? (
         <p className="text-ink-soft">This reference was already paid. If it is genuinely a second job, change the reference below; otherwise cancel it.</p>
       ) : (
-        <p className="text-ink-soft">{evidenced !== null ? `The evidence says ${formatMoney(evidenced, currency)}. Correcting to that amount re-runs policy.` : "Correct the amount to what the evidence supports, then policy re-runs."}</p>
+        <p className="text-ink-soft">
+          {rateCard && evidenced !== null
+            ? `The rate card says ${formatMoney(evidenced, currency)}. Paying that is a short pay: a person approves it, and the vendor should be told why the rest is not paid (or send a revised invoice with the link below).`
+            : evidenced !== null
+              ? `The evidence says ${formatMoney(evidenced, currency)}. Correcting to that amount re-runs policy.`
+              : "Correct the amount to what the evidence supports, then policy re-runs."}
+        </p>
       )}
       {duplicate ? (
         <CorrectReference id={id} pending={pending} busy={busy} run={run} />
@@ -282,7 +295,7 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (valid) run("amend", () => amendAction(id, { amountMinor: minor }, `Corrected to evidenced amount ${formatMoney(minor, currency)}`));
+            if (valid) run("amend", () => amendAction(id, { amountMinor: minor }, rateCard && minor === evidenced ? `Short pay to the rate card: ${formatMoney(minor, currency)}` : `Corrected to evidenced amount ${formatMoney(minor, currency)}`));
           }}
         >
           <div>
@@ -300,6 +313,18 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
         {busy === "reject" ? "Cancelling" : "Cancel obligation"}
       </button>
     </div>
+  );
+}
+
+/** For a block whose cause was fixed elsewhere: the vendor was verified, a rate card or departure was added. */
+function CheckAgain({ id, pending, busy, run }: { id: string; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void }) {
+  return (
+    <p className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs text-ink-soft hairline">
+      Fixed the cause somewhere else (verified the vendor, added a rate or departure)?
+      <button type="button" className="btn btn-sm" disabled={pending} onClick={() => run("recheck", () => recheckAction(id))}>
+        {busy === "recheck" ? "Checking" : "Check again"}
+      </button>
+    </p>
   );
 }
 

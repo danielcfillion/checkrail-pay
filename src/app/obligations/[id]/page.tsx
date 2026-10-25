@@ -109,11 +109,12 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </dl>
           </Panel>
 
-          <Panel title="Evidence" aside={d.evidence.length ? `${d.evidence.length} on file` : "none"}>
+          <Panel title="Evidence" aside={d.evidence.length ? `${d.evidence.filter((e) => !e.supersededBy).length} on file` : "none"}>
             {d.evidence.length ? (
               <ul className="space-y-4">
                 {d.evidence.map((e) => (
-                  <li key={e.id}>
+                  <li key={e.id} className={e.supersededBy ? "opacity-60" : undefined}>
+                    {e.supersededBy ? <p className="text-xs text-ink-soft">Replaced by the vendor&apos;s revised copy; kept for the record, no longer checked.</p> : null}
                     <div className="flex items-baseline justify-between gap-2">
                       <p className="font-medium">{e.label}</p>
                       {e.amountMinor !== null ? <Money minor={e.amountMinor} currency={e.currency} className="shrink-0" /> : null}
@@ -212,7 +213,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             <Panel title="What you are deciding" aside="at a glance">
               <ApprovalContext
                 ask={formatMoney(o.amountMinor, o.currency)}
-                evidence={d.evidence.filter((e) => e.amountMinor !== null).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
+                evidence={d.evidence.filter((e) => e.amountMinor !== null && !e.supersededBy).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
                 destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : (o.selectedRail === "wise" || o.selectedRail === "bank_file") && d.vendor.bankLabel ? `bank account ${d.vendor.bankLabel}${d.vendor.accountHolder ? ` (${d.vendor.accountHolder})` : ""}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
                 route={(() => { const q = d.quotes.find((x) => x.rail === o.selectedRail && x.available); return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
                 why={o.blockedReason ?? d.policyReasons[0] ?? (o.state === "needs_evidence" ? "No evidence attached" : "")}

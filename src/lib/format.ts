@@ -264,7 +264,8 @@ export function countryName(code: string | null | undefined): string {
 /** Extracts the evidenced amount in minor units from a blocked reason like "... says USD 800.00 ...". */
 export function evidencedAmountFromReason(reason: string | null | undefined): number | null {
   if (!reason) return null;
-  const m = reason.match(/says [A-Z]{3} ([\d,]+(?:\.\d{2})?)/);
+  // "Invoice says USD 800.00" and "Rate card and departure HG-3D-1023 say VND 3,600,000": the figure the records support.
+  const m = reason.match(/says? [A-Z]{3} ([\d,]+(?:\.\d{2})?)/);
   if (!m) return null;
   return Math.round(Number(m[1].replace(/,/g, "")) * 100);
 }

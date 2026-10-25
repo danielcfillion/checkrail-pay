@@ -5,9 +5,9 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { businesses, obligations } from "@/lib/db/schema";
+import { businesses, obligations, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -166,6 +166,18 @@ export async function confirmAction(id: string): Promise<ActionResult> {
     done([`/obligations/${id}`]);
     done();
     return { ok: true, message: `Settlement status: ${state}.` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Run the checks again after something outside the request was fixed (details verified, a rate card added). */
+export async function recheckAction(id: string): Promise<ActionResult> {
+  try {
+    const state = await recheckObligation(getDb(), id, (await actOn(id, "amend", "check payments again")).id);
+    done([`/obligations/${id}`]);
+    done();
+    return { ok: true, message: state === "blocked" ? "Checked again: still blocked. The reason is shown above." : `Checked again: now ${state.replace(/_/g, " ")}.` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -380,9 +392,14 @@ export async function proposePayoutAction(vendorId: string, payout: unknown, not
 
 export async function verifyVendorChangeAction(changeId: string, method: string, note?: string): Promise<ActionResult> {
   try {
-    await withBusiness((db, b, who) => verifyVendorChange(db, b, who, changeId, method, typeof note === "string" ? note.slice(0, 300) : undefined));
+    const rechecked = await withBusiness(async (db, b, who) => {
+      verifyVendorChange(db, b, who, changeId, method, typeof note === "string" ? note.slice(0, 300) : undefined);
+      // Their payments that were waiting on unverified details are checked again now, not left blocked.
+      const vendorId = db.select({ v: vendorChanges.vendorId }).from(vendorChanges).where(eq(vendorChanges.id, changeId)).get()?.v;
+      return vendorId ? recheckVendorItems(db, b, vendorId, who.id) : 0;
+    });
     done();
-    return { ok: true, message: "Verified. Payments use these details from now on." };
+    return { ok: true, message: `Verified. Payments use these details from now on.${rechecked ? ` ${rechecked} waiting payment${rechecked === 1 ? " was" : "s were"} checked again.` : ""}` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -555,9 +572,13 @@ export async function voidBillAction(billId: string, reason: string): Promise<Ac
 
 export async function setRateAction(vendorId: string, rate: { unit: string; rateMinor: number; currency: string; validFrom: string; validTo?: string | null; note?: string | null }): Promise<ActionResult> {
   try {
-    await withBusiness((db, b, who) => setRate(db, b, who, vendorId, rate));
+    const n = await withBusiness(async (db, b, who) => {
+      setRate(db, b, who, vendorId, rate);
+      return recheckVendorItems(db, b, vendorId, who.id);
+    });
     done([`/vendors/${vendorId}`, "/departures"]);
-    return { ok: true, message: "Rate saved. Invoices for this vendor are checked against it from now on." };
+    done();
+    return { ok: true, message: `Rate saved. Invoices for this vendor are checked against it from now on${n ? `; ${n} waiting payment${n === 1 ? " was" : "s were"} checked again` : ""}.` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

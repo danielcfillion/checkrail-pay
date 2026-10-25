@@ -207,7 +207,8 @@ export function interpretWithRules(input: {
   }
 
   // Pressure words, not scheduling words: "deposit due now" or "balance due today" on an invoice is a due date.
-  const pressure = rawInput.replace(/\b(due|payable|balance|deposit)\s+(now|today)\b/gi, "");
+  // An amount or a percentage may sit between them: "50% deposit USD 425 now", "balance of VND 2.000.000 due today".
+  const pressure = rawInput.replace(/\b(due|payable|balance|deposit)\b[^.;!\n]{0,30}?\b(now|today)\b/gi, "");
   if (/\b(urgent|urgently|asap|today|now|immediately)\b/i.test(pressure)) {
     flags.push("Urgency language in the request; treat as a social-engineering signal, not a reason to skip checks");
     confidence -= 5;

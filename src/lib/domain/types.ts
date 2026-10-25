@@ -174,6 +174,8 @@ export interface AiInterpretation {
 }
 
 export interface PolicyInput {
+  /** "advance", "deposit", "balance", "part", "full" for a payment against a bill. */
+  paymentKind?: string | null;
   obligation: {
     id: string;
     amountMinor: number | null;

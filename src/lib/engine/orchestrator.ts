@@ -1,4 +1,4 @@
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, bills } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
@@ -168,8 +168,24 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
       .limit(12)
       .all()
       .map((r) => ({ ...r, description: (r.description ?? "").slice(0, 120) }));
+  // Fields a person corrected stay corrected: a new record or a re-read never puts the agent's figure back.
+  const amended = new Set(
+    db.select({ detail: auditEntries.detailJson, actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.amended"))).all()
+      .filter((a) => a.actor.startsWith("user:"))
+      .flatMap((a) => Object.keys((JSON.parse(a.detail ?? "{}") as { patch?: Record<string, unknown> }).patch ?? {})),
+  );
   const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, documents: docs, businessName: biz.name, baseCurrency: biz.baseCurrency, vendorHistory });
-  const ai = run.interpretation;
+  const ai = { ...run.interpretation };
+  if (amended.has("amountMinor")) {
+    ai.amountMinor = ob.amountMinor;
+    ai.flags = ai.flags.filter((f) => !/amount differs|differs from/i.test(f));
+  }
+  if (amended.has("currency")) ai.currency = ob.currency;
+  if (amended.has("sourceRef")) {
+    ai.sourceRef = ob.sourceRef;
+    ai.flags = ai.flags.filter((f) => !/Reference .* does not (match|appear)/i.test(f));
+  }
+  if (amended.has("vendorId")) ai.vendorId = ob.vendorId;
   // Approvals were given for specific numbers. If re-interpretation changes who is paid, how much or what for, they no longer count.
   const approved = db.select().from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
   if (approved.length > 0 && (ob.vendorId !== (ai.vendorId ?? ob.vendorId) || ob.amountMinor !== ai.amountMinor || ob.currency !== ai.currency || ob.sourceRef !== (ai.sourceRef ?? ob.sourceRef))) {
@@ -220,6 +236,31 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   if (outcome.decision === "auto_execute" && mustGet(db, obligationId).state === "approved") {
     scheduleAutopilotRelease(db, obligationId);
   }
+}
+
+/**
+ * Run the checks again without re-reading the request: for a payment that was blocked by something outside it (the
+ * vendor's details were not verified yet, a rate card was missing) once that has been fixed.
+ */
+export async function recheckObligation(db: Db, obligationId: string, actor: string): Promise<ObligationState> {
+  const ob = mustGet(db, obligationId);
+  if (!["blocked", "needs_evidence", "awaiting_approval"].includes(ob.state)) throw new Error(`Nothing to check again in state ${ob.state}`);
+  if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.recheck", { reason: "checked again" });
+  else audit(db, { obligationId, actor, action: "review.recheck", detail: {} });
+  const outcome = runPolicy(db, obligationId);
+  const fresh = mustGet(db, obligationId);
+  const biz = db.select().from(businesses).where(eq(businesses.id, fresh.businessId)).get()!;
+  const vendorRow = fresh.vendorId ? db.select().from(vendors).where(eq(vendors.id, fresh.vendorId)).get() : null;
+  if (vendorRow && fresh.amountMinor && fresh.currency) await quoteAndRoute(db, obligationId, toProfile(vendorRow), payableMinor(fresh), fresh.currency, biz.country);
+  moveTo(db, obligationId, targetState(outcome, fresh.state as ObligationState), outcome);
+  return mustGet(db, obligationId).state as ObligationState;
+}
+
+/** After a vendor's details are verified or a rate is set: everything of theirs that is still waiting is checked again. */
+export async function recheckVendorItems(db: Db, businessId: string, vendorId: string, actor: string): Promise<number> {
+  const waiting = db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.businessId, businessId), eq(obligations.vendorId, vendorId), inArray(obligations.state, ["blocked", "needs_evidence", "awaiting_approval"]))).all();
+  for (const w of waiting) await recheckObligation(db, w.id, actor);
+  return waiting.length;
 }
 
 /** Schedule an autopilot release for an approved obligation. No-op unless autopilot is in force, and never after a person cancelled it. */
@@ -343,6 +384,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
     bill: billInput(db, ob),
+    paymentKind: ob.paymentKind,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
     withholding,
     taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,
@@ -507,6 +549,15 @@ export function rejectObligation(db: Db, obligationId: string, actor: string, no
     transition(tx as unknown as Db, obligationId, "cancelled", actor, "approval.rejected", { note: note ?? null });
     tx.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "rejected", note: note ?? null, createdAt: now() }).run();
   });
+  // An advance exists only as the money handed over. Cancelled before anything went out, it leaves no open advance behind.
+  if (before.billId && before.paymentKind === "advance") {
+    const b = db.select().from(bills).where(eq(bills.id, before.billId)).get();
+    const bal = b ? billBalance(db, b.id) : null;
+    if (b && b.status === "open" && bal && bal.paidMinor + bal.pendingMinor + bal.creditedMinor === 0) {
+      db.update(bills).set({ status: "void" }).where(eq(bills.id, b.id)).run();
+      audit(db, { obligationId, actor, action: "bill.voided", detail: { billId: b.id, reason: "advance cancelled before payment" } });
+    }
+  }
 }
 
 export interface AmendPatch {
@@ -962,7 +1013,7 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
   return db
     .select()
     .from(evidenceTable)
-    .where(eq(evidenceTable.obligationId, obligationId))
+    .where(and(eq(evidenceTable.obligationId, obligationId), isNull(evidenceTable.supersededBy)))
     .all()
     .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : e.provenance === "document" ? ("document" as const) : e.provenance === "vendor" ? ("vendor" as const) : ("system" as const) }));
 }
@@ -974,13 +1025,19 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
 export async function addEvidence(db: Db, obligationId: string, actor: string, item: Omit<EvidenceItem, "id">, attachmentId: string | null): Promise<void> {
   const ob = mustGet(db, obligationId);
   if (!["drafted", "needs_evidence", "blocked", "awaiting_approval"].includes(ob.state)) throw new Error("This payment is no longer waiting for evidence");
+  const newEvidenceId = newId("evd");
+  // A vendor's revised invoice or receipt replaces their earlier one; the business's own records are never replaced.
+  const replaced = item.provenance === "vendor" && (item.kind === "invoice" || item.kind === "receipt")
+    ? db.select({ id: evidenceTable.id }).from(evidenceTable).where(and(eq(evidenceTable.obligationId, obligationId), eq(evidenceTable.kind, item.kind), isNull(evidenceTable.supersededBy))).all().map((e) => e.id)
+    : [];
   db.transaction((tx) => {
-    tx.insert(evidenceTable).values({ id: newId("evd"), obligationId, kind: item.kind, label: item.label.slice(0, 120), amountMinor: item.amountMinor, currency: item.currency, reference: item.reference, excerpt: item.excerpt?.slice(0, 600) ?? null, provenance: item.provenance ?? "operator", attachmentId, createdAt: now() }).run();
+    if (replaced.length) tx.update(evidenceTable).set({ supersededBy: newEvidenceId }).where(inArray(evidenceTable.id, replaced)).run();
+    tx.insert(evidenceTable).values({ id: newEvidenceId, obligationId, kind: item.kind, label: item.label.slice(0, 120), amountMinor: item.amountMinor, currency: item.currency, reference: item.reference, excerpt: item.excerpt?.slice(0, 600) ?? null, provenance: item.provenance ?? "operator", attachmentId, createdAt: now() }).run();
     if (attachmentId) tx.update(attachments).set({ obligationId }).where(eq(attachments.id, attachmentId)).run();
   });
   // Approvals given before the new record no longer cover what is now on file.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
-  audit(db, { obligationId, actor, action: "evidence.added", detail: { kind: item.kind, label: item.label, provenance: item.provenance ?? "operator", attachmentId } });
+  audit(db, { obligationId, actor, action: "evidence.added", detail: { kind: item.kind, label: item.label, provenance: item.provenance ?? "operator", attachmentId, replaces: replaced } });
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.resolved", { note: "new evidence" });
   await processObligation(db, obligationId);
 }

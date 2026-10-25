@@ -118,6 +118,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // what is still open on the bill instead: never more than the invoice total less what is already paid or credited.
   const evidenced = evidence.filter((e) => e.amountMinor != null && e.currency);
   const bill = input.bill ?? null;
+  // The business's own rate card for this departure (R4c below). An advance is cash for costs on the road, not a fee,
+  // so it is never measured against the guide's day rate.
+  const exp = input.expectation && hasAmount && input.expectation.currency === obligation.currency && input.paymentKind !== "advance" ? input.expectation : null;
   if (hasAmount && bill) {
     const open = Math.max(0, bill.totalMinor - bill.coveredMinor);
     const slack = Math.floor((bill.totalMinor * policy.amountToleranceBps) / 10_000);
@@ -151,6 +154,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
         const byRef = obligation.sourceRef ? sameCurrency.find((e) => e.reference && e.reference.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
         const ref = byRef ?? [...sameCurrency].sort((a, b) => Math.abs(a.amountMinor! - obligation.amountMinor!) - Math.abs(b.amountMinor! - obligation.amountMinor!))[0];
         const diff = obligation.amountMinor! - ref.amountMinor!;
+        // Short pay to contract: the invoice asks for more than the rate card, and the payment is the rate-card
+        // amount. Paying less than asked is safe for the business; a person approves it and tells the vendor why.
+        const expSlack = exp ? Math.floor((exp.expectedMinor * policy.amountToleranceBps) / 10_000) : 0;
+        if (exp && diff < 0 && Math.abs(obligation.amountMinor! - exp.expectedMinor) <= expSlack) {
+          rules.push(warn("short_pay", `Short pay to the rate card: ${ref.label} asks for ${fmt(ref.amountMinor!, ref.currency!)}, this pays ${fmt(obligation.amountMinor!, obligation.currency!)} (${exp.basis}). Tell the vendor why ${fmt(-diff, obligation.currency!)} is not paid.`));
+        } else
         rules.push(
           block(
             "amount_matches_evidence",
@@ -166,7 +175,6 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
 
   // R4c: the business's own rate card and departure say what this job costs. More than that is blocked; a match is
   // support that does not come from the vendor, which Autopilot needs (see below).
-  const exp = input.expectation && hasAmount && input.expectation.currency === obligation.currency ? input.expectation : null;
   let rateCardMatch = false;
   if (exp) {
     const slack = Math.floor((exp.expectedMinor * policy.amountToleranceBps) / 10_000);
@@ -249,7 +257,14 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   }
 
   // R8: AI confidence and flags
-  if (ai) {
+  // A payment the system built from a bill ("Please pay the balance on INV-DML-1010") was checked against the bill
+  // above. The agent's guess at the amount, and its doubt about it, are noise there; every other flag still counts.
+  const billChecked = Boolean(bill) && rules.some((r) => r.ruleId === "amount_matches_evidence" && r.passed);
+  if (ai && billChecked) {
+    rules.push(pass("ai_confidence", `Amount checked against bill ${bill!.reference}, not read by the agent`));
+    for (const f of ai.flags) if (!/amount differs|differs from/i.test(f)) rules.push(warn("ai_flag", f));
+    for (const m of ai.missing) rules.push(warn("ai_missing", `Agent wants: ${m}`));
+  } else if (ai) {
     if (ai.confidence < policy.minAiConfidence) {
       rules.push(warn("ai_confidence", `Agent confidence ${ai.confidence}% is below the ${policy.minAiConfidence}% threshold`));
     } else {

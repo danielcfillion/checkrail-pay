@@ -160,6 +160,7 @@ export const evidence = sqliteTable("evidence", {
   excerpt: text("excerpt"), // short text excerpt shown in the UI
   provenance: text("provenance"), // system | operator | document (null = system)
   attachmentId: text("attachment_id"), // set when the row was read out of an uploaded document
+  supersededBy: text("superseded_by"), // a revised copy from the vendor replaced this one; kept, but no longer checked
   createdAt: text("created_at").notNull(),
 });
 
