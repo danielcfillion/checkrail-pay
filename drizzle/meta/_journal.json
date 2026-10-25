@@ -120,6 +120,13 @@
       "when": 1792500000000,
       "tag": "0016_invoice_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792600000000,
+      "tag": "0017_bank_ref_retainer",
+      "breakpoints": true
     }
   ]
 }

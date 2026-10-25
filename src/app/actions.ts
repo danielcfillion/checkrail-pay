@@ -4,10 +4,10 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
-import { eq } from "drizzle-orm";
-import { businesses, obligations, vendorChanges } from "@/lib/db/schema";
+import { and, eq } from "drizzle-orm";
+import { businesses, obligations, paymentRunItems, paymentRuns, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -177,6 +177,18 @@ export async function setDatesAction(id: string, dates: { invoiceDate: string | 
     setObligationDates(getDb(), id, (await actOn(id, "amend", "change invoice dates")).id, { invoiceDate: dates?.invoiceDate ?? null, dueDate: dates?.dueDate ?? null });
     done([`/obligations/${id}`, "/runs", "/books"]);
     return { ok: true, message: "Dates saved." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Quote every rail again (a rail was set up since, or the quotes are old). */
+export async function requoteAction(id: string): Promise<ActionResult> {
+  try {
+    await actOn(id, "pay", "quote payments again");
+    await refreshQuotesIfStale(getDb(), id, 0);
+    done([`/obligations/${id}`]);
+    return { ok: true, message: "Quoted again on every rail." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -487,7 +499,7 @@ export async function releaseRunAction(runId: string): Promise<ActionResult> {
     const r = await releaseRun(db, biz.id, await currentActor(), runId);
     done();
     done([`/runs/${runId}`, "/runs"]);
-    const parts = [`${r.paid} paid`, r.skipped ? `${r.skipped} skipped` : "", r.failed ? `${r.failed} failed` : "", r.unclear ? `${r.unclear} unclear` : ""].filter(Boolean);
+    const parts = [`${r.paid} paid`, r.with_bank ? `${r.with_bank} in the bank file (upload and confirm it on Bank files)` : "", r.skipped ? `${r.skipped} skipped` : "", r.failed ? `${r.failed} failed` : "", r.unclear ? `${r.unclear} unclear` : ""].filter(Boolean);
     return { ok: r.failed === 0 && r.unclear === 0, message: `Run released: ${parts.join(", ")}.` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
@@ -496,12 +508,12 @@ export async function releaseRunAction(runId: string): Promise<ActionResult> {
 
 /* Bank files. */
 
-export async function confirmBankFileAction(batchId: string): Promise<ActionResult> {
+export async function confirmBankFileAction(batchId: string, bankRef: string): Promise<ActionResult> {
   try {
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
     if (!biz) return { ok: false, message: "No business configured." };
-    const n = await confirmBatch(db, biz.id, await currentActor(), batchId);
+    const n = await confirmBatch(db, biz.id, await currentActor(), batchId, typeof bankRef === "string" ? bankRef : "");
     done();
     done(["/bank-files"]);
     return { ok: true, message: `Confirmed. ${n} payment${n === 1 ? "" : "s"} settled.` };
@@ -663,6 +675,28 @@ export async function createVendorLinkAction(kind: "remittance" | "evidence", ob
     const token = createEvidenceRequest(db, biz.id, who, obligationId, typeof note === "string" ? note : null);
     done([`/obligations/${obligationId}`]);
     return { ok: true, message: "Evidence request ready. Copy it now: it is shown once.", path: `/evidence/${token}` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/** Remittance advice for every payment a released run sent: one message per vendor to paste into their channel. */
+export async function runRemittancesAction(runId: string): Promise<ActionResult & { items?: Array<{ vendorName: string; path: string; text: string }> }> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const who = await currentActor();
+    const run = db.select().from(paymentRuns).where(and(eq(paymentRuns.id, runId), eq(paymentRuns.businessId, biz.id))).get();
+    if (!run || run.status !== "released") throw new Error("Remittance advice is for a released run");
+    const items = db.select().from(paymentRunItems).where(eq(paymentRunItems.runId, runId)).all().filter((i) => i.status === "paid" || i.status === "with_bank");
+    const out: Array<{ vendorName: string; path: string; text: string }> = [];
+    for (const i of items) {
+      const token = createRemittanceLink(db, biz.id, who, i.obligationId);
+      const r = viewRemittance(db, token)!;
+      out.push({ vendorName: r.vendorName, path: `/remit/${token}`, text: remittanceMessage(r, "{link}") });
+    }
+    return { ok: true, message: `${out.length} remittance message${out.length === 1 ? "" : "s"} ready. Copy them now: each link is shown once.`, items: out };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

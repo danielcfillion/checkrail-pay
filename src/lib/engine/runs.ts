@@ -1,7 +1,7 @@
 import { fmt } from "../domain/policy";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, paymentRunItems, paymentRuns, vendors } from "../db/schema";
+import { obligations, paymentRunItems, paymentRuns, routeQuotes, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import type { Rail } from "../domain/types";
@@ -22,7 +22,8 @@ const ELIGIBLE = ["approved", "awaiting_approval"] as const;
 const OPEN_RUN = ["draft", "releasing"];
 const MAX_ITEMS = 200;
 
-export type RunItemStatus = "queued" | "paid" | "skipped" | "failed" | "unclear";
+/** with_bank: in a bank file that still has to be uploaded to the bank and confirmed; not paid yet. */
+export type RunItemStatus = "queued" | "paid" | "with_bank" | "skipped" | "failed" | "unclear";
 
 /** Obligations that could go into a new run: approved or awaiting approval, and not already in an open run. */
 export function runCandidates(db: Db, businessId: string) {
@@ -86,7 +87,8 @@ export function cancelRun(db: Db, businessId: string, by: Actor, runId: string):
 export interface RunView {
   run: typeof paymentRuns.$inferSelect;
   items: Array<typeof paymentRunItems.$inferSelect & { state: string | null; vendorName: string | null; sourceRef: string | null; dueDate: string | null; changed: boolean; approvalNote: string | null }>;
-  totals: Array<{ currency: string; rail: string; totalMinor: number; count: number; balance: { availableMinor: number; source: string } | null; short: boolean }>;
+  /** totalMinor is what the payees are sent; feeMinor is charged on top (Stellar's fee comes out of the amount). */
+  totals: Array<{ currency: string; rail: string; totalMinor: number; feeMinor: number; count: number; balance: { availableMinor: number; source: string } | null; short: boolean }>;
   /** Why this viewer cannot release the run, when they cannot. */
   releaseRefusal: string | null;
 }
@@ -103,11 +105,14 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     const approvalNote = viewer && actorCan(viewer, "release_run") && o?.state === "awaiting_approval" ? approvalGate(db, r.obligationId, viewer.id).refusal : null;
     return { ...r, state: o?.state ?? null, vendorName: o?.vendorName ?? null, sourceRef: o?.sourceRef ?? null, dueDate: o?.dueDate ?? null, changed, approvalNote };
   });
-  const groups = new Map<string, { currency: string; rail: string; totalMinor: number; count: number }>();
+  const groups = new Map<string, { currency: string; rail: string; totalMinor: number; feeMinor: number; count: number }>();
+  const quotes = rows.length ? db.select({ obligationId: routeQuotes.obligationId, rail: routeQuotes.rail, feeMinor: routeQuotes.feeMinor, sendCurrency: routeQuotes.sendCurrency }).from(routeQuotes).where(inArray(routeQuotes.obligationId, rows.map((r) => r.obligationId))).all() : [];
   for (const it of items) {
-    if (run.status === "draft" ? !["approved", "awaiting_approval"].includes(it.state ?? "") : it.status !== "paid") continue;
+    if (run.status === "draft" ? !["approved", "awaiting_approval"].includes(it.state ?? "") : it.status !== "paid" && it.status !== "with_bank") continue;
     const key = `${it.rail ?? "unrouted"}|${it.currency}`;
-    const g = groups.get(key) ?? { currency: it.currency, rail: it.rail ?? "unrouted", totalMinor: 0, count: 0 };
+    const g = groups.get(key) ?? { currency: it.currency, rail: it.rail ?? "unrouted", totalMinor: 0, feeMinor: 0, count: 0 };
+    const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
+    if (q && it.rail !== "stellar" && q.sendCurrency === it.currency) g.feeMinor += q.feeMinor ?? 0;
     g.totalMinor += it.amountMinor;
     g.count += 1;
     groups.set(key, g);
@@ -117,7 +122,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     [...groups.values()].map(async (g) => {
       const adapter = g.rail === "paypal" || g.rail === "stellar" ? rails[g.rail as Rail] : null;
       const b = run.status === "draft" && adapter?.balance ? await adapter.balance(g.currency).catch(() => null) : null;
-      return { ...g, balance: b ? { availableMinor: b.availableMinor, source: b.source } : null, short: !!b && b.availableMinor < g.totalMinor };
+      return { ...g, balance: b ? { availableMinor: b.availableMinor, source: b.source } : null, short: !!b && b.availableMinor < g.totalMinor + g.feeMinor };
     }),
   );
   return { run, items, totals, releaseRefusal: viewer ? releaseBarrier(db, businessId, viewer, run) : null };
@@ -137,7 +142,7 @@ function releaseBarrier(db: Db, businessId: string, by: Actor, run: typeof payme
  * Release a draft run. Refuses before paying anything when a rail's balance is known and short. Then, item by item:
  * approve what is waiting (if this person may), pay what is approved, and record what happened to each one.
  */
-export async function releaseRun(db: Db, businessId: string, by: Actor, runId: string): Promise<{ paid: number; skipped: number; failed: number; unclear: number }> {
+export async function releaseRun(db: Db, businessId: string, by: Actor, runId: string): Promise<{ paid: number; with_bank: number; skipped: number; failed: number; unclear: number }> {
   requirePermission(by, "release_run", "release payment runs");
   const run = mustRun(db, businessId, runId);
   // A release that stopped part way (a crash, a restart) is finished by the same person: only queued items are left.
@@ -155,7 +160,7 @@ export async function releaseRun(db: Db, businessId: string, by: Actor, runId: s
     audit(db, { obligationId: null, actor: by.id, action: "run.release_started", detail: { runId, items: view.items.length } });
   }
 
-  const counts = { paid: 0, skipped: 0, failed: 0, unclear: 0 };
+  const counts = { paid: 0, with_bank: 0, skipped: 0, failed: 0, unclear: 0 };
   const finish = (itemId: string, status: RunItemStatus, message: string | null) => {
     db.update(paymentRunItems).set({ status, message, finishedAt: now() }).where(eq(paymentRunItems.id, itemId)).run();
     if (status !== "queued") counts[status] += 1;
@@ -191,7 +196,9 @@ export async function releaseRun(db: Db, businessId: string, by: Actor, runId: s
       }
       await executeObligation(db, ob.id, { actor: by.id, rail: (it.rail as Rail | null) ?? undefined });
       const after = db.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, ob.id)).get()!.state;
-      if (after === "sent" || after === "settled") finish(it.id, "paid", null);
+      const rail = db.select({ r: obligations.selectedRail }).from(obligations).where(eq(obligations.id, ob.id)).get()?.r;
+      if (after === "sent" && rail === "bank_file") finish(it.id, "with_bank", "In the bank file: upload it to the bank, then confirm it on Bank files");
+      else if (after === "sent" || after === "settled") finish(it.id, "paid", null);
       else if (after === "execution_pending") finish(it.id, "unclear", "The rail did not give a clear answer; reconcile it on its page before anything else");
       else finish(it.id, "failed", `Ended ${after.replace(/_/g, " ")}`);
     } catch (e) {
@@ -209,7 +216,7 @@ export function listRuns(db: Db, businessId: string) {
     const items = db.select().from(paymentRunItems).where(eq(paymentRunItems.runId, r.id)).all();
     const total = new Map<string, number>();
     for (const i of items) total.set(i.currency, (total.get(i.currency) ?? 0) + i.amountMinor);
-    return { ...r, count: items.length, paid: items.filter((i) => i.status === "paid").length, totals: [...total.entries()].map(([currency, minor]) => ({ currency, minor })) };
+    return { ...r, count: items.length, paid: items.filter((i) => i.status === "paid").length, withBank: items.filter((i) => i.status === "with_bank").length, totals: [...total.entries()].map(([currency, minor]) => ({ currency, minor })) };
   });
 }
 

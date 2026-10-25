@@ -241,6 +241,9 @@ function savedBy(reason: string, amountMinor: number): number {
     return Math.max(0, req - ev);
   }
   if (/already used|Same job as/.test(reason)) return amountMinor;
+  // The rate card caught an inflated invoice: "... say VND 3,600,000 (...); this asks for VND 4,500,000".
+  const rc = reason.match(/^Rate card .* say [A-Z]{3} ([\d,]+(?:\.\d{2})?) .*this asks for [A-Z]{3} ([\d,]+(?:\.\d{2})?)/);
+  if (rc) return Math.max(0, Math.round(Number(rc[2].replace(/,/g, "")) * 100) - Math.round(Number(rc[1].replace(/,/g, "")) * 100));
   return 0;
 }
 

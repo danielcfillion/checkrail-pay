@@ -7,7 +7,18 @@ import { ConfirmButton } from "./ConfirmButton";
 import { useToast } from "./Toast";
 
 export function ConfirmBankFile({ batchId, count }: { batchId: string; count: number }) {
-  return <ConfirmButton label="The bank paid it" busyLabel="Confirming" tone="primary" confirmText={`Mark all ${count} payment${count === 1 ? "" : "s"} in this file as paid? Do this once the bank statement or the bank's upload result shows them paid.`} action={() => confirmBankFileAction(batchId)} />;
+  const [ref, setRef] = useState("");
+  const ok = /^[A-Za-z0-9 ._/:#-]{4,64}$/.test(ref.trim());
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input aria-label="The bank's reference for this upload" className="field num" style={{ width: "12rem" }} value={ref} onChange={(e) => setRef(e.target.value)} maxLength={64} placeholder="Bank reference" />
+      {ok ? (
+        <ConfirmButton label="The bank paid it" busyLabel="Confirming" tone="primary" confirmText={`Mark all ${count} payment${count === 1 ? "" : "s"} in this file as paid, with bank reference ${ref.trim()}? Do this once the bank's upload result or statement shows them paid.`} action={() => confirmBankFileAction(batchId, ref.trim())} />
+      ) : (
+        <span className="text-xs text-ink-soft">Enter the bank&apos;s reference from its result screen or statement to confirm</span>
+      )}
+    </div>
+  );
 }
 
 export function ReturnLine({ lineId }: { lineId: string }) {

@@ -48,6 +48,7 @@ export const vendors = sqliteTable("vendors", {
   paymentTermsDays: integer("payment_terms_days"), // default terms when an invoice states none
   phone: text("phone"), // the number a verifier calls back on; changing it needs an approver
   taxId: text("tax_id"), // MST (VN), TIN (PH, US): for the books and tax reports
+  retainerMinor: integer("retainer_minor"), // a fixed amount billed every month (in the vendor's invoice currency)
   taxForm: text("tax_form"), // w9 | w8ben | w8bene | vn_08 | none: which form is on file (the form itself, never an ID number)
   taxFormAt: text("tax_form_at"),
   withholdingBps: integer("withholding_bps"), // Philippine EWT rate for this payee, set by the accountant
@@ -351,6 +352,7 @@ export const bankBatches = sqliteTable("bank_batches", {
   downloadedBy: text("downloaded_by"),
   confirmedAt: text("confirmed_at"),
   confirmedBy: text("confirmed_by"),
+  bankRef: text("bank_ref"), // the bank's own reference for the upload, from its result screen or statement
 });
 
 export const bankBatchLines = sqliteTable(

@@ -7,11 +7,13 @@ import { viewRun } from "@/lib/engine/runs";
 import { formatDateTime, formatMoney, railLabel, stateLabel } from "@/lib/format";
 import { PageHeader, Panel, RailTag } from "@/components/ui";
 import { CancelRun, ReleaseRun, RemoveItem } from "@/components/RunActions";
+import { RunRemittances } from "@/components/RunRemittances";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Payment run" };
 
-const ITEM_TONE: Record<string, string> = { paid: "text-settled", failed: "text-attention", unclear: "text-attention", skipped: "text-ink-soft", queued: "" };
+const ITEM_TONE: Record<string, string> = { paid: "text-settled", with_bank: "text-attention", failed: "text-attention", unclear: "text-attention", skipped: "text-ink-soft", queued: "" };
+const ITEM_LABEL: Record<string, string> = { paid: "paid", with_bank: "queued for the bank", failed: "failed", unclear: "unclear", skipped: "skipped", queued: "queued" };
 
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -32,7 +34,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const blockedForMe = items.filter((i) => i.approvalNote).length;
   const canBuild = !viewer || viewer.can("build_run");
   const byCurrency = new Map<string, number>();
-  for (const t of totals) byCurrency.set(t.currency, (byCurrency.get(t.currency) ?? 0) + t.totalMinor);
+  for (const t of totals) byCurrency.set(t.currency, (byCurrency.get(t.currency) ?? 0) + t.totalMinor + t.feeMinor);
   const grand = [...byCurrency.entries()].map(([c, m]) => formatMoney(m, c));
 
   return (
@@ -99,7 +101,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                     </td>
                     <td className="num hidden text-ink-soft sm:table-cell">{i.sourceRef ?? "none"}</td>
                     <td className={draft ? (i.changed || i.approvalNote ? "text-attention" : "text-ink-soft") : ITEM_TONE[i.status]}>
-                      {draft ? (i.changed ? "amount changed since added; will be skipped" : i.approvalNote ? i.approvalNote : stateLabel(i.state ?? "")) : i.status}
+                      {draft ? (i.changed ? "amount changed since added; will be skipped" : i.approvalNote ? i.approvalNote : stateLabel(i.state ?? "")) : ITEM_LABEL[i.status] ?? i.status}
                       {!draft && i.message ? <span className="block text-xs text-ink-soft">{i.message}</span> : null}
                     </td>
                     <td className="hidden sm:table-cell">{i.rail ? <RailTag rail={i.rail} /> : <span className="text-ink-soft">none</span>}</td>
@@ -116,15 +118,21 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           </div>
         </Panel>
         <div className="space-y-6">
-          <Panel title={draft ? "Funding" : "Paid by rail"}>
+          {run.status === "released" && (!viewer || viewer.can("pay")) ? (
+            <Panel title="Tell the vendors" aside="in their language">
+              <RunRemittances runId={run.id} />
+            </Panel>
+          ) : null}
+          <Panel title={draft ? "Funding" : "Sent by rail"}>
             {totals.length ? (
               <ul className="space-y-3">
                 {totals.map((t) => (
                   <li key={`${t.rail}-${t.currency}`}>
                     <p className="flex items-baseline justify-between gap-2">
                       <span>{railLabel(t.rail) || t.rail}</span>
-                      <span className="num">{formatMoney(t.totalMinor, t.currency)}</span>
+                      <span className="num">{formatMoney(t.totalMinor + t.feeMinor, t.currency)}</span>
                     </p>
+                    {t.feeMinor ? <p className="num text-xs text-ink-soft">{formatMoney(t.totalMinor, t.currency)} to payees + {formatMoney(t.feeMinor, t.currency)} fees</p> : null}
                     {draft ? (
                       <p className={`text-xs ${t.short ? "text-attention" : "text-ink-soft"}`}>
                         {t.balance

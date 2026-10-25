@@ -140,6 +140,8 @@ export interface VendorPayoutProfile {
   hasBankAccount?: boolean;
   bankCode?: string | null;
   accountHolder?: string | null;
+  /** A fixed monthly amount (a retainer): the same figure each month is expected, not a duplicate. */
+  retainerMinor?: number | null;
 }
 
 export interface EvidenceItem {

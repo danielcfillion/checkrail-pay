@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { amendAction, approveAction, confirmAction, recheckAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
+import { amendAction, approveAction, confirmAction, recheckAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
@@ -126,6 +126,9 @@ export function ActionBar(p: Props) {
                 </button>
               ))}
               {!primary ? <p className="text-ink-soft">No rail can serve this vendor. Check the route comparison.</p> : null}
+              <button type="button" className="btn btn-sm" disabled={pending} onClick={() => run("requote", () => requoteAction(p.id))}>
+                {busy === "requote" ? "Quoting" : "Quote again"}
+              </button>
             </div>
           ) : (
             <Waiting>Approved and ready to send. Someone who sends payments sends it.</Waiting>

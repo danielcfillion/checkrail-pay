@@ -47,6 +47,7 @@ export interface VendorProfileInput {
   phone?: string | null;
   taxId?: string | null;
   paymentTermsDays?: number | null;
+  retainerMinor?: number | null;
 }
 
 export interface PayoutInput {
@@ -107,7 +108,9 @@ export function validateProfile(raw: unknown): Required<VendorProfileInput> {
   if (taxId && !/^[A-Z0-9-]{5,20}$/.test(taxId)) throw new Error("Tax ID may use letters, digits and dashes");
   const paymentTermsDays = r.paymentTermsDays === undefined || r.paymentTermsDays === null || r.paymentTermsDays === "" ? null : Number(r.paymentTermsDays);
   if (paymentTermsDays !== null && !(Number.isInteger(paymentTermsDays) && paymentTermsDays >= 0 && paymentTermsDays <= 120)) throw new Error("Payment terms must be 0 to 120 days");
-  return { name, role, country, email, notes, defaultAccountCode, taxType, taxForm, withholdingBps, phone, taxId, paymentTermsDays };
+  const retainerMinor = r.retainerMinor === undefined || r.retainerMinor === null || r.retainerMinor === "" ? null : Number(r.retainerMinor);
+  if (retainerMinor !== null && !(Number.isInteger(retainerMinor) && retainerMinor > 0 && retainerMinor <= 1e12)) throw new Error("Retainer must be a positive amount");
+  return { name, role, country, email, notes, defaultAccountCode, taxType, taxForm, withholdingBps, phone, taxId, paymentTermsDays, retainerMinor };
 }
 
 /**
@@ -182,6 +185,7 @@ export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendo
   if (!Object.keys(changed).length) return;
   // Tax details decide how much the vendor is actually paid: the person who prepares payments does not set them.
   if (["taxType", "taxForm", "withholdingBps"].some((k) => k in changed) && !actorCan(by, "verify_vendor")) throw new Error("Tax form and withholding change how much a vendor is paid; an approver or the owner records them");
+  if ("retainerMinor" in changed && !actorCan(by, "verify_vendor")) throw new Error("A retainer stops the same-amount warning; an approver or the owner sets it");
   // The phone on file is what a verifier calls to confirm new bank details; whoever requests changes does not set it.
   if ("phone" in changed && v.phone && !actorCan(by, "verify_vendor")) throw new Error("The phone number is used to confirm bank details by calling back; an approver or the owner changes it");
   if ("name" in changed) {
@@ -308,7 +312,7 @@ export function createInvite(db: Db, businessId: string, by: Actor, opts: { vend
   return { token, expiresAt };
 }
 
-export type InviteView = { ok: true; businessId: string; vendorName: string | null; label: string | null; expiresAt: string } | { ok: false; reason: string };
+export type InviteView = { ok: true; businessId: string; vendorName: string | null; vendorCountry: string | null; label: string | null; expiresAt: string } | { ok: false; reason: string };
 
 export function lookupInvite(db: Db, token: string): InviteView {
   if (!/^[A-Za-z0-9_-]{20,80}$/.test(token)) return { ok: false, reason: "This link is not valid." };
@@ -316,8 +320,8 @@ export function lookupInvite(db: Db, token: string): InviteView {
   if (!inv) return { ok: false, reason: "This link is not valid." };
   if (inv.usedAt) return { ok: false, reason: "This link has already been used. Ask for a new one if you need to change your details again." };
   if (inv.expiresAt <= now()) return { ok: false, reason: "This link has expired. Ask for a new one." };
-  const v = inv.vendorId ? db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, inv.vendorId)).get() : null;
-  return { ok: true, businessId: inv.businessId, vendorName: v?.name ?? null, label: inv.label, expiresAt: inv.expiresAt };
+  const v = inv.vendorId ? db.select({ name: vendors.name, country: vendors.country }).from(vendors).where(eq(vendors.id, inv.vendorId)).get() : null;
+  return { ok: true, businessId: inv.businessId, vendorName: v?.name ?? null, vendorCountry: v?.country ?? null, label: inv.label, expiresAt: inv.expiresAt };
 }
 
 /** The vendor's submission. The link is spent first (compare-and-swap), so a link cannot be used twice even at once. */
@@ -327,7 +331,7 @@ export function submitOnboarding(db: Db, token: string, input: { profile?: unkno
   const inv = db.select().from(vendorInvites).where(eq(vendorInvites.tokenHash, hashToken(token))).get()!;
   const payout = validatePayout(input.payout);
   // A vendor states who they are; which tax form is on file and any withholding rate are for the business to record.
-  const profile = inv.vendorId ? null : { ...validateProfile(input.profile), taxForm: null, withholdingBps: null, paymentTermsDays: null };
+  const profile = inv.vendorId ? null : { ...validateProfile(input.profile), taxForm: null, withholdingBps: null, paymentTermsDays: null, retainerMinor: null };
   const actor = `vendor:onboarding:${inv.id}`;
   db.transaction((tx) => {
     const spent = tx.update(vendorInvites).set({ usedAt: now() }).where(and(eq(vendorInvites.id, inv.id), isNull(vendorInvites.usedAt))).run();

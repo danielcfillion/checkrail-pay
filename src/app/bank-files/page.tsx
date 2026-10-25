@@ -48,7 +48,7 @@ export default async function BankFilesPage() {
                 <p className="num">
                   {b.lines.length} line{b.lines.length === 1 ? "" : "s"}, {formatMoney(b.totalMinor, b.currency)} from {b.sourceAccount}
                   {b.downloadedAt ? <span className="block text-xs text-ink-soft">Downloaded by {b.downloadedBy?.replace(/^user:/, "")} {formatDateTime(b.downloadedAt)}</span> : null}
-                  {b.confirmedAt ? <span className="block text-xs text-ink-soft">Confirmed by {b.confirmedBy?.replace(/^user:/, "")} {formatDateTime(b.confirmedAt)}</span> : null}
+                  {b.confirmedAt ? <span className="block text-xs text-ink-soft">Confirmed by {b.confirmedBy?.replace(/^user:/, "")} {formatDateTime(b.confirmedAt)}{b.bankRef ? `, bank reference ${b.bankRef}` : ""}</span> : null}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {canPay && b.status !== "confirmed" ? (

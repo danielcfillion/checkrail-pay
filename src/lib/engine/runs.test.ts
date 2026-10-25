@@ -33,7 +33,7 @@ describe("payment runs", () => {
     expect(view.totals.map((t) => [t.rail, t.totalMinor])).toEqual(expect.arrayContaining([["paypal", 18_000], ["stellar", 75_000]]));
     await expect(releaseRun(db, DEMO_BUSINESS_ID, as("lan"), runId)).rejects.toThrow(/cannot release/);
     const r = await releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId);
-    expect(r).toEqual({ paid: 2, skipped: 0, failed: 0, unclear: 0 });
+    expect(r).toEqual({ paid: 2, with_bank: 0, skipped: 0, failed: 0, unclear: 0 });
     expect(["sent", "settled"]).toContain(state(story.paypal));
     expect(["sent", "settled"]).toContain(state(story.stellar));
     expect(db.select().from(paymentRuns).where(eq(paymentRuns.id, runId)).get()!.status).toBe("released");

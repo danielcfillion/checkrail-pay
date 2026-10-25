@@ -69,7 +69,7 @@ export default async function RunsPage() {
                     <td className={r.status === "draft" ? "text-attention" : "text-ink-soft"}>{r.status === "draft" ? "waiting for release" : r.status}</td>
                     <td className="hidden text-ink-soft sm:table-cell">{r.createdBy.replace(/^user:/, "")}</td>
                     <td className="num hidden text-ink-soft md:table-cell">{formatDateTime(r.createdAt)}</td>
-                    <td className="r num">{r.status === "released" ? `${r.paid} of ${r.count} paid` : r.count}</td>
+                    <td className="r num">{r.status === "released" ? `${r.paid} of ${r.count} paid${r.withBank ? `, ${r.withBank} with the bank` : ""}` : r.count}</td>
                     <td className="r num">{r.totals.map((t) => formatMoney(t.minor, t.currency)).join(" + ")}</td>
                   </tr>
                 ))}

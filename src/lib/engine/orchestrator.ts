@@ -293,6 +293,19 @@ export async function recheckVendorItems(db: Db, businessId: string, vendorId: s
   return waiting.length;
 }
 
+/** Quote every rail again and let the router choose, for a payment not yet sent. maxAgeMs 0 always refreshes. */
+export async function refreshQuotesIfStale(db: Db, obligationId: string, maxAgeMs: number): Promise<boolean> {
+  const ob = mustGet(db, obligationId);
+  if (!["approved", "awaiting_approval", "blocked", "needs_evidence"].includes(ob.state) || !ob.vendorId || !ob.amountMinor || !ob.currency) return false;
+  const newest = db.select({ at: routeQuotes.createdAt }).from(routeQuotes).where(eq(routeQuotes.obligationId, obligationId)).orderBy(desc(routeQuotes.createdAt)).get()?.at;
+  if (maxAgeMs > 0 && newest && Date.now() - new Date(newest).getTime() < maxAgeMs) return false;
+  const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get();
+  const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get();
+  if (!vendorRow || !biz) return false;
+  await quoteAndRoute(db, obligationId, toProfile(vendorRow), payableMinor(ob), ob.currency, biz.country);
+  return true;
+}
+
 /** Schedule an autopilot release for an approved obligation. No-op unless autopilot is in force, and never after a person cancelled it. */
 export function scheduleAutopilotRelease(db: Db, obligationId: string): void {
   const ob = mustGet(db, obligationId);
@@ -687,6 +700,8 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     throw new Error(`Execution refused by policy: ${outcome.reasons.join("; ")}`);
   }
 
+  // Quotes from more than six hours ago (or before a rail was set up) are refreshed before the router's choice is used.
+  if (!opts.rail) await refreshQuotesIfStale(db, obligationId, 6 * 3600_000);
   const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : undefined;
   if (!vendorRow) throw new Error("Obligation has no vendor");
   refuseIfPayoutChanged(db, ob, vendorRow);
@@ -1073,5 +1088,5 @@ export async function addEvidence(db: Db, obligationId: string, actor: string, i
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {
-  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status, hasBankAccount: Boolean(v.bankAccountEnc), bankCode: v.bankCode, accountHolder: v.accountHolder };
+  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status, hasBankAccount: Boolean(v.bankAccountEnc), bankCode: v.bankCode, accountHolder: v.accountHolder, retainerMinor: v.retainerMinor };
 }

@@ -1,12 +1,13 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { bankBatchLines, bankBatches, obligations, vendors } from "../db/schema";
+import { auditEntries, bankBatchLines, bankBatches, obligations, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { now } from "../domain/ids";
 import { decryptField, lastFour } from "../crypto/dataKey";
 import { csvCell } from "../accounting/record";
 import { localDateString } from "../format";
-import { actorCan, requirePermission, type Actor } from "./users";
+import { actorCan, otherPeopleWith, requirePermission, type Actor } from "./users";
+import { currentLogin, humanOf } from "./requestContext";
 import { confirmSettlement } from "./orchestrator";
 
 /**
@@ -62,25 +63,51 @@ export function downloadBatch(db: Db, businessId: string, by: Actor, batchId: st
   if (!b) throw new Error("No such bank file");
   if (b.status === "open") db.update(bankBatches).set({ status: "downloaded", downloadedAt: now(), downloadedBy: by.id }).where(and(eq(bankBatches.id, batchId), eq(bankBatches.status, "open"))).run();
   const lines = db.select().from(bankBatchLines).where(eq(bankBatchLines.batchId, batchId)).all().filter((l) => l.status === "queued");
-  const rows = [["STT", "So tai khoan", "Ten nguoi huong", "Ma ngan hang", "So tien", "Noi dung"].join(",")];
-  lines.forEach((l, i) => {
-    rows.push([i + 1, decryptField(l.accountEnc), bankText(l.beneficiaryName, 70).toUpperCase(), l.bankCode, Math.round(l.amountMinor / 100), bankText(l.memo, 160)].map(csvCell).join(","));
+  // One transfer per payee: two invoices to the same account go as one line, with both references in the content.
+  const merged = new Map<string, { account: string; name: string; bankCode: string; amountMinor: number; memos: string[] }>();
+  for (const l of lines) {
+    const account = decryptField(l.accountEnc);
+    const key = `${l.bankCode}|${account}`;
+    const m = merged.get(key) ?? { account, name: l.beneficiaryName, bankCode: l.bankCode, amountMinor: 0, memos: [] };
+    m.amountMinor += l.amountMinor;
+    m.memos.push(l.memo);
+    merged.set(key, m);
+  }
+  const valueDate = localDateString();
+  const rows = [["STT", "So tai khoan", "Ten nguoi huong", "Ma ngan hang", "So tien", "Noi dung", "Ngay gia tri", "Tai khoan nguon"].join(",")];
+  [...merged.values()].forEach((m, i) => {
+    rows.push([i + 1, m.account, bankText(m.name, 70).toUpperCase(), m.bankCode, Math.round(m.amountMinor / 100), bankText(m.memos.join("; "), 160), valueDate, bankText(b.sourceAccount, 40)].map(csvCell).join(","));
   });
-  audit(db, { obligationId: null, actor: by.id, action: "bank_file.downloaded", detail: { batchId, lines: lines.length, again: b.status !== "open" } });
+  audit(db, { obligationId: null, actor: by.id, action: "bank_file.downloaded", detail: { batchId, lines: lines.length, transfers: merged.size, again: b.status !== "open" } });
   return { filename: `bank-file-${b.currency}-${localDateString(new Date(b.createdAt))}-${b.id.slice(-6)}.csv`, csv: rows.join("\r\n") + "\r\n" };
 }
 
 /** The bank shows the file paid: settle every line still queued. */
-export async function confirmBatch(db: Db, businessId: string, by: Actor, batchId: string): Promise<number> {
+export async function confirmBatch(db: Db, businessId: string, by: Actor, batchId: string, bankRef?: string): Promise<number> {
   if (!actorCan(by, "reconcile")) requirePermission(by, "pay", "confirm bank payment files");
   const b = db.select().from(bankBatches).where(and(eq(bankBatches.id, batchId), eq(bankBatches.businessId, businessId))).get();
   if (!b) throw new Error("No such bank file");
   if (b.status !== "downloaded") throw new Error(b.status === "open" ? "Download the file and upload it to the bank first" : "This file is already confirmed");
-  const won = db.update(bankBatches).set({ status: "confirmed", confirmedAt: now(), confirmedBy: by.id }).where(and(eq(bankBatches.id, batchId), eq(bankBatches.status, "downloaded"))).run();
+  const ref = (bankRef ?? "").trim();
+  if (!/^[A-Za-z0-9 ._/:#-]{4,64}$/.test(ref)) throw new Error("Enter the bank's reference for this upload (from its result screen or the statement)");
+  // Whoever downloaded and uploaded the file does not also say the bank paid it, when someone else can check.
+  const downloaders = db
+    .select({ actor: auditEntries.actor, detail: auditEntries.detailJson })
+    .from(auditEntries)
+    .where(eq(auditEntries.action, "bank_file.downloaded"))
+    .all()
+    .filter((a) => (JSON.parse(a.detail ?? "{}") as { batchId?: string }).batchId === batchId)
+    .map((a) => humanOf(a.actor, (JSON.parse(a.detail ?? "{}") as { login?: string }).login));
+  const me = humanOf(by.id, currentLogin());
+  if (downloaders.includes(me)) {
+    const others = [...new Set([...otherPeopleWith(db, businessId, "reconcile", downloaders), ...otherPeopleWith(db, businessId, "pay", downloaders)])];
+    if (others.length) throw new Error(`You downloaded this file, so someone else confirms the bank paid it (${others.join(", ")} can)`);
+  }
+  const won = db.update(bankBatches).set({ status: "confirmed", confirmedAt: now(), confirmedBy: by.id, bankRef: ref }).where(and(eq(bankBatches.id, batchId), eq(bankBatches.status, "downloaded"))).run();
   if (won.changes !== 1) throw new Error("Someone else confirmed this file just now");
   const queued = db.select().from(bankBatchLines).where(and(eq(bankBatchLines.batchId, batchId), eq(bankBatchLines.status, "queued"))).all();
   if (queued.length) db.update(bankBatchLines).set({ status: "paid" }).where(inArray(bankBatchLines.id, queued.map((l) => l.id))).run();
-  audit(db, { obligationId: null, actor: by.id, action: "bank_file.confirmed", detail: { batchId, lines: queued.length } });
+  audit(db, { obligationId: null, actor: by.id, action: "bank_file.confirmed", detail: { batchId, lines: queued.length, bankRef: ref } });
   for (const l of queued) await confirmSettlement(db, l.obligationId, "bank_file");
   return queued.length;
 }

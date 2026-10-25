@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db";
-import { businesses, obligations, settlements, vendorLinks, vendors } from "../db/schema";
+import { billAllocations, bills, businesses, obligations, settlements, vendorLinks, vendors } from "../db/schema";
+import { billBalance } from "./bills";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { fmt } from "../domain/policy";
@@ -58,6 +59,12 @@ export interface Remittance {
   providerRef: string | null;
   status: "paid" | "on its way";
   language: "en" | "vi";
+  /** Tax kept back and paid to the tax office instead, when any. */
+  withheld: string | null;
+  /** Paid to the agreed rate, less than invoiced: what was invoiced, so the vendor sees the difference is deliberate. */
+  shortPaid: { invoiced: string; basis: string } | null;
+  /** For an invoice paid in parts: its total, every part and credit so far, and what is left. */
+  history: { total: string; lines: Array<{ label: "deposit" | "balance" | "part" | "payment" | "credit" | "advance"; reference: string; amount: string; date: string; thisOne: boolean }>; left: string } | null;
 }
 
 export function viewRemittance(db: Db, token: string): Remittance | null {
@@ -79,14 +86,36 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     providerRef: st?.externalId ?? null,
     status: ob.state === "settled" ? "paid" : "on its way",
     language: v.country === "VN" ? "vi" : "en",
+    withheld: ob.withheldMinor ? fmt(ob.withheldMinor, ob.currency ?? "USD") : null,
+    shortPaid: shortPaidOf(db, ob),
+    history: ob.billId ? billHistory(db, ob.billId, ob.id) : null,
   };
+}
+
+function shortPaidOf(db: Db, ob: typeof obligations.$inferSelect): Remittance["shortPaid"] {
+  const reason = (JSON.parse(ob.policyReasonsJson ?? "[]") as string[]).find((r) => r.startsWith("Short pay to the rate card"));
+  const m = reason?.match(/asks for ([A-Z]{3} [\d,.]+), this pays [A-Z]{3} [\d,.]+ \(([^)]+)\)/);
+  return m ? { invoiced: m[1], basis: m[2] } : null;
+}
+
+function billHistory(db: Db, billId: string, current: string): Remittance["history"] {
+  const b = db.select().from(bills).where(eq(bills.id, billId)).get();
+  if (!b) return null;
+  const pays = db.select().from(obligations).where(eq(obligations.billId, billId)).all().filter((o) => ["sent", "settled"].includes(o.state) || o.id === current).sort((a, c) => a.createdAt.localeCompare(c.createdAt));
+  const credits = db.select({ a: billAllocations, ref: bills.reference }).from(billAllocations).innerJoin(bills, eq(bills.id, billAllocations.creditBillId)).where(eq(billAllocations.billId, billId)).all();
+  const lines: NonNullable<Remittance["history"]>["lines"] = [
+    ...pays.map((o) => ({ label: (["deposit", "balance", "part", "advance"].includes(o.paymentKind ?? "") ? o.paymentKind : "payment") as "deposit", reference: o.sourceRef ?? b.reference, amount: fmt(o.amountMinor ?? 0, b.currency), date: formatDate(o.updatedAt), thisOne: o.id === current })),
+    ...credits.map((c) => ({ label: "credit" as const, reference: c.ref, amount: fmt(c.a.amountMinor, b.currency), date: formatDate(c.a.createdAt), thisOne: false })),
+  ];
+  const bal = billBalance(db, billId);
+  return { total: fmt(b.totalMinor, b.currency), lines, left: fmt(Math.max(0, bal.openMinor), b.currency) };
 }
 
 /** The message to paste into Zalo, WhatsApp or email alongside the link. Vietnamese for Vietnamese vendors. */
 export function remittanceMessage(r: Remittance, url: string): string {
   if (r.language === "vi")
-    return `Chào ${r.vendorName}, ${r.businessName} đã ${r.status === "paid" ? "thanh toán" : "chuyển"} ${r.amount} cho ${r.reference} qua ${r.rail} ngày ${r.date}${r.providerRef ? ` (mã giao dịch ${r.providerRef})` : ""}. Chi tiết: ${url}`;
-  return `Hi ${r.vendorName}, ${r.businessName} ${r.status === "paid" ? "has paid" : "has sent"} ${r.amount} for ${r.reference} by ${r.rail} on ${r.date}${r.providerRef ? ` (reference ${r.providerRef})` : ""}. Details: ${url}`;
+    return `Chào ${r.vendorName}, ${r.businessName} đã ${r.status === "paid" ? "thanh toán" : "chuyển"} ${r.amount} cho ${r.reference} qua ${r.rail} ngày ${r.date}${r.providerRef ? ` (mã giao dịch ${r.providerRef})` : ""}.${r.shortPaid ? ` Hóa đơn ghi ${r.shortPaid.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${r.shortPaid.basis}).` : ""}${r.history ? ` Còn lại: ${r.history.left}.` : ""} Chi tiết: ${url}`;
+  return `Hi ${r.vendorName}, ${r.businessName} ${r.status === "paid" ? "has paid" : "has sent"} ${r.amount} for ${r.reference} by ${r.rail} on ${r.date}${r.providerRef ? ` (reference ${r.providerRef})` : ""}.${r.shortPaid ? ` Your invoice says ${r.shortPaid.invoiced}; we paid the agreed rate (${r.shortPaid.basis}).` : ""}${r.history ? ` Left on the invoice: ${r.history.left}.` : ""} Details: ${url}`;
 }
 
 export interface EvidenceRequestView {

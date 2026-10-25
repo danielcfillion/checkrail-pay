@@ -1,3 +1,4 @@
+import { railLabel } from "../format";
 import { toBaseOrZero } from "../fx";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import type { Db } from "../db";
@@ -52,6 +53,8 @@ export interface DailyClose {
 
 const SLOW_SETTLEMENT_MS = 60 * 60 * 1000;
 const DEFAULT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+const bankRail = (r: string | null | undefined) => r === "wise" || r === "bank_file";
 
 export function getDailyClose(db: Db, businessId: string, baseCurrency: string): DailyClose {
   const last = db.select().from(auditEntries).where(eq(auditEntries.action, CLOSE_ACTION)).orderBy(desc(auditEntries.seq)).limit(1).get();
@@ -144,7 +147,7 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   // Payments that went out but deserve a second look: a first payment to a vendor, an amount far above
   // that vendor's usual, or a payment a person approved over the policy's warnings.
   const settledHistory = db
-    .select({ obligationId: settlements.obligationId, grossMinor: settlements.grossMinor, settledAt: settlements.settledAt })
+    .select({ obligationId: settlements.obligationId, grossMinor: settlements.grossMinor, settledAt: settlements.settledAt, rail: settlements.rail })
     .from(settlements)
     .all();
   const settledById = new Map(settledHistory.map((h) => [h.obligationId, h]));
@@ -157,14 +160,19 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
       .filter((a) => a > 0)
       .sort((a, b) => a - b);
     const name = o.vendorId ? vendorNames.get(o.vendorId) ?? "this vendor" : "this vendor";
-    if (earlier.length === 0) {
+    // Any earlier payment, in any currency or rail: Linh paid in USD before is not new because this one is in VND.
+    const before = obs.filter((x) => x.vendorId === o.vendorId && x.id !== id && settledById.has(x.id) && settledById.get(x.id)!.settledAt < s.at);
+    const rail = settledById.get(id)?.rail ?? o.selectedRail;
+    const median = earlier.length >= 2 ? earlier[Math.floor(earlier.length / 2)] : 0;
+    if (before.length === 0) {
       flag("new_vendor", id, s.at, `First payment ever to ${name}. Check the payout details were confirmed with them directly.`);
-    } else if (earlier.length >= 2 && o.amountMinor) {
-      const median = earlier[Math.floor(earlier.length / 2)];
-      if (median > 0 && o.amountMinor >= median * 2) {
-        const times = (o.amountMinor / median).toFixed(1);
-        flag("unusual_amount", id, s.at, `${times} times ${name}'s usual payment (median of ${earlier.length} earlier payments).`);
-      }
+    } else if (median > 0 && o.amountMinor && o.amountMinor >= median * 2) {
+      const times = (o.amountMinor / median).toFixed(1);
+      flag("unusual_amount", id, s.at, `${times} times ${name}'s usual payment (median of ${earlier.length} earlier payments).`);
+    } else if (bankRail(rail) && !before.some((x) => bankRail(settledById.get(x.id)!.rail))) {
+      // PayPal or Stellar before, a bank account now: a new destination for this vendor's money.
+      const was = [...new Set(before.map((x) => railLabel(settledById.get(x.id)!.rail)))].join(", ");
+      flag("new_vendor", id, s.at, `First payment to ${name}'s bank account (earlier ones went by ${was}). Check the account was confirmed with them directly.`);
     }
     const warned = latestWarnings(db, id);
     if (warned.length && !s.actor.startsWith("agent:")) {

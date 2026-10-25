@@ -61,7 +61,8 @@ export function resetDemo(db: Db): void {
 function demoContact(v: { id: string; country: string; role: string }, i: number) {
   const phone = v.country === "VN" ? `+8491200${String(1000 + i)}` : v.country === "PH" ? `+63917000${String(1000 + i)}` : `+1555010${String(1000 + i).slice(1)}`;
   const paymentTermsDays = v.role === "homestay" || v.role === "hotel" ? 14 : v.role === "creator" ? 30 : 7;
-  return { phone, paymentTermsDays };
+  // Jake bills the same USD 450 every month for video content: a retainer, not a duplicate.
+  return { phone, paymentTermsDays, retainerMinor: v.id === "ven_jake" ? 45_000 : null };
 }
 
 function demoTax(v: { id: string; role: string; country: string }) {

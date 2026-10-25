@@ -103,10 +103,13 @@ describe("local currency", () => {
     expect(file.csv).toContain(ACCOUNT);
     expect(file.csv).toContain("TRAN THI HOA");
     expect(file.csv).toMatch(/,4000000,/);
+    expect(file.csv.split("\r\n")[0]).toMatch(/Ngay gia tri,Tai khoan nguon$/);
     expect(db.select().from(bankBatches).where(eq(bankBatches.id, batch.id)).get()!.status).toBe("downloaded");
     await confirmSettlement(db, id);
     expect(ob(id).state).toBe("sent"); // the bank has not confirmed yet
-    const n = await confirmBatch(db, DEMO_BUSINESS_ID, as("thu"), batch.id);
+    await expect(confirmBatch(db, DEMO_BUSINESS_ID, as("lan"), batch.id, "VCB-UPL-20261026")).rejects.toThrow(/someone else confirms/);
+    await expect(confirmBatch(db, DEMO_BUSINESS_ID, as("thu"), batch.id)).rejects.toThrow(/bank's reference/);
+    const n = await confirmBatch(db, DEMO_BUSINESS_ID, as("thu"), batch.id, "VCB-UPL-20261026");
     expect(n).toBe(1);
     expect(ob(id).state).toBe("settled");
   });

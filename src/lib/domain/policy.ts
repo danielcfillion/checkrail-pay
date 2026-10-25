@@ -229,8 +229,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       const sameAmount = obligation.amountMinor && !hasOwnJobId
         ? live.find((p) => p.amountMinor === obligation.amountMinor && ["settled", "sent", "approved", "execution_pending"].includes(p.state) && (!p.updatedAt || new Date(p.updatedAt).getTime() >= since))
         : undefined;
-      if (sameAmount) {
-        rules.push(warn("no_duplicate", `Same amount as obligation ${sameAmount.obligationId} (${sameAmount.state}) for this vendor in the last 30 days; confirm this is a different job`));
+      // A monthly retainer bills the same figure every month: that is expected, as long as it is not twice in one month.
+      const retainer = sameAmount && vendor?.retainerMinor && vendor.retainerMinor === obligation.amountMinor && (!sameAmount.updatedAt || Date.now() - new Date(sameAmount.updatedAt).getTime() >= 20 * 86_400_000);
+      if (retainer) {
+        rules.push(pass("no_duplicate", `${vendor!.name}'s monthly retainer (${fmt(vendor!.retainerMinor!, obligation.currency!)}); the last one was more than 20 days ago`));
+      } else if (sameAmount) {
+        rules.push(warn("no_duplicate", `Same amount as obligation ${sameAmount.obligationId} (${sameAmount.state}) for this vendor in the last 30 days; confirm this is a different job${vendor?.retainerMinor === obligation.amountMinor ? " (a retainer is paid once a month)" : ""}`));
       } else {
         rules.push(pass("no_duplicate", obligation.sourceRef ? "Reference and job identifiers have not been paid before" : "No earlier obligation matches this job"));
       }

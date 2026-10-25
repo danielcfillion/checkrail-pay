@@ -37,6 +37,7 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
     phone: v.phone ?? "",
     taxId: v.taxId ?? "",
     paymentTermsDays: v.paymentTermsDays != null ? String(v.paymentTermsDays) : "",
+    retainer: v.retainerMinor != null ? (v.retainerMinor / 100).toFixed(2) : "",
   };
   return (
     <>

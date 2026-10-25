@@ -24,7 +24,10 @@ export function InviteLink({ vendorId }: { vendorId?: string }) {
     return (
       <div className="space-y-2">
         <p className="break-all rounded bg-paper p-2 text-xs num">{url}</p>
-        <CopyButton value={url} label="Copy link" />
+        <div className="flex flex-wrap gap-2">
+          <CopyButton value={url} label="Copy link" />
+          <CopyButton value={`${url}?lang=vi`} label="Copy link (opens in Vietnamese)" />
+        </div>
         <p className="text-xs text-ink-soft">Send it over a channel you already use with them. It is shown once; make a new one if it gets lost.</p>
       </div>
     );
