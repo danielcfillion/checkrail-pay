@@ -1,3 +1,4 @@
+import { fmt } from "../domain/policy";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import { obligations, paymentRunItems, paymentRuns, users, vendors } from "../db/schema";
@@ -152,7 +153,7 @@ export async function releaseRun(db: Db, businessId: string, by: Actor, runId: s
   const view = await viewRun(db, businessId, runId, by);
   if (!resuming) {
     const short = view.totals.filter((t) => t.short);
-    if (short.length) throw new Error(`Not enough money: ${short.map((t) => `${t.rail} needs ${(t.totalMinor / 100).toFixed(2)} ${t.currency}, has ${(t.balance!.availableMinor / 100).toFixed(2)}`).join("; ")}. Top up or remove payments, then release.`);
+    if (short.length) throw new Error(`Not enough money: ${short.map((t) => `${t.rail} needs ${fmt(t.totalMinor, t.currency)}, has ${fmt(t.balance!.availableMinor, t.currency)}`).join("; ")}. Top up or remove payments, then release.`);
     // Claim the run, so two people pressing Release cannot both pay it.
     const claimed = db.update(paymentRuns).set({ status: "releasing", releasedBy: by.id }).where(and(eq(paymentRuns.id, runId), eq(paymentRuns.status, "draft"))).run();
     if (claimed.changes !== 1) throw new Error("Someone else is releasing this run");

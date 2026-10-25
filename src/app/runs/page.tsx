@@ -20,7 +20,15 @@ export default async function RunsPage() {
   const canBuild = !viewer || viewer.can("build_run");
   return (
     <>
-      <PageHeader title="Payment runs" lede="Gather what is due into one list. An approver checks the total against what is in the account and releases it once. Each payment still gets every check it would get on its own." />
+      <PageHeader
+        title="Payment runs"
+        lede="Gather what is due into one list. An approver checks the total against what is in the account and releases it once. Each payment still gets every check it would get on its own."
+        actions={
+          <Link href="/bank-files" className="btn">
+            Bank files
+          </Link>
+        }
+      />
       {canBuild ? (
         <Panel title="New run" aside={`${candidates.length} payable`} className="mb-6" padded={candidates.length === 0}>
           {candidates.length ? (

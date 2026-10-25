@@ -2,9 +2,11 @@ import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
+import { toBaseMinor, toBaseOrZero } from "../fx";
+import { decryptField } from "../crypto/dataKey";
 import { isRole } from "../auth/roles";
 import { fmt } from "../domain/policy";
-import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile } from "../domain/types";
+import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerprint, type AiInterpretation, type ApprovalPolicy, type EvidenceItem, type ExecutionResult, type ObligationState, type PolicyOutcome, type PolicyRuleResult, type Rail, type SettlementStatus, type SourceType, type VendorPayoutProfile, RAILS } from "../domain/types";
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
@@ -241,8 +243,10 @@ function moveTo(db: Db, obligationId: string, target: ObligationState, outcome: 
 }
 
 /** Hash of the fields that decide where a payment lands. Same parts as the seed uses for vendors.detailsHash. */
-export function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null }): string {
-  return hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]);
+export function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null; bankAccountEnc?: string | null; bankCode?: string | null; bankAccountNumber?: string | null }): string {
+  // A full account number joins the hash only when there is one, so details hashed before bank rails existed still match.
+  const account = v.bankAccountNumber ?? (v.bankAccountEnc ? decryptField(v.bankAccountEnc) : null);
+  return hashPayoutDetails(account ? [v.paypalEmail, v.stellarAccount, v.bankLabel, `${v.bankCode ?? ""}:${account}`] : [v.paypalEmail, v.stellarAccount, v.bankLabel]);
 }
 
 /** Names of other vendors in the same business paid to the same PayPal email, Stellar account or bank account. */
@@ -265,7 +269,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -298,15 +302,17 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   // Union of what the approvers saw. A row from before acknowledgements were recorded means "unknown": do not second-guess it.
   const acknowledgedWarnings = approvedRows.some((a) => a.ack == null) ? undefined : [...new Set(approvedRows.flatMap((a) => JSON.parse(a.ack!) as string[]))];
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const vendorRecentMinor = prior.filter((p) => ["approved", "execution_pending", "sent", "settled"].includes(p.state) && p.updatedAt >= since).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
+  // Every amount below is in the base currency at reference rates, so caps compare like with like.
+  const inBase = (minor: number | null, currency: string | null) => toBaseOrZero(minor ?? 0, currency, biz.baseCurrency);
+  const vendorRecentMinor = prior.filter((p) => ["approved", "execution_pending", "sent", "settled"].includes(p.state) && p.updatedAt >= since).reduce((sum, p) => sum + inBase(p.amountMinor, p.currency), 0);
   // Business-wide committed money in the last 24h (base currency), for the autopilot daily cap. Pre-approved payments only count once autopilot has scheduled them.
   const businessRecentMinor = db
     .select({ state: obligations.state, amountMinor: obligations.amountMinor, currency: obligations.currency, releaseAt: obligations.releaseAt, updatedAt: obligations.updatedAt })
     .from(obligations)
     .where(and(eq(obligations.businessId, ob.businessId), ne(obligations.id, obligationId)))
     .all()
-    .filter((o) => o.currency === biz.baseCurrency && o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt)))
-    .reduce((sum, o) => sum + (o.amountMinor ?? 0), 0);
+    .filter((o) => o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt)))
+    .reduce((sum, o) => sum + inBase(o.amountMinor, o.currency), 0);
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
@@ -317,13 +323,14 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     ai,
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
+    baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
     priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt })),
     jobKeys: myJobKeys,
     otherVendorRefs,
     acknowledgedWarnings,
     sharedPayoutWith: vendorRow ? sharedPayout(db, vendorRow) : [],
     requestText: ob.rawInput,
-    vendorSettledMinors: prior.filter((p) => p.state === "settled" && p.amountMinor != null).map((p) => p.amountMinor!),
+    vendorSettledMinors: prior.filter((p) => p.state === "settled" && p.amountMinor != null).map((p) => inBase(p.amountMinor, p.currency)),
     knownVendorNames: db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, ob.businessId)).all(),
     approvalsCount,
     vendorRecentMinor,
@@ -344,7 +351,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
 
 async function quoteAndRoute(db: Db, obligationId: string, vendor: VendorPayoutProfile, amountMinor: number, currency: string, businessCountry: string): Promise<void> {
   const rails = getRails();
-  const quotes = await Promise.all((["paypal", "stellar"] as Rail[]).map((r) => rails[r].quote({ vendor, amountMinor, currency, businessCountry })));
+  const quotes = await Promise.all(RAILS.map((r) => rails[r].quote({ vendor, amountMinor, currency, businessCountry })));
   db.delete(routeQuotes).where(eq(routeQuotes.obligationId, obligationId)).run();
   const ts = now();
   for (const q of quotes) {
@@ -379,7 +386,8 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
   const ob = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
   const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
-  const amount = ob.amountMinor ?? 0;
+  // Limits are in the base currency; a foreign amount with no rate counts as above every limit but the owner's.
+  const amount = ob.amountMinor != null && ob.currency ? (toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) ?? Number.MAX_SAFE_INTEGER) : 0;
   // A known person approving: they need the approve permission (their own or delegated) and a limit that covers it.
   if (actor.startsWith("user:")) {
     const row = db.select().from(users).where(and(eq(users.id, actor.slice(5)), eq(users.businessId, ob.businessId))).get();
@@ -388,7 +396,7 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
       if (!actorCan(who, "approve")) return { refusal: `${whoIs(who)} cannot approve payments. An approver or the owner does.`, selfApproval: false };
       if (who.approvalLimitMinor !== null && amount > who.approvalLimitMinor) {
         const higher = approversFor(db, ob.businessId, amount).filter((u) => u !== row.id);
-        return { refusal: `${fmt(amount, biz.baseCurrency)} is above ${who.displayName}'s approval limit of ${fmt(who.approvalLimitMinor, biz.baseCurrency)}; someone with a higher limit approves this one${higher.length ? ` (${higher.join(", ")} can)` : ""}`, selfApproval: false };
+        return { refusal: `${ob.currency && ob.currency !== biz.baseCurrency ? `${fmt(ob.amountMinor ?? 0, ob.currency)} (about ${fmt(amount, biz.baseCurrency)})` : fmt(amount, biz.baseCurrency)} is above ${who.displayName}'s approval limit of ${fmt(who.approvalLimitMinor, biz.baseCurrency)}; someone with a higher limit approves this one${higher.length ? ` (${higher.join(", ")} can)` : ""}`, selfApproval: false };
       }
     }
   }
@@ -546,7 +554,7 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
 
   const rail = opts.rail ?? (ob.selectedRail as Rail | null);
   if (!rail) throw new Error("No route available for this obligation");
-  if (rail !== "paypal" && rail !== "stellar") throw new Error(`Unknown rail ${String(rail)}`);
+  if (!RAILS.includes(rail)) throw new Error(`Unknown rail ${String(rail)}`);
   const quote = db.select().from(routeQuotes).where(and(eq(routeQuotes.obligationId, obligationId), eq(routeQuotes.rail, rail))).get();
   if (!quote?.available) throw new Error(`${rail} is not an available route for this obligation`);
 
@@ -589,7 +597,7 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     { behavior: "immediate" }
   );
 
-  const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: ob.amountMinor!, currency: ob.currency!, memo: started.memo, businessCountry: biz.country });
+  const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: ob.amountMinor!, currency: ob.currency!, memo: started.memo, businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(rail, vendorRow) });
   return finishAttempt(db, obligationId, started.attemptId, rail, adapter.mode, result);
 }
 
@@ -613,6 +621,12 @@ function redact(value: unknown, depth = 0): unknown {
   if (depth > 8 || value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, SECRET_KEY.test(k) ? "[redacted]" : redact(v, depth + 1)]));
+}
+
+/** The full account number, decrypted only for a bank rail and only for this request. */
+function bankAccountFor(rail: Rail, v: typeof vendors.$inferSelect): { bankAccountNumber?: string } {
+  if ((rail !== "wise" && rail !== "bank_file") || !v.bankAccountEnc) return {};
+  return { bankAccountNumber: decryptField(v.bankAccountEnc) };
 }
 
 /** Call the rail. A thrown exception is an unknown outcome, never a failure. */
@@ -694,7 +708,7 @@ export async function retryAmbiguousExecution(db: Db, obligationId: string, opts
   }
   const req = JSON.parse(attempt.requestJson ?? "{}") as { memo?: string };
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
-  const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: ob.amountMinor!, currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country });
+  const result = await callRail(db, adapter, attempt.id, { obligationId, idempotencyKey: attempt.idempotencyKey, vendor: toProfile(vendorRow), amountMinor: ob.amountMinor!, currency: ob.currency!, memo: req.memo ?? "", businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(attempt.rail as Rail, vendorRow) });
   if (result.status === "failed" && adapter.mode !== "mock") {
     // A rejected replay proves nothing about the first submission. Only a provider lookup that finds no batch does,
     // and that happened above (or the rail has no lookup). Keep the attempt unknown and leave it for a person.
@@ -857,5 +871,5 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {
-  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status };
+  return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status, hasBankAccount: Boolean(v.bankAccountEnc), bankCode: v.bankCode, accountHolder: v.accountHolder };
 }

@@ -40,6 +40,9 @@ export const vendors = sqliteTable("vendors", {
   verificationMethod: text("verification_method"), // callback | penny_test | in_person | document | onboarding_confirmed
   createdBy: text("created_by"),
   defaultAccountCode: text("default_account_code"),
+  bankAccountEnc: text("bank_account_enc"), // full account number, AES-GCM with CHECKRAIL_DATA_KEY; never shown whole
+  bankCode: text("bank_code"), // e.g. VCB, TCB, BIDV, BDO
+  accountHolder: text("account_holder"), // name on the bank account, as the bank has it
 });
 
 /** People who use the app. Logins come from configuration; this table holds what the app needs to know about them. */
@@ -310,4 +313,41 @@ export const paymentRunItems = sqliteTable(
     finishedAt: text("finished_at"),
   },
   (t) => [index("payment_run_items_run").on(t.runId), index("payment_run_items_obligation").on(t.obligationId)]
+);
+
+/**
+ * Domestic bank bulk-payment files (Vietcombank, Techcombank and BIDV corporate banking all take one). A payment
+ * routed to the bank file joins the open batch; someone downloads the file, uploads it to the bank, and confirms
+ * it once the bank shows it paid. Until then the payment is "sent", never "settled".
+ */
+export const bankBatches = sqliteTable("bank_batches", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").notNull(),
+  currency: text("currency").notNull(),
+  status: text("status").notNull(), // open | downloaded | confirmed
+  sourceAccount: text("source_account").notNull(),
+  createdAt: text("created_at").notNull(),
+  downloadedAt: text("downloaded_at"),
+  downloadedBy: text("downloaded_by"),
+  confirmedAt: text("confirmed_at"),
+  confirmedBy: text("confirmed_by"),
+});
+
+export const bankBatchLines = sqliteTable(
+  "bank_batch_lines",
+  {
+    id: text("id").primaryKey(),
+    batchId: text("batch_id").notNull(),
+    obligationId: text("obligation_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    amountMinor: integer("amount_minor").notNull(),
+    currency: text("currency").notNull(),
+    beneficiaryName: text("beneficiary_name").notNull(),
+    bankCode: text("bank_code").notNull(),
+    accountEnc: text("account_enc").notNull(),
+    memo: text("memo").notNull(),
+    status: text("status").notNull(), // queued | paid | returned
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("bank_batch_lines_key_unique").on(t.idempotencyKey), index("bank_batch_lines_batch").on(t.batchId)]
 );

@@ -21,9 +21,12 @@
   --paypal-soft: rgb(0 112 224 / 0.1);
   --stellar: #7d00ff;
   --stellar-soft: rgb(125 0 255 / 0.1);
+  --wise: #2f6b10;
+  --wise-soft: rgb(47 107 16 / 0.1);
   /* Chart fills for the two rails: stepped from the brand hues so they stay apart for colour-blind readers (validated). */
   --chart-paypal: #2f8cf0;
   --chart-stellar: #6a1fd0;
+  --chart-bank: #3f8a1c;
   --focus: #0070e0;
   color-scheme: light;
 }
@@ -48,9 +51,12 @@
     --paypal-soft: rgb(77 155 240 / 0.14);
     --stellar: #a765ff;
     --stellar-soft: rgb(167 101 255 / 0.14);
+    --wise: #8fd16a;
+    --wise-soft: rgb(143 209 106 / 0.14);
     /* Chart fills for the two rails: stepped from the brand hues so they stay apart for colour-blind readers (validated). */
     --chart-paypal: #4f97ea;
     --chart-stellar: #8a45ee;
+    --chart-bank: #7cc456;
     --focus: #4d9bf0;
     color-scheme: dark;
   }
@@ -75,9 +81,12 @@
   --paypal-soft: rgb(77 155 240 / 0.14);
   --stellar: #a765ff;
   --stellar-soft: rgb(167 101 255 / 0.14);
+  --wise: #8fd16a;
+  --wise-soft: rgb(143 209 106 / 0.14);
   /* Chart fills for the two rails: stepped from the brand hues so they stay apart for colour-blind readers (validated). */
   --chart-paypal: #4f97ea;
   --chart-stellar: #8a45ee;
+  --chart-bank: #7cc456;
   --focus: #4d9bf0;
   color-scheme: dark;
 }
@@ -99,6 +108,8 @@
   --color-paypal-soft: var(--paypal-soft);
   --color-stellar: var(--stellar);
   --color-stellar-soft: var(--stellar-soft);
+  --color-wise: var(--wise);
+  --color-wise-soft: var(--wise-soft);
   --color-focus: var(--focus);
   --font-sans: var(--font-archivo), system-ui, sans-serif;
   --text-2xs: 11px;

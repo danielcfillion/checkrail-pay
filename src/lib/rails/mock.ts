@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ExecutionRequest, ExecutionResult, PaymentRail, Rail, RailBalance, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
 import { quotePayPal, quoteStellar } from "./quoteModel";
+import { quoteWise } from "./localQuotes";
 
 /**
  * Deterministic mock rails. Same request, same external id, same result.
@@ -93,5 +94,34 @@ export class MockStellarRail implements PaymentRail {
 
   async getStatus(externalId: string): Promise<SettlementStatus> {
     return { status: "confirmed", externalStatus: "success", explorerUrl: null, raw: { mock: true, hash: externalId, successful: true } };
+  }
+}
+
+export class MockWiseRail implements PaymentRail {
+  readonly rail = "wise" as const;
+  readonly mode = "mock" as const;
+
+  async balance(currency: string): Promise<RailBalance | null> {
+    const defaults: Record<string, number> = { USD: 5_000, VND: 150_000_000, PHP: 150_000, THB: 50_000 };
+    const env = process.env[`MOCK_WISE_BALANCE_${currency}`];
+    const value = env !== undefined && env !== "" ? Number(env) : defaults[currency];
+    return value !== undefined && Number.isFinite(value) ? { availableMinor: Math.round(value * 100), currency, source: "simulated" } : null;
+  }
+
+  async quote(i: { vendor: VendorPayoutProfile; amountMinor: number; currency: string; businessCountry: string }): Promise<RouteQuote> {
+    return quoteWise(i.vendor, i.amountMinor, i.currency, i.businessCountry);
+  }
+
+  async execute(req: ExecutionRequest): Promise<ExecutionResult> {
+    const q = quoteWise(req.vendor, req.amountMinor, req.currency, req.businessCountry ?? "US");
+    if (shouldFail(req) || !req.bankAccountNumber) {
+      return { status: "failed", externalId: null, externalStatus: "REJECTED", feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: { mock: true }, errorMessage: req.bankAccountNumber ? "Recipient bank rejected the account details" : "No bank account number for this vendor" };
+    }
+    const id = String(parseInt(createHash("sha256").update(`wise:${req.idempotencyKey}`).digest("hex").slice(0, 10), 16));
+    return { status: "submitted", externalId: id, externalStatus: "processing", feeMinor: q.feeMinor, receivedMinor: q.receiveAmountMinor, receivedCurrency: q.receiveCurrency, fxRate: q.fxRate, raw: { mock: true, transfer: { id, status: "processing", customerTransactionId: req.idempotencyKey } } };
+  }
+
+  async getStatus(externalId: string): Promise<SettlementStatus> {
+    return { status: "confirmed", externalStatus: "outgoing_payment_sent", raw: { mock: true, id: externalId, status: "outgoing_payment_sent" } };
   }
 }

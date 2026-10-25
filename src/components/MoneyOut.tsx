@@ -6,12 +6,15 @@ import type { PaymentPoint } from "@/lib/queries";
 import { formatMoney, formatMoneySymbol, pluralise } from "@/lib/format";
 
 type Range = 7 | 30 | 90;
-type Bucket = { key: string; label: string; long: string; start: number; end: number; paypal: number; stellar: number; fee: number; items: PaymentPoint[] };
+type Bucket = { key: string; label: string; long: string; start: number; end: number; paypal: number; stellar: number; bank: number; fee: number; items: PaymentPoint[] };
 
 const RAILS = [
   { key: "paypal" as const, name: "PayPal", fill: "var(--chart-paypal)" },
   { key: "stellar" as const, name: "Stellar", fill: "var(--chart-stellar)" },
+  { key: "bank" as const, name: "Bank (Wise, file)", fill: "var(--chart-bank)" },
 ];
+const railKey = (rail: string): "paypal" | "stellar" | "bank" => (rail === "paypal" ? "paypal" : rail === "stellar" ? "stellar" : "bank");
+const sumRails = (b: { paypal: number; stellar: number; bank: number }) => b.paypal + b.stellar + b.bank;
 const DAY = 86_400_000;
 const H = 220;
 const PAD = { top: 12, right: 8, bottom: 26, left: 52 };
@@ -31,14 +34,13 @@ function buckets(points: PaymentPoint[], range: Range, now: number): Bucket[] {
   for (let i = count - 1; i >= 0; i--) {
     const start = lastStart - i * step * DAY;
     const end = start + step * DAY;
-    out.push({ key: String(start), label: fmtDay(start), long: step === 1 ? fmtDay(start) : `${fmtDay(start)} to ${fmtDay(end - DAY)}`, start, end, paypal: 0, stellar: 0, fee: 0, items: [] });
+    out.push({ key: String(start), label: fmtDay(start), long: step === 1 ? fmtDay(start) : `${fmtDay(start)} to ${fmtDay(end - DAY)}`, start, end, paypal: 0, stellar: 0, bank: 0, fee: 0, items: [] });
   }
   for (const p of points) {
     const t = new Date(p.settledAt).getTime();
     const b = out.find((x) => t >= x.start && t < x.end);
     if (!b) continue;
-    if (p.rail === "paypal") b.paypal += p.grossMinor;
-    else b.stellar += p.grossMinor;
+    b[railKey(p.rail)] += p.grossMinor;
     b.fee += p.feeMinor;
     b.items.push(p);
   }
@@ -83,9 +85,9 @@ export function MoneyOut({ points, currency }: { points: PaymentPoint[]; currenc
   const total = inRange.reduce((a, p) => a + p.grossMinor, 0);
   const fees = inRange.reduce((a, p) => a + p.feeMinor, 0);
   const byAgent = inRange.filter((p) => p.by === "agent");
-  const railTotal = (k: "paypal" | "stellar") => bs.reduce((a, b) => a + b[k], 0);
+  const railTotal = (k: "paypal" | "stellar" | "bank") => bs.reduce((a, b) => a + b[k], 0);
 
-  const ticks = axis(Math.max(...bs.map((b) => b.paypal + b.stellar), 0));
+  const ticks = axis(Math.max(...bs.map((b) => sumRails(b)), 0));
   const top = ticks[ticks.length - 1] || 1;
   const innerW = width - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
@@ -173,7 +175,7 @@ export function MoneyOut({ points, currency }: { points: PaymentPoint[]; currenc
                       tabIndex={0}
                       role="button"
                       aria-pressed={picked === b.key}
-                      aria-label={`${b.long}: ${b.items.length ? `${formatMoney(b.paypal + b.stellar, currency)} in ${pluralise(b.items.length, "payment")}. PayPal ${formatMoney(b.paypal, currency)}, Stellar ${formatMoney(b.stellar, currency)}` : "no payments"}`}
+                      aria-label={`${b.long}: ${b.items.length ? `${formatMoney(sumRails(b), currency)} in ${pluralise(b.items.length, "payment")}. PayPal ${formatMoney(b.paypal, currency)}, Stellar ${formatMoney(b.stellar, currency)}${b.bank ? `, bank ${formatMoney(b.bank, currency)}` : ""}` : "no payments"}`}
                       style={{ cursor: b.items.length ? "pointer" : "default", outline: "none" }}
                       onPointerMove={() => setHover(b.key)}
                       onFocus={() => setHover(b.key)}
@@ -213,7 +215,7 @@ export function MoneyOut({ points, currency }: { points: PaymentPoint[]; currenc
               <p className="text-ink-soft">{active.long}</p>
               {active.items.length ? (
                 <>
-                  <p className="num mt-0.5 text-base font-semibold">{formatMoneySymbol(active.paypal + active.stellar, currency)}</p>
+                  <p className="num mt-0.5 text-base font-semibold">{formatMoneySymbol(sumRails(active), currency)}</p>
                   {RAILS.map((r) => (
                     <p key={r.key} className="mt-1 flex items-center gap-2">
                       <span aria-hidden className="inline-block h-0.5 w-3" style={{ background: r.fill }} />
@@ -268,13 +270,13 @@ export function MoneyOut({ points, currency }: { points: PaymentPoint[]; currenc
                       </td>
                       <td>
                         <span className="inline-flex items-center gap-1.5">
-                          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: p.rail === "paypal" ? RAILS[0].fill : RAILS[1].fill }} />
-                          {p.rail === "paypal" ? "PayPal" : "Stellar"}
+                          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: RAILS.find((r) => r.key === railKey(p.rail))!.fill }} />
+                          {p.rail === "paypal" ? "PayPal" : p.rail === "stellar" ? "Stellar" : p.rail === "wise" ? "Wise" : "Bank file"}
                         </span>
                       </td>
                       <td className="text-ink-soft">{p.by === "agent" ? "Autopilot" : p.by === "person" ? "A person" : "Imported"}</td>
-                      <td className="r num text-ink-soft">{formatMoney(p.feeMinor, p.currency, { code: false })}</td>
-                      <td className="r num font-medium">{formatMoney(p.grossMinor, p.currency)}</td>
+                      <td className="r num text-ink-soft">{formatMoney(p.paidFeeMinor, p.paidCurrency, { code: false })}</td>
+                      <td className="r num font-medium">{formatMoney(p.paidMinor, p.paidCurrency)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -44,8 +44,8 @@ export const TRANSITIONS: Record<ObligationState, readonly ObligationState[]> = 
   cancelled: [],
 };
 
-export type Rail = "paypal" | "stellar";
-export const RAILS: readonly Rail[] = ["paypal", "stellar"];
+export type Rail = "paypal" | "stellar" | "wise" | "bank_file";
+export const RAILS: readonly Rail[] = ["paypal", "stellar", "wise", "bank_file"];
 
 export type SourceType = "invoice" | "job_completion" | "operator_instruction" | "booking";
 
@@ -132,6 +132,10 @@ export interface VendorPayoutProfile {
   verifiedAt: string | null;
   /** "blocked" stops every payment to this vendor until someone unblocks them. */
   status?: string;
+  /** A full bank account number is on file (encrypted). The number itself is only read at payment time. */
+  hasBankAccount?: boolean;
+  bankCode?: string | null;
+  accountHolder?: string | null;
 }
 
 export interface EvidenceItem {
@@ -176,6 +180,11 @@ export interface PolicyInput {
   ai: AiInterpretation | null;
   businessCountry: string;
   baseCurrency: string;
+  /**
+   * The amount in the base currency at reference rates, for every threshold, cap and limit. Equal to the amount when
+   * the obligation is in the base currency; null when there is no rate for its currency.
+   */
+  baseAmountMinor?: number | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
   priorSourceRefs: Array<{
     obligationId: string;
@@ -268,6 +277,10 @@ export interface ExecutionRequest {
   memo: string; // short reference that appears on the payment
   /** Sender country for corridor figures. Defaults to US. */
   businessCountry?: string;
+  /** Full bank account number, decrypted for this one request. Only set for bank rails (Wise, bank file). */
+  bankAccountNumber?: string;
+  /** Business that owns the payment, for rails that keep their own records (the bank file). */
+  businessId?: string;
   /**
    * Called with the provider-side id (Stellar tx hash) after the request is built and
    * before it is sent, so the engine can persist it. If the send then has an unknown

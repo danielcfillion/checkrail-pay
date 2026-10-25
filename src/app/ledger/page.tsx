@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { listSettlements } from "@/lib/queries";
+import { getBusiness, listSettlements } from "@/lib/queries";
+import { toBaseOrZero } from "@/lib/fx";
 import { formatDate, formatDateTime, formatMoneySymbol, pluralise, truncateMiddle } from "@/lib/format";
 import { CopyButton } from "@/components/CopyButton";
 import { EmptyState, Money, PageHeader, RailTag } from "@/components/ui";
@@ -8,11 +9,13 @@ export const dynamic = "force-dynamic";
 
 export default function LedgerPage() {
   const rows = listSettlements();
-  const gross = rows.reduce((a, r) => a + r.grossMinor, 0);
-  const fees = rows.reduce((a, r) => a + r.feeMinor, 0);
+  const base = getBusiness()?.baseCurrency ?? "USD";
+  const gross = rows.reduce((a, r) => a + toBaseOrZero(r.grossMinor, r.grossCurrency, base), 0);
+  const fees = rows.reduce((a, r) => a + toBaseOrZero(r.feeMinor, r.grossCurrency, base), 0);
+  const mixed = rows.some((r) => r.grossCurrency !== base);
   return (
     <>
-      <PageHeader title="Ledger" lede={rows.length ? `${pluralise(rows.length, "settlement")}, ${formatMoneySymbol(gross, "USD")} paid, ${formatMoneySymbol(fees, "USD")} in fees.` : "Every settled payment, with what the recipient actually received."} />
+      <PageHeader title="Ledger" lede={rows.length ? `${pluralise(rows.length, "settlement")}, ${mixed ? "about " : ""}${formatMoneySymbol(gross, base)} paid, ${formatMoneySymbol(fees, base)} in fees${mixed ? ` (local-currency payments at reference rates)` : ""}.` : "Every settled payment, with what the recipient actually received."} />
       {rows.length === 0 ? (
         <EmptyState title="No settlements yet" body="Payments appear here once a rail confirms them." action={<Link href="/obligations?filter=needs_action" className="btn">Open inbox</Link>} />
       ) : (

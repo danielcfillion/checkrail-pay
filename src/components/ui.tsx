@@ -37,7 +37,7 @@ export function StationLabel({ station, active = false }: { station: Station; ac
 
 export function RailTag({ rail, className = "" }: { rail: string | null | undefined; className?: string }) {
   if (!rail) return <span className={`dense text-ink-soft ${className}`}>no rail</span>;
-  const tone = rail === "paypal" ? "text-paypal bg-paypal-soft" : rail === "stellar" ? "text-stellar bg-stellar-soft" : "text-ink-soft";
+  const tone = rail === "paypal" ? "text-paypal bg-paypal-soft" : rail === "stellar" ? "text-stellar bg-stellar-soft" : rail === "wise" ? "text-wise bg-wise-soft" : rail === "bank_file" ? "text-ink bg-paper" : "text-ink-soft";
   return <span className={`dense inline-flex h-5 items-center rounded-sm px-1.5 ${tone} ${className}`}>{railLabel(rail)}</span>;
 }
 

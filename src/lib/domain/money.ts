@@ -4,11 +4,24 @@
  * float ever touches a payable amount.
  */
 
-/** Currencies the rails can pay today. Both adapters assume two decimal places. */
-export const SUPPORTED_CURRENCIES: readonly string[] = ["USD"];
+/**
+ * Currencies a payment can be owed in. Every amount is stored as hundredths of the currency's unit, whatever its
+ * official decimals: VND 2,500,000 is 250,000,000 here, and shows as "VND 2,500,000". One scale everywhere means no
+ * conversion bugs between screens, policy and rails; adapters convert to the provider's format at the edge.
+ */
+export const SUPPORTED_CURRENCIES: readonly string[] = ["USD", "VND", "PHP", "THB"];
 
-/** Upper bound for a single obligation (USD 10,000,000.00). Anything larger is almost certainly a parsing error or an attack. */
-export const MAX_AMOUNT_MINOR = 1_000_000_000;
+/** Shown without decimals. */
+export const ZERO_DECIMAL_CURRENCIES: ReadonlySet<string> = new Set(["VND", "JPY", "KRW", "IDR"]);
+
+/**
+ * Upper bound for a single stored amount, in hundredths of any supported currency (VND 1,000,000,000,000). The
+ * meaningful limit, USD 10,000,000 equivalent, is checked against the base currency in policy (BASE_AMOUNT_LIMIT_MINOR).
+ */
+export const MAX_AMOUNT_MINOR = 100_000_000_000_000;
+
+/** Anything above USD 10,000,000 equivalent is almost certainly a parsing error or an attack. */
+export const BASE_AMOUNT_LIMIT_MINOR = 1_000_000_000;
 
 export function isValidAmountMinor(n: unknown): n is number {
   return typeof n === "number" && Number.isSafeInteger(n) && n > 0 && n <= MAX_AMOUNT_MINOR;

@@ -10,6 +10,9 @@ import { getViewer } from "@/lib/viewer";
 import { listTeam, whoIs } from "@/lib/engine/users";
 import { ROLE_LABEL, can, isRole } from "@/lib/auth/roles";
 import { TeamPanel } from "@/components/TeamPanel";
+import { fxAsOf, fxTable } from "@/lib/fx";
+import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
+import { usingDevKey } from "@/lib/crypto/dataKey";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +96,12 @@ export default async function SettingsPage() {
           <p className="mt-3 text-xs text-ink-soft">Whoever prepares a payment (creates it or changes its amount, payee or reference) cannot also approve it while someone else can. Cover while away hands that person&apos;s approvals and limit to the named colleague until the end date. Every change here is in the audit log.</p>
         </Panel>
 
+        <Panel title="Currencies" aside={`reference rates as of ${fxAsOf()}`}>
+          <p className="mb-3 text-ink-soft">Invoices can be in {SUPPORTED_CURRENCIES.join(", ")}. Every limit, cap and total is checked in {cur} at these rates; what the vendor receives comes from the rail&apos;s own quote.</p>
+          <KeyValue rows={fxTable().filter((r) => r.currency !== "USD").map((r) => [`1 USD`, `${r.perUsd.toLocaleString("en-US")} ${r.currency}`] as [string, string])} />
+          <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">Override with FX_RATES (JSON, units per USD) and FX_RATES_AS_OF. Full bank account numbers are stored encrypted{usingDevKey() ? " with a development key: set CHECKRAIL_DATA_KEY before real use" : ""}.</p>
+        </Panel>
+
         <Panel title="Approval rules" aside="apply at every autonomy level" className="lg:col-span-2">
           <ol className="list-decimal space-y-2 pl-5">
             {sentences.map((s, i) => (
@@ -112,6 +121,7 @@ export default async function SettingsPage() {
           <dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">
             <EnvBlock title="Rails" lines={["RAIL_MODE=live", "PAYPAL_CLIENT_ID=…", "PAYPAL_CLIENT_SECRET=…", "PAYPAL_ENV=sandbox", "STELLAR_NETWORK=testnet", "STELLAR_TREASURY_SECRET=S…", "STELLAR_PYUSD_ISSUER=G…"]} />
             <EnvBlock title="Agent and books" lines={["AI_MODE=live", "ANTHROPIC_API_KEY=sk-ant-…", "ANTHROPIC_MODEL=claude-sonnet-5-5", "ACCOUNTING_DESTINATION=xero", "XERO_CLIENT_ID=…", "XERO_CLIENT_SECRET=…"]} />
+            <EnvBlock title="Local bank payouts" lines={["WISE_API_TOKEN=…", "WISE_PROFILE_ID=…", "WISE_ENV=sandbox", "BANK_FILE_SOURCE_ACCOUNT=VCB 0071000… Ridgeline Vietnam", "CHECKRAIL_DATA_KEY=<32 bytes, base64>"]} />
           </dl>
         </Panel>
       </div>

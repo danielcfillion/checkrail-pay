@@ -1,7 +1,8 @@
 import { warningFingerprint, type PolicyRuleResult } from "@/lib/domain/types";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getObligationDetail, listVendors } from "@/lib/queries";
+import { getBusiness, getObligationDetail, listVendors } from "@/lib/queries";
+import { toBaseMinor } from "@/lib/fx";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate } from "@/lib/engine/orchestrator";
 import { getDb } from "@/lib/db";
@@ -29,6 +30,9 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const availableRails = d.quotes.filter((q) => q.available).map((q) => q.rail as Rail);
   const caption = o.state === "blocked" && o.blockedReason ? shortReason(o.blockedReason) : undefined;
   const viewer = await getViewer();
+  const base = getBusiness()?.baseCurrency ?? "USD";
+  const baseMinor = o.amountMinor != null && o.currency && o.currency !== base ? toBaseMinor(o.amountMinor, o.currency, base) : null;
+  const baseEquivalent = baseMinor != null ? formatMoneySymbol(baseMinor, base) : null;
   const perms = viewer ? { approve: viewer.can("approve"), pay: viewer.can("pay"), amend: viewer.can("amend"), resolveStuck: viewer.can("resolve_stuck") } : undefined;
   const approveRefusal = viewer && o.state === "awaiting_approval" ? approvalGate(getDb(), o.id, viewer.actor.id).refusal : null;
   const vendorChoices = !o.vendorId && o.state === "blocked" ? listVendors().map((v) => ({ id: v.id, name: v.name })) : undefined;
@@ -62,6 +66,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           </div>
           <div className="text-right">
             <p className="wide num text-3xl leading-10">{formatMoneySymbol(o.amountMinor, o.currency)}</p>
+            {baseEquivalent ? <p className="num text-xs text-ink-soft">about {baseEquivalent} at reference rates</p> : null}
             <div className="mt-0.5 flex items-center justify-end gap-2">
               <StatePill state={o.state} />
               {o.selectedRail ? <RailTag rail={o.selectedRail} /> : null}
@@ -199,7 +204,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
               <ApprovalContext
                 ask={formatMoney(o.amountMinor, o.currency)}
                 evidence={d.evidence.filter((e) => e.amountMinor !== null).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
-                destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
+                destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : (o.selectedRail === "wise" || o.selectedRail === "bank_file") && d.vendor.bankLabel ? `bank account ${d.vendor.bankLabel}${d.vendor.accountHolder ? ` (${d.vendor.accountHolder})` : ""}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
                 route={(() => { const q = d.quotes.find((x) => x.rail === o.selectedRail && x.available); return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
                 why={o.blockedReason ?? d.policyReasons[0] ?? (o.state === "needs_evidence" ? "No evidence attached" : "")}
               />

@@ -7,6 +7,8 @@ import { newId, now } from "../domain/ids";
 import { can, isRole } from "../auth/roles";
 import { requirePermission, type Actor } from "./users";
 import { payoutHashOf } from "./orchestrator";
+import { RAILS, type Rail } from "../domain/types";
+import { decryptField, encryptField, lastFour } from "../crypto/dataKey";
 
 /**
  * The vendor master: who the business pays and where the money lands.
@@ -41,13 +43,21 @@ export interface VendorProfileInput {
 }
 
 export interface PayoutInput {
-  preferredRail?: "paypal" | "stellar" | null;
+  preferredRail?: Rail | null;
   paypalEmail?: string | null;
   stellarAccount?: string | null;
   bankCountry?: string | null;
   bankCurrency?: string | null;
   bankLabel?: string | null;
+  /** Plain account number as typed. Never stored: validatePayout encrypts it into bankAccountEnc. */
+  bankAccountNumber?: string | null;
+  bankAccountEnc?: string | null;
+  bankCode?: string | null;
+  accountHolder?: string | null;
 }
+
+/** Payout details as stored on a vendor (and in a pending change): the account number only ever encrypted. */
+export type StoredPayout = { preferredRail: Rail | null; paypalEmail: string | null; stellarAccount: string | null; bankCountry: string | null; bankCurrency: string | null; bankLabel: string | null; bankAccountEnc: string | null; bankCode: string | null; accountHolder: string | null };
 
 const EMAIL = /^[^\s@<>"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
 const STELLAR = /^G[A-Z2-7]{55}$/;
@@ -81,26 +91,49 @@ export function validateProfile(raw: unknown): Required<VendorProfileInput> {
   return { name, role, country, email, notes, defaultAccountCode };
 }
 
-export function validatePayout(raw: unknown): Required<PayoutInput> {
+/**
+ * Check payout details and put them in stored form. A typed account number is encrypted here and nowhere else; an
+ * already-encrypted one is accepted only from our own storage (fromStore), never from a form or a vendor's link.
+ */
+export function validatePayout(raw: unknown, opts: { fromStore?: boolean } = {}): StoredPayout {
   if (typeof raw !== "object" || raw === null) throw new Error("Payout details must be an object");
   const r = raw as Record<string, unknown>;
   const paypalEmail = str(r.paypalEmail, "PayPal email", 254)?.toLowerCase() ?? null;
   if (paypalEmail && !EMAIL.test(paypalEmail)) throw new Error("PayPal email does not look like an email address");
   const stellarAccount = str(r.stellarAccount, "Stellar account", 56)?.toUpperCase() ?? null;
   if (stellarAccount && !STELLAR.test(stellarAccount)) throw new Error("Stellar account must be a public key: G followed by 55 letters and digits");
-  const bankLabel = str(r.bankLabel, "Bank account", 40);
-  // Only a masked label is kept here ("BDO ****1234"). A full account number would sit in plain text.
-  if (bankLabel && /\d{5,}/.test(bankLabel.replace(/[\s-]/g, ""))) throw new Error("Enter the bank account masked, like BDO ****1234. Full numbers are not stored here.");
+  let bankLabel = str(r.bankLabel, "Bank account label", 40);
+  // The label is for screens ("BDO ****1234"); a full number belongs in the account number field, which is encrypted.
+  if (bankLabel && /\d{5,}/.test(bankLabel.replace(/[\s-]/g, ""))) throw new Error("Enter the bank label masked, like BDO ****1234; put the full number in the account number field");
   const bankCountry = str(r.bankCountry, "Bank country", 2)?.toUpperCase() ?? null;
   const bankCurrency = str(r.bankCurrency, "Bank currency", 3)?.toUpperCase() ?? null;
+  const bankCode = str(r.bankCode, "Bank code", 11)?.toUpperCase() ?? null;
+  if (bankCode && !/^[A-Z0-9]{2,11}$/.test(bankCode)) throw new Error("Bank code is the bank's short code or SWIFT code, letters and digits");
+  const accountHolder = str(r.accountHolder, "Account holder", 70);
+  let bankAccountEnc: string | null = null;
+  let typed = str(r.bankAccountNumber, "Account number", 34);
+  if (typed) {
+    typed = typed.replace(/[\s-]/g, "");
+    if (!/^\d{6,20}$/.test(typed)) throw new Error("Account number must be 6 to 20 digits");
+    bankAccountEnc = encryptField(typed);
+  } else if (opts.fromStore && typeof r.bankAccountEnc === "string") {
+    decryptField(r.bankAccountEnc); // refuses anything not encrypted with this key
+    bankAccountEnc = r.bankAccountEnc;
+    typed = null;
+  }
+  if (bankAccountEnc) {
+    if (!bankCode || !accountHolder) throw new Error("A bank account number needs the bank code and the account holder's name");
+    if (!bankLabel) bankLabel = `${bankCode} ${lastFour(typed ?? decryptField(bankAccountEnc))}`;
+  }
   if (bankLabel && (!bankCountry || !bankCurrency)) throw new Error("A bank account needs its country and currency");
   if (bankCurrency && !/^[A-Z]{3}$/.test(bankCurrency)) throw new Error("Bank currency must be a 3-letter code");
-  const preferredRail = r.preferredRail === "paypal" || r.preferredRail === "stellar" ? r.preferredRail : null;
-  if (r.preferredRail && !preferredRail) throw new Error("Preferred rail must be paypal or stellar");
+  const preferredRail = (RAILS as readonly unknown[]).includes(r.preferredRail) ? (r.preferredRail as Rail) : null;
+  if (r.preferredRail && !preferredRail) throw new Error(`Preferred rail must be one of: ${RAILS.join(", ")}`);
   if (!paypalEmail && !stellarAccount && !bankLabel) throw new Error("Give at least one way to pay this vendor");
   if (preferredRail === "paypal" && !paypalEmail) throw new Error("Preferred rail is PayPal but no PayPal email is given");
   if (preferredRail === "stellar" && !stellarAccount) throw new Error("Preferred rail is Stellar but no Stellar account is given");
-  return { preferredRail, paypalEmail, stellarAccount, bankCountry, bankCurrency, bankLabel: bankLabel ?? null };
+  if ((preferredRail === "wise" || preferredRail === "bank_file") && !bankAccountEnc) throw new Error("Preferred rail pays a bank account, but no account number is given");
+  return { preferredRail, paypalEmail, stellarAccount, bankCountry, bankCurrency, bankLabel: bankLabel ?? null, bankAccountEnc, bankCode, accountHolder };
 }
 
 /** Add a vendor. Their payout details are on file but unverified, so policy blocks any payment until someone else verifies them. */
@@ -135,8 +168,13 @@ export function updateVendorProfile(db: Db, businessId: string, by: Actor, vendo
 /** New payout details wait for verification. The details on file keep working until then. */
 export function proposePayoutChange(db: Db, businessId: string, by: Actor | { id: string; source: "onboarding" }, vendorId: string, payoutRaw: unknown, note?: string): string {
   if ("role" in by) requirePermission(by, "edit_vendor", "change payout details");
-  mustVendor(db, businessId, vendorId);
-  const payout = validatePayout(payoutRaw);
+  const current = mustVendor(db, businessId, vendorId);
+  // An empty account number field keeps the number on file (it is never sent back to the form); unticking keep drops it.
+  const r = (typeof payoutRaw === "object" && payoutRaw !== null ? payoutRaw : {}) as Record<string, unknown>;
+  const carry = !r.bankAccountNumber && current.bankAccountEnc && r.keepBankAccount !== false;
+  const { keepBankAccount: _k, ...rest } = r;
+  void _k;
+  const payout = carry ? validatePayout({ ...rest, bankAccountEnc: current.bankAccountEnc }, { fromStore: true }) : validatePayout(rest);
   const id = newId("vch");
   db.transaction((tx) => {
     // A newer request replaces an older one still waiting: only one set of proposed details is ever live.
@@ -177,7 +215,7 @@ export function verifyVendorChange(db: Db, businessId: string, by: Actor, change
     self = true;
   }
   const proposed = JSON.parse(ch.proposedJson) as PayoutInput & { profile?: VendorProfileInput; payout?: PayoutInput };
-  const payout = validatePayout(ch.kind === "create" ? proposed.payout : proposed);
+  const payout = validatePayout(ch.kind === "create" ? proposed.payout : proposed, { fromStore: true });
   const profile = ch.kind === "create" ? validateProfile(proposed.profile) : null;
   const ts = now();
   let vendorId = ch.vendorId;
@@ -287,7 +325,7 @@ function mustVendor(db: Db, businessId: string, vendorId: string) {
 export function maskPayout(p: PayoutInput): Record<string, string | null> {
   const email = p.paypalEmail ? p.paypalEmail.replace(/^(.).*(@.*)$/, "$1***$2") : null;
   const stellar = p.stellarAccount ? `${p.stellarAccount.slice(0, 4)}…${p.stellarAccount.slice(-4)}` : null;
-  return { paypalEmail: email, stellarAccount: stellar, bankLabel: p.bankLabel ?? null, preferredRail: p.preferredRail ?? null };
+  return { paypalEmail: email, stellarAccount: stellar, bankLabel: p.bankLabel ?? null, bankCode: p.bankCode ?? null, accountHolder: p.accountHolder ?? null, preferredRail: p.preferredRail ?? null };
 }
 
 /** A pending change laid out for the person checking it: each payout field, proposed against what is on file. */
@@ -304,6 +342,7 @@ export function describeChange(db: Db, ch: typeof vendorChanges.$inferSelect) {
     ["PayPal", payout.paypalEmail ?? "", v?.paypalEmail ?? null],
     ["Stellar", payout.stellarAccount ?? "", v?.stellarAccount ?? null],
     ["Bank", payout.bankLabel ? `${payout.bankLabel}, ${payout.bankCurrency} in ${payout.bankCountry}` : "", v?.bankLabel ? `${v.bankLabel}, ${v.bankCurrency} in ${v.bankCountry}` : null],
+    ["Account holder", payout.accountHolder ?? "", v?.accountHolder ?? null],
     ["Prefers", payout.preferredRail ?? "", v?.preferredRail ?? null],
   );
   return {

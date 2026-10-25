@@ -38,8 +38,8 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     expect(ob.policyDecision).toBe("auto_execute");
     expect(ob.selectedRail).toBe("paypal");
     const quotes = db.select().from(routeQuotes).where(eq(routeQuotes.obligationId, ob.id)).all();
-    expect(quotes).toHaveLength(2);
-    expect(quotes.every((q) => q.available)).toBe(true);
+    expect(quotes).toHaveLength(4);
+    expect(quotes.filter((q) => q.available).map((q) => q.rail).sort()).toEqual(["paypal", "stellar"]);
 
     const r = await executeObligation(db, ob.id, { actor: "user:daniel" });
     expect(r.status).toBe("submitted");

@@ -19,7 +19,7 @@ describe("normalise (agent output is untrusted)", () => {
   });
 
   it("drops absurd, fractional or unsafe amounts", () => {
-    for (const amountMinor of [1e21, 1_000_000_001, 12.5, -5, 0, Number.NaN, "100" as unknown as number]) expect(normalise({ ...good, amountMinor }, input).amountMinor).toBeNull();
+    for (const amountMinor of [1e21, 100_000_000_000_001, 12.5, -5, 0, Number.NaN, "100" as unknown as number]) expect(normalise({ ...good, amountMinor }, input).amountMinor).toBeNull();
   });
 
   it("drops a reference with injected characters or excessive length, and says so", () => {

@@ -1,3 +1,4 @@
+import { toBaseOrZero } from "../fx";
 import { and, desc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "../db";
 import { approvals, businesses, obligations, vendors } from "../db/schema";
@@ -203,7 +204,7 @@ export function autopilotStatus(db: Db, businessId: string): AutopilotStatus {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const rows = db.select().from(obligations).where(eq(obligations.businessId, businessId)).orderBy(desc(obligations.updatedAt)).all();
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get()!;
-  const committed = rows.filter((o) => o.currency === biz.baseCurrency && o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt))).reduce((sum, o) => sum + (o.amountMinor ?? 0), 0);
+  const committed = rows.filter((o) => o.updatedAt >= since && (["execution_pending", "sent", "settled"].includes(o.state) || (o.state === "approved" && !!o.releaseAt))).reduce((sum, o) => sum + toBaseOrZero(o.amountMinor ?? 0, o.currency, biz.baseCurrency), 0);
   const vendorNames = new Map(db.select().from(vendors).where(eq(vendors.businessId, businessId)).all().map((v) => [v.id, v.name]));
   return {
     level: policy.autonomy ?? "assist",

@@ -1,3 +1,4 @@
+import { toBaseOrZero } from "../fx";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import { auditEntries, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
@@ -184,8 +185,8 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     .filter((e) => ["autonomy.changed", "autopilot.paused", "autopilot.resumed"].includes(e.action))
     .map((e) => ({ at: e.createdAt, actor: e.actor, action: e.action, detail: e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : null }));
 
-  const inBase = (xs: CloseItem[]) => xs.filter((x) => x.currency === baseCurrency);
-  const sum = (xs: CloseItem[]) => inBase(xs).reduce((a, x) => a + (x.amountMinor ?? 0), 0);
+  // Totals in the base currency at reference rates.
+  const sum = (xs: CloseItem[]) => xs.reduce((a, x) => a + toBaseOrZero(x.amountMinor ?? 0, x.currency, baseCurrency), 0);
   const stopped = attention.filter((a) => a.kind === "blocked" || a.kind === "refused");
 
   return {
@@ -204,7 +205,7 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
       agentCount: paidByAgent.length,
       peopleMinor: sum(paidByPeople),
       peopleCount: paidByPeople.length,
-      feesMinor: [...paidByAgent, ...paidByPeople].reduce((a, x) => a + (x.feeMinor ?? 0), 0),
+      feesMinor: [...paidByAgent, ...paidByPeople].reduce((a, x) => a + toBaseOrZero(x.feeMinor ?? 0, x.currency, baseCurrency), 0),
       stoppedMinor: sum(stopped),
       stoppedCount: stopped.length,
     },

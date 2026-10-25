@@ -2,7 +2,7 @@ import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
-import { isValidAmountMinor } from "./money";
+import { BASE_AMOUNT_LIMIT_MINOR, SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidAmountMinor } from "./money";
 import { effectiveAutonomy, fingerprintCovered, warningFingerprint } from "./types";
 import type {
   ApprovalPolicy,
@@ -46,13 +46,15 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       : block("amount_present", "Amount or currency is missing")
   );
 
-  // R2b: only the business's base currency can be paid. Thresholds, rails and quotes all assume it.
+  // R2b: the currency must be one the rails can pay, with a reference rate to the base currency so every threshold,
+  // cap and approval limit below compares like with like.
+  const foreign = hasAmount && obligation.currency !== input.baseCurrency;
+  const baseAmount = !hasAmount ? 0 : foreign ? (input.baseAmountMinor ?? null) : obligation.amountMinor!;
   if (hasAmount) {
-    rules.push(
-      obligation.currency === input.baseCurrency
-        ? pass("currency_supported", `Currency ${obligation.currency} is the business base currency`)
-        : block("currency_supported", `Currency ${obligation.currency} is not supported; payments are made in ${input.baseCurrency} only`)
-    );
+    if (!SUPPORTED_CURRENCIES.includes(obligation.currency!)) rules.push(block("currency_supported", `Currency ${obligation.currency} is not supported; payments can be made in ${SUPPORTED_CURRENCIES.join(", ")}`));
+    else if (baseAmount === null) rules.push(block("currency_supported", `No reference rate from ${obligation.currency} to ${input.baseCurrency}, so limits cannot be checked`));
+    else rules.push(pass("currency_supported", foreign ? `${fmt(obligation.amountMinor!, obligation.currency!)} is about ${fmt(baseAmount, input.baseCurrency)}; limits and caps use that` : `Currency ${obligation.currency} is the business base currency`));
+    if (baseAmount !== null && baseAmount > BASE_AMOUNT_LIMIT_MINOR) rules.push(block("amount_sane", `${fmt(obligation.amountMinor!, obligation.currency!)} is above the largest single payment this system accepts; check the amount`));
   }
 
   // R3: evidence required
@@ -234,7 +236,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     return { decision: "hold", reasons, rules };
   }
   const anyWarn = rules.some((r) => r.severity === "warn" && !r.passed);
-  const amount = obligation.amountMinor ?? 0;
+  // Thresholds and caps are in the base currency.
+  const amount = baseAmount ?? 0;
   // Warnings need a human to look; one explicit approval acknowledges them.
   if (anyWarn && input.approvalsCount < 1) {
     return { decision: "require_approval", reasons, rules };
@@ -324,5 +327,7 @@ export function fmt(minor: number, currency: string): string {
   const major = Math.floor(abs / 100);
   const cents = String(abs % 100).padStart(2, "0");
   const sign = minor < 0 ? "-" : "";
+  // Currencies without a minor unit in everyday use (VND) show whole units; the stored hundredths are kept exact.
+  if (ZERO_DECIMAL_CURRENCIES.has(currency) && abs % 100 === 0) return `${sign}${currency} ${major.toLocaleString("en-US")}`;
   return `${sign}${currency} ${major.toLocaleString("en-US")}.${cents}`;
 }

@@ -102,16 +102,19 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "obligationId",
 ];
 
+/** One CSV cell: quoted when needed, and never a live spreadsheet formula. */
+export function csvCell(v: unknown): string {
+  let s = v == null ? "" : String(v);
+  // Vendor-written text must not run as a spreadsheet formula. Numbers like -12.50 stay numbers.
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+  // A line break inside a field can start a new row in some importers: neutralise a formula after any break,
+  // and quote any field holding CR or LF.
+  s = s.replace(/(\r\n|\r|\n)([=+\-@\t])/g, "$1'$2");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 export function toCsv(rows: AccountingPayload[]): string {
-  const esc = (v: unknown) => {
-    let s = v == null ? "" : String(v);
-    // Vendor-written text must not run as a spreadsheet formula. Numbers like -12.50 stay numbers.
-    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
-    // A line break inside a field can start a new row in some importers: neutralise a formula after any break,
-    // and quote any field holding CR or LF.
-    s = s.replace(/(\r\n|\r|\n)([=+\-@\t])/g, "$1'$2");
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  const esc = csvCell;
   const lines = [CSV_COLUMNS.join(",")];
   for (const r of rows) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
   return lines.join("\n") + "\n";

@@ -24,9 +24,9 @@ export interface RoutingDecision {
 /** Differences in effective rate below this many basis points count as a tie. */
 export const TIE_BPS = 50;
 
-/** What the sender spends for this quote: PayPal charges its fee on top, Stellar's fee comes out of the amount. */
+/** What the sender spends for this quote: Stellar's fee comes out of the amount; every other rail charges it on top. */
 export function senderOutlayMinor(q: Pick<RouteQuote, "rail" | "sendAmountMinor" | "feeMinor">): number {
-  return q.rail === "paypal" ? q.sendAmountMinor + q.feeMinor : q.sendAmountMinor;
+  return q.rail === "stellar" ? q.sendAmountMinor : q.sendAmountMinor + q.feeMinor;
 }
 
 /** Recipient-currency units delivered per 1.00 of sender currency spent. */
@@ -35,11 +35,13 @@ export function effectiveRate(q: Pick<RouteQuote, "rail" | "sendAmountMinor" | "
   return outlay > 0 ? q.receiveAmountMinor / outlay : 0;
 }
 
-export function chooseRoute(
-  vendor: VendorPayoutProfile,
-  businessCountry: string,
-  quotes: RouteQuote[]
-): RoutingDecision {
+/**
+ * Who wins a tie: the rails whose whole path Checkrail Pay runs end to end come first. PayPal, then Wise (a real
+ * local bank deposit), then the bank file (a person must upload it), then Stellar (whose bank off-ramp is modelled).
+ */
+const TIE_ORDER: Rail[] = ["paypal", "wise", "bank_file", "stellar"];
+
+export function chooseRoute(vendor: VendorPayoutProfile, businessCountry: string, quotes: RouteQuote[]): RoutingDecision {
   const byRail = Object.fromEntries(quotes.map((q) => [q.rail, q])) as Partial<Record<Rail, RouteQuote>>;
   const available = quotes.filter((q) => q.available);
 
@@ -59,39 +61,39 @@ export function chooseRoute(
 
   if (available.length === 1) {
     const only = available[0];
-    const other = quotes.find((q) => q.rail !== only.rail);
+    const others = quotes.filter((q) => q.rail !== only.rail && !q.available);
     return {
       rail: only.rail,
-      reason: `${label(only.rail)} is the only supported route${other ? ` (${label(other.rail)}: ${other.unavailableReason ?? "unavailable"})` : ""}.`,
+      reason: `${label(only.rail)} is the only supported route${others.length ? ` (${others.map((o) => `${label(o.rail)}: ${o.unavailableReason ?? "unavailable"}`).join("; ")})` : ""}.`,
       quotes,
     };
   }
 
-  // Both available: compare delivered amount per unit the sender spends.
-  const pp = byRail.paypal!;
-  const st = byRail.stellar!;
-  const rp = effectiveRate(pp);
-  const rs = effectiveRate(st);
-  const gapBps = Math.round((Math.abs(rp - rs) / Math.max(rp, rs, 1e-9)) * 10_000);
-  const fmtRate = (r: number) => r.toFixed(2);
-  if (gapBps < TIE_BPS) {
+  // Several available: compare what the vendor receives per unit the sender spends. Within TIE_BPS is a tie.
+  const ranked = [...available].sort((a, b) => effectiveRate(b) - effectiveRate(a));
+  const top = effectiveRate(ranked[0]);
+  const tied = ranked.filter((q) => Math.round(((top - effectiveRate(q)) / Math.max(top, 1e-9)) * 10_000) < TIE_BPS);
+  const fmtRate = (r: number) => (r >= 100 ? r.toLocaleString("en-US", { maximumFractionDigits: 0 }) : r.toFixed(2));
+  if (tied.length > 1) {
+    const pick = [...tied].sort((a, b) => TIE_ORDER.indexOf(a.rail) - TIE_ORDER.indexOf(b.rail))[0];
+    const faster = tied.filter((q) => q.etaSeconds < pick.etaSeconds).map((q) => label(q.rail));
     return {
-      rail: "paypal",
-      reason: `Effectively equal cost: ${pp.receiveCurrency} ${fmtRate(rp)} per ${pp.sendCurrency} spent on PayPal against ${fmtRate(rs)} on Stellar (${(gapBps / 100).toFixed(2)}% apart). PayPal wins the tie because its whole path runs end to end today${st.etaSeconds < pp.etaSeconds ? "; Stellar is faster" : ""}.`,
+      rail: pick.rail,
+      reason: `Effectively equal cost across ${tied.map((q) => label(q.rail)).join(" and ")} (${pick.receiveCurrency} ${fmtRate(effectiveRate(pick))} per ${pick.sendCurrency} spent). ${label(pick.rail)} wins the tie because more of its path runs end to end${faster.length ? `; ${faster.join(" and ")} ${faster.length === 1 ? "is" : "are"} faster` : ""}.`,
       quotes,
     };
   }
-  const best = rp > rs ? pp : st;
-  const other = best === pp ? st : pp;
-  const etaNote = best.etaSeconds < other.etaSeconds ? " and settles faster" : best.etaSeconds > other.etaSeconds ? ` (${label(other.rail)} is faster)` : "";
+  const best = ranked[0];
+  const next = ranked[1];
+  const gapBps = Math.round(((effectiveRate(best) - effectiveRate(next)) / Math.max(effectiveRate(best), 1e-9)) * 10_000);
+  const etaNote = best.etaSeconds < next.etaSeconds ? " and settles faster" : best.etaSeconds > next.etaSeconds ? ` (${label(next.rail)} is faster)` : "";
   return {
     rail: best.rail,
-    reason: `${label(best.rail)} delivers ${(gapBps / 100).toFixed(1)}% more per ${best.sendCurrency} spent (${best.receiveCurrency} ${fmtRate(effectiveRate(best))} against ${fmtRate(effectiveRate(other))}) to ${vendor.name}${etaNote}.`,
+    reason: `${label(best.rail)} delivers ${(gapBps / 100).toFixed(1)}% more per ${best.sendCurrency} spent than ${label(next.rail)} (${best.receiveCurrency} ${fmtRate(effectiveRate(best))} against ${fmtRate(effectiveRate(next))}) to ${vendor.name}${etaNote}.`,
     quotes,
   };
 }
 
 export function label(rail: Rail): string {
-  return rail === "paypal" ? "PayPal" : "Stellar";
+  return rail === "paypal" ? "PayPal" : rail === "stellar" ? "Stellar" : rail === "wise" ? "Wise" : "Bank file";
 }
-

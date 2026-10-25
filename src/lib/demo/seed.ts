@@ -1,11 +1,12 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
-import { hashPayoutDetails, newId } from "../domain/ids";
-import { approveObligation, confirmSettlement, executeObligation, ingestObligation } from "../engine/orchestrator";
+import { newId } from "../domain/ids";
+import { approveObligation, confirmSettlement, executeObligation, ingestObligation, payoutHashOf } from "../engine/orchestrator";
+import { encryptField } from "../crypto/dataKey";
 import { withMockRails } from "../rails";
 
 /**
@@ -50,7 +51,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -63,7 +64,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   seedDemoTeam(db, DEMO_BUSINESS_ID);
   for (const v of DEMO_VENDORS) {
     db.insert(vendors)
-      .values({ ...v, businessId: DEMO_BUSINESS_ID, detailsHash: hashPayoutDetails([v.paypalEmail, v.stellarAccount, v.bankLabel]), verifiedAt: "2026-08-14T09:00:00.000Z", verifiedBy: "user:minh", verificationMethod: "callback", createdBy: "user:daniel", createdAt: ts })
+      .values({ ...v, businessId: DEMO_BUSINESS_ID, detailsHash: payoutHashOf(v), verifiedAt: "2026-08-14T09:00:00.000Z", verifiedBy: "user:minh", verificationMethod: "callback", createdBy: "user:daniel", createdAt: ts })
       .run();
   }
 
@@ -131,7 +132,30 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     actor: "system:booking-webhook",
   });
 
+  if (history) await seedLocalCurrency(db);
+
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
+}
+
+/**
+ * Local currency: Linh's homestay sent her bank details this month (verified by Minh on a call) and now invoices in
+ * VND. PayPal and Stellar pay USD only, so the router sends it through Wise to her BIDV account; at about USD 425
+ * it is above the auto-approve line and waits for a person.
+ */
+async function seedLocalCurrency(db: Db): Promise<void> {
+  const linh = db.select().from(vendors).where(eq(vendors.id, "ven_linh")).get()!;
+  const updated = { ...linh, bankAccountEnc: encryptField("21510002342206"), bankCode: "BIDV", accountHolder: "NGUYEN THI LINH", bankLabel: "BIDV ****2206" };
+  db.update(vendors)
+    .set({ bankAccountEnc: updated.bankAccountEnc, bankCode: updated.bankCode, accountHolder: updated.accountHolder, bankLabel: updated.bankLabel, detailsHash: payoutHashOf(updated), verifiedAt: new Date(Date.now() - 6 * 86_400_000).toISOString(), verifiedBy: "user:minh", verificationMethod: "callback" })
+    .where(eq(vendors.id, "ven_linh"))
+    .run();
+  await ingestObligation(db, {
+    businessId: DEMO_BUSINESS_ID,
+    sourceType: "invoice",
+    rawInput: "Hoa don HS-1027 tu Linh Family Homestay (Du Gia): 12 khach x 2 dem x 450.000 VND, tong cong 10.800.000 VND. Departure HG-4D-1004. Chuyen khoan BIDV giup em.",
+    evidence: [{ kind: "invoice", label: "Homestay invoice HS-1027", amountMinor: 1_080_000_000, currency: "VND", reference: "HS-1027", excerpt: "Linh Family Homestay, Du Gia. 12 guests x 2 nights x VND 450,000 = VND 10,800,000. Dinner and breakfast included. Departure HG-4D-1004." }],
+    actor: "system:email-ingest",
+  });
 }
 
 /**

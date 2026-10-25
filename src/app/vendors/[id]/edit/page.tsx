@@ -28,6 +28,9 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
     bankCountry: v.bankCountry ?? "",
     bankCurrency: v.bankCurrency ?? "",
     bankLabel: v.bankLabel ?? "",
+    bankAccountNumber: "",
+    bankCode: v.bankCode ?? "",
+    accountHolder: v.accountHolder ?? "",
   };
   return (
     <>
@@ -48,7 +51,7 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
           <VendorForm mode="profile" initial={initial} vendorId={v.id} />
         </Panel>
         <Panel title="Payout details" aside="needs a second person">
-          <VendorForm mode="payout" initial={initial} vendorId={v.id} />
+          <VendorForm mode="payout" initial={initial} vendorId={v.id} hasAccount={Boolean(v.bankAccountEnc)} />
         </Panel>
       </div>
     </>

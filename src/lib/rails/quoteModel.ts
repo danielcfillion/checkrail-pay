@@ -1,6 +1,6 @@
 import type { RouteQuote, VendorPayoutProfile } from "../domain/types";
 import { getCorridor, corridorKey } from "./corridors";
-import { SUPPORTED_CURRENCIES, applyRateMicro, bpsCeil, effectiveRateMicro, isValidAmountMinor, microToDecimal, pctToBps } from "../domain/money";
+import { BASE_AMOUNT_LIMIT_MINOR, SUPPORTED_CURRENCIES, applyRateMicro, bpsCeil, effectiveRateMicro, isValidAmountMinor, microToDecimal, pctToBps } from "../domain/money";
 
 /**
  * Pure quote arithmetic shared by mock and live adapters.
@@ -20,8 +20,8 @@ export function quotePayPal(vendor: VendorPayoutProfile, amountMinor: number, cu
   if (!c || !c.paypal.available) {
     return { ...base, available: false, unavailableReason: c?.paypal.unavailableReason ?? `No PayPal corridor configured for ${key}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c?.recipientCurrency ?? currency, etaSeconds: 0, provider: "PayPal", explanation: "" };
   }
-  if (!isValidAmountMinor(amountMinor) || !SUPPORTED_CURRENCIES.includes(currency)) {
-    return { ...base, available: false, unavailableReason: `Cannot quote ${currency} ${amountMinor}: amount must be a positive whole number of cents in ${SUPPORTED_CURRENCIES.join("/")}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.paypal.provider, explanation: "" };
+  if (!isValidAmountMinor(amountMinor) || amountMinor > BASE_AMOUNT_LIMIT_MINOR || currency !== "USD" || !SUPPORTED_CURRENCIES.includes(currency)) {
+    return { ...base, available: false, unavailableReason: currency !== "USD" ? `PayPal payouts are sent in USD; this invoice is in ${currency}` : "Amount must be a positive whole number of cents, up to USD 10,000,000", feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.paypal.provider, explanation: "" };
   }
   if (!vendor.paypalEmail) {
     return { ...base, available: false, unavailableReason: `${vendor.name} has no PayPal account on file`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.paypal.provider, explanation: "" };
@@ -64,8 +64,8 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
   if (!c || !c.stellar.available) {
     return { ...base, available: false, unavailableReason: c?.stellar.unavailableReason ?? `No Stellar anchor configured for ${key}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c?.recipientCurrency ?? currency, etaSeconds: 0, provider: "Stellar", explanation: "" };
   }
-  if (!isValidAmountMinor(amountMinor) || !SUPPORTED_CURRENCIES.includes(currency)) {
-    return { ...base, available: false, unavailableReason: `Cannot quote ${currency} ${amountMinor}: amount must be a positive whole number of cents in ${SUPPORTED_CURRENCIES.join("/")}`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.stellar.provider, explanation: "" };
+  if (!isValidAmountMinor(amountMinor) || amountMinor > BASE_AMOUNT_LIMIT_MINOR || currency !== "USD" || !SUPPORTED_CURRENCIES.includes(currency)) {
+    return { ...base, available: false, unavailableReason: currency !== "USD" ? `Stellar sends PYUSD, a US dollar coin; this invoice is in ${currency}` : "Amount must be a positive whole number of cents, up to USD 10,000,000", feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: c.stellar.provider, explanation: "" };
   }
   const s = c.stellar;
   const needsAnchor = c.recipientCurrency !== "USD";

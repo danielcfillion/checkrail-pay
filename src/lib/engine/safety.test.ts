@@ -286,7 +286,7 @@ describe("C2: amend patches are validated at runtime", () => {
   });
 
   it("rejects bad values", async () => {
-    for (const bad of [0.5, -5, 0, 1e12, Number.NaN, "800"]) await expect(amend({ amountMinor: bad })).rejects.toThrow(/amountMinor/);
+    for (const bad of [0.5, -5, 0, 1e15, Number.NaN, "800"]) await expect(amend({ amountMinor: bad })).rejects.toThrow(/amountMinor/);
     await expect(amend({ currency: "EUR" })).rejects.toThrow(/currency/);
     await expect(amend({ sourceRef: "A B" })).rejects.toThrow(/sourceRef/);
     await expect(amend({ sourceRef: "X".repeat(65) })).rejects.toThrow(/sourceRef/);

@@ -113,13 +113,24 @@ describe("evaluatePolicy", () => {
     expect(evaluatePolicy(DEFAULT_POLICY, base({ vendor: null })).decision).toBe("block");
   });
 
-  it("blocks a currency other than the business base currency (M4)", () => {
-    const out = evaluatePolicy(DEFAULT_POLICY, base({
-      obligation: { id: "o1", amountMinor: 18_000, currency: "PHP", sourceRef: "JOB-0921", vendorId: "v1" },
-      evidence: [],
-    }));
-    expect(out.decision).toBe("block");
-    expect(out.reasons.join(" ")).toMatch(/Currency PHP is not supported/);
+  it("blocks a currency the rails cannot pay, or one with no reference rate (M4)", () => {
+    const eur = evaluatePolicy(DEFAULT_POLICY, base({ obligation: { id: "o1", amountMinor: 18_000, currency: "EUR", sourceRef: "JOB-0921", vendorId: "v1" }, evidence: [] }));
+    expect(eur.decision).toBe("block");
+    expect(eur.reasons.join(" ")).toMatch(/Currency EUR is not supported/);
+    const norate = evaluatePolicy(DEFAULT_POLICY, base({ obligation: { id: "o1", amountMinor: 18_000, currency: "PHP", sourceRef: "JOB-0921", vendorId: "v1" }, evidence: [], baseAmountMinor: null }));
+    expect(norate.reasons.join(" ")).toMatch(/No reference rate from PHP/);
+  });
+
+  it("compares a local-currency amount with thresholds in the base currency", () => {
+    const ev = [{ id: "e1", kind: "invoice", label: "Invoice from Maria Santos", amountMinor: 1_080_000_000, currency: "VND", reference: "JOB-0921", excerpt: "Maria Santos, VND 10,800,000" }];
+    const vnd = (baseAmountMinor: number) => evaluatePolicy(DEFAULT_POLICY, base({ obligation: { id: "o1", amountMinor: 1_080_000_000, currency: "VND", sourceRef: "JOB-0921", vendorId: "v1" }, evidence: ev, baseAmountMinor }));
+    // VND 10,800,000 is about USD 425: above the USD 250 auto-approve line, so a person approves.
+    const above = vnd(42_520);
+    expect(above.rules.find((r) => r.ruleId === "currency_supported")).toMatchObject({ passed: true });
+    expect(above.decision).toBe("require_approval");
+    expect(above.reasons.join(" ")).toMatch(/auto-execute threshold USD 250/);
+    expect(vnd(20_000).decision).toBe("auto_execute");
+    expect(vnd(2_000_000_000).rules.find((r) => r.ruleId === "amount_sane")?.passed).toBe(false);
   });
 
   it("blocks amounts that are not a safe in-range integer", () => {

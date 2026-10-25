@@ -23,7 +23,7 @@ export function formatMoney(minor: number | null | undefined, currency: string |
 export function formatMoneySymbol(minor: number | null | undefined, currency: string | null | undefined): string {
   if (minor === null || minor === undefined) return "";
   const cur = (currency ?? "USD").toUpperCase();
-  const symbols: Record<string, string> = { USD: "$", PHP: "₱", VND: "₫", EUR: "€", GBP: "£", CAD: "CA$" };
+  const symbols: Record<string, string> = { USD: "$", PHP: "₱", VND: "₫", THB: "฿", EUR: "€", GBP: "£", CAD: "CA$" };
   const sym = symbols[cur];
   const body = formatMoney(minor, cur, { code: false });
   return sym ? `${sym}${body}` : `${cur} ${body}`;
@@ -211,6 +211,8 @@ export function humaniseActor(actor: string | null | undefined): string {
 export function railLabel(rail: string | null | undefined): string {
   if (rail === "paypal") return "PayPal";
   if (rail === "stellar") return "Stellar";
+  if (rail === "wise") return "Wise";
+  if (rail === "bank_file") return "Bank file";
   return rail ?? "";
 }
 
@@ -262,7 +264,7 @@ export function countryName(code: string | null | undefined): string {
 /** Extracts the evidenced amount in minor units from a blocked reason like "... says USD 800.00 ...". */
 export function evidencedAmountFromReason(reason: string | null | undefined): number | null {
   if (!reason) return null;
-  const m = reason.match(/says [A-Z]{3} ([\d,]+\.\d{2})/);
+  const m = reason.match(/says [A-Z]{3} ([\d,]+(?:\.\d{2})?)/);
   if (!m) return null;
   return Math.round(Number(m[1].replace(/,/g, "")) * 100);
 }

@@ -1,3 +1,4 @@
+import { fmt } from "../domain/policy";
 import { namesVendorFully } from "../domain/vendorNames";
 import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../domain/types";
 
@@ -7,7 +8,7 @@ import type { AiInterpretation, EvidenceItem, VendorPayoutProfile } from "../dom
  * model produces, so the policy engine does not care which one ran.
  */
 
-const CURRENCY_WORDS: Record<string, string> = { "$": "USD", usd: "USD", "us$": "USD", php: "PHP", "₱": "PHP", vnd: "VND", "₫": "VND", eur: "EUR", "€": "EUR", gbp: "GBP", "£": "GBP" };
+const CURRENCY_WORDS: Record<string, string> = { "$": "USD", usd: "USD", "us$": "USD", php: "PHP", "₱": "PHP", vnd: "VND", "₫": "VND", "đ": "VND", thb: "THB", "฿": "THB", eur: "EUR", "€": "EUR", gbp: "GBP", "£": "GBP" };
 
 /** Requests longer than this are read from their first part only: no real payment request is longer. */
 export const MAX_REQUEST_CHARS = 20_000;
@@ -21,7 +22,7 @@ export function extractAmount(text: string, defaultCurrency?: string): { amountM
   // Linear by construction: a match cannot start right after a digit, comma or dot (so it never restarts inside a
   // long run like "000,000,000,..."), and plain digit runs are bounded. The old form was quadratic in the input.
   const num = "(\\d{1,3}(?:,\\d{3}){1,6}|\\d{1,12})(?:\\.(\\d{1,2}))?";
-  const re = new RegExp(`(?<![A-Za-z0-9,.-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|EUR|GBP))(?![A-Za-z0-9-])`, "gi");
+  const re = new RegExp(`(?<![A-Za-z0-9,.-])(?:(\\$|US\\$|USD|PHP|₱|VND|₫|THB|฿|EUR|€|GBP|£)\\s?${num}|${num}\\s?(USD|PHP|VND|₫|đ|THB|฿|EUR|GBP))(?![A-Za-z0-9-]|[.,]\\d)`, "gi");
   const found: Array<{ amountMinor: number; currency: string; index: number }> = [];
   for (const m of text.matchAll(re)) {
     const symbol = (m[1] ?? m[6] ?? "").toLowerCase();
@@ -30,6 +31,13 @@ export function extractAmount(text: string, defaultCurrency?: string): { amountM
     const value = Number.parseFloat(frac ? `${whole}.${frac}` : whole);
     if (!Number.isFinite(value) || value <= 0) continue;
     found.push({ amountMinor: Math.round(value * 100), currency: CURRENCY_WORDS[symbol] ?? symbol.toUpperCase(), index: m.index ?? 0 });
+  }
+  // Vietnamese invoices group thousands with dots: "2.500.000 VND", "10.800.000đ". Only for VND, which has no
+  // decimals, so a dot there can never be a decimal point.
+  const vnd = /(?<![A-Za-z0-9,.-])(?:(?:VND|₫)\s?(\d{1,3}(?:\.\d{3}){1,4})|(\d{1,3}(?:\.\d{3}){1,4})\s?(?:VND|₫|đ|đồng|dong))(?![A-Za-z0-9-])/gi;
+  for (const m of text.matchAll(vnd)) {
+    const value = Number((m[1] ?? m[2] ?? "").replace(/\./g, ""));
+    if (Number.isFinite(value) && value > 0) found.push({ amountMinor: value * 100, currency: "VND", index: m.index ?? 0 });
   }
   if (found.length === 0) {
     // Chat shorthand: "send maria 180", "pay him 1,200 today". Only with a verb in front, a plain figure
@@ -145,7 +153,7 @@ export function interpretWithRules(input: {
       const byRef = ref ? evidenced.find((e) => e.reference && e.reference.toUpperCase() === ref) : undefined;
       const e = byRef ?? [...evidenced].sort((a, b) => Math.abs((a.amountMinor ?? 0) - money.amountMinor) - Math.abs((b.amountMinor ?? 0) - money.amountMinor))[0];
       const diff = money.amountMinor - (e.amountMinor ?? 0);
-      flags.push(`Requested amount differs from ${e.label} by ${e.currency} ${(Math.abs(diff) / 100).toFixed(2)} (${diff > 0 ? "higher" : "lower"})`);
+      flags.push(`Requested amount differs from ${e.label} by ${fmt(Math.abs(diff), e.currency!)} (${diff > 0 ? "higher" : "lower"})`);
       confidence -= 25;
     }
     const withRefs = evidence.filter((e) => e.reference);
@@ -173,7 +181,7 @@ export function interpretWithRules(input: {
 
   const descr = describe(rawInput, vendor, money, ref);
   const summary = vendor && money
-    ? `${vendor.name} is owed ${money.currency} ${(money.amountMinor / 100).toFixed(2)}${ref ? ` for ${ref}` : ""}${dueDate ? `, due ${dueDate}` : ""}. ${flags.length === 0 ? "The request matches the attached evidence." : `${flags.length} concern${flags.length === 1 ? "" : "s"} noted.`}`
+    ? `${vendor.name} is owed ${fmt(money.amountMinor, money.currency)}${ref ? ` for ${ref}` : ""}${dueDate ? `, due ${dueDate}` : ""}. ${flags.length === 0 ? "The request matches the attached evidence." : `${flags.length} concern${flags.length === 1 ? "" : "s"} noted.`}`
     : `Could not fully determine the obligation from the input. ${missing.length ? `Missing: ${missing.join(", ")}.` : ""}`;
 
   return {

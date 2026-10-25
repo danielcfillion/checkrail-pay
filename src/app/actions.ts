@@ -19,6 +19,7 @@ import type { Rail, SourceType } from "@/lib/domain/types";
 import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
 import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/runs";
+import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -442,6 +443,36 @@ export async function releaseRunAction(runId: string): Promise<ActionResult> {
     done([`/runs/${runId}`, "/runs"]);
     const parts = [`${r.paid} paid`, r.skipped ? `${r.skipped} skipped` : "", r.failed ? `${r.failed} failed` : "", r.unclear ? `${r.unclear} unclear` : ""].filter(Boolean);
     return { ok: r.failed === 0 && r.unclear === 0, message: `Run released: ${parts.join(", ")}.` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Bank files. */
+
+export async function confirmBankFileAction(batchId: string): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const n = await confirmBatch(db, biz.id, await currentActor(), batchId);
+    done();
+    done(["/bank-files"]);
+    return { ok: true, message: `Confirmed. ${n} payment${n === 1 ? "" : "s"} settled.` };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function returnBankLineAction(lineId: string, reason: string): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    await returnLine(db, biz.id, await currentActor(), lineId, typeof reason === "string" ? reason : "");
+    done();
+    done(["/bank-files"]);
+    return { ok: true, message: "Recorded as returned. The payment failed and can be retried or cancelled." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

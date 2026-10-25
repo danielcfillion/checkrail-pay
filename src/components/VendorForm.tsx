@@ -19,9 +19,12 @@ export type VendorFormValues = {
   bankCountry: string;
   bankCurrency: string;
   bankLabel: string;
+  bankAccountNumber: string;
+  bankCode: string;
+  accountHolder: string;
 };
 
-export const EMPTY_VENDOR: VendorFormValues = { name: "", role: "guide", country: "VN", email: "", notes: "", defaultAccountCode: "", preferredRail: "", paypalEmail: "", stellarAccount: "", bankCountry: "", bankCurrency: "", bankLabel: "" };
+export const EMPTY_VENDOR: VendorFormValues = { name: "", role: "guide", country: "VN", email: "", notes: "", defaultAccountCode: "", preferredRail: "", paypalEmail: "", stellarAccount: "", bankCountry: "", bankCurrency: "", bankLabel: "", bankAccountNumber: "", bankCode: "", accountHolder: "" };
 
 const ROLES = ["guide", "driver", "homestay", "hotel", "creator", "supplier", "contractor"];
 const COUNTRIES: Array<[string, string]> = [
@@ -39,9 +42,10 @@ type Mode = "create" | "profile" | "payout" | "onboard-new" | "onboard-existing"
  * One form for the vendor master: add a vendor, edit their profile, request new payout details, or (on the public
  * onboarding page) let the vendor enter their own. Payout fields are never saved straight onto the vendor.
  */
-export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token }: { mode: Mode; initial?: VendorFormValues; vendorId?: string; token?: string }) {
+export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token, hasAccount = false }: { mode: Mode; initial?: VendorFormValues; vendorId?: string; token?: string; hasAccount?: boolean }) {
   const [v, setV] = useState<VendorFormValues>(initial);
   const [note, setNote] = useState("");
+  const [dropAccount, setDropAccount] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -52,7 +56,7 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token }: { 
   const internal = mode === "create" || mode === "profile";
 
   const profile = { name: v.name, role: v.role, country: v.country, email: v.email || null, notes: v.notes || null, defaultAccountCode: v.defaultAccountCode || null };
-  const payout = { preferredRail: v.preferredRail || null, paypalEmail: v.paypalEmail || null, stellarAccount: v.stellarAccount || null, bankCountry: v.bankCountry || null, bankCurrency: v.bankCurrency || null, bankLabel: v.bankLabel || null };
+  const payout = { preferredRail: v.preferredRail || null, paypalEmail: v.paypalEmail || null, stellarAccount: v.stellarAccount || null, bankCountry: v.bankCountry || null, bankCurrency: v.bankCurrency || null, bankLabel: v.bankLabel || null, bankAccountNumber: v.bankAccountNumber || null, bankCode: v.bankCode || null, accountHolder: v.accountHolder || null };
 
   const submit = () =>
     start(async () => {
@@ -65,7 +69,7 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token }: { 
         toast(r.message, r.ok ? "ok" : "error");
         if (r.ok) router.push(`/vendors/${vendorId}`);
       } else if (mode === "payout") {
-        const r = await proposePayoutAction(vendorId!, payout, note || undefined);
+        const r = await proposePayoutAction(vendorId!, { ...payout, keepBankAccount: !dropAccount }, note || undefined);
         toast(r.message, r.ok ? "ok" : "error");
         if (r.ok) router.push(`/vendors/${vendorId}`);
       } else {
@@ -141,8 +145,14 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token }: { 
           <Field label="Stellar account (public key)" id="v-xlm">
             <input id="v-xlm" className="field num" value={v.stellarAccount} onChange={set("stellarAccount")} maxLength={56} placeholder="G..." spellCheck={false} />
           </Field>
-          <Field label="Bank, masked (optional)" id="v-bank">
-            <input id="v-bank" className="field num" value={v.bankLabel} onChange={set("bankLabel")} maxLength={40} placeholder="Vietcombank ****1234" />
+          <Field label="Bank account number" id="v-acct">
+            <input id="v-acct" className="field num" value={v.bankAccountNumber} onChange={set("bankAccountNumber")} maxLength={34} inputMode="numeric" autoComplete="off" placeholder={initial.bankLabel ? `on file: ${initial.bankLabel}` : "0071000123456"} />
+          </Field>
+          <Field label="Bank code" id="v-bcode">
+            <input id="v-bcode" className="field num" value={v.bankCode} onChange={set("bankCode")} maxLength={11} placeholder="VCB, TCB, BIDV, BDO, BPI" />
+          </Field>
+          <Field label="Name on the account" id="v-holder">
+            <input id="v-holder" className="field" value={v.accountHolder} onChange={set("accountHolder")} maxLength={70} placeholder="NGUYEN THI LINH" />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Bank country" id="v-bc">
@@ -157,8 +167,16 @@ export function VendorForm({ mode, initial = EMPTY_VENDOR, vendorId, token }: { 
               <option value="">{internal ? "Let the router choose" : "No preference"}</option>
               <option value="paypal">PayPal</option>
               <option value="stellar">Stellar (PYUSD)</option>
+              <option value="wise">Bank transfer through Wise</option>
+              <option value="bank_file">Bank transfer, domestic file (Vietnam)</option>
             </select>
           </Field>
+          {mode === "payout" && hasAccount ? (
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" checked={dropAccount} onChange={(e) => setDropAccount(e.target.checked)} />
+              Remove the bank account number on file (leave the number field empty to keep it)
+            </label>
+          ) : null}
           {mode === "payout" ? (
             <Field label="Why the change (optional)" id="v-note">
               <input id="v-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="Vendor called: new PayPal account" />

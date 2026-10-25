@@ -29,7 +29,7 @@ describe("money helpers", () => {
   });
   it("validates amounts and references", () => {
     expect(isValidAmountMinor(1)).toBe(true);
-    for (const bad of [0, -1, 1.5, 1e21, 1_000_000_001, Number.NaN, "5", null]) expect(isValidAmountMinor(bad)).toBe(false);
+    for (const bad of [0, -1, 1.5, 1e21, 100_000_000_000_001, Number.NaN, "5", null]) expect(isValidAmountMinor(bad)).toBe(false);
     expect(isValidSourceRef("INV-2026-0152")).toBe(true);
     expect(isValidSourceRef("JOB/HG.4D#09:14")).toBe(true);
     for (const bad of ["", " INV", "A B", "A\nB", "<b>", "x".repeat(65), "-LEADING"]) expect(isValidSourceRef(bad)).toBe(false);
