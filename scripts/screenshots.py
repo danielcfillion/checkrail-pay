@@ -28,12 +28,17 @@ def story_ids():
         "duplicate": by_ref.get("JOB-HG4D-0914"),
         "paid": by_ref.get("JOB-HG4D-0921"),
         "ana": by_ref.get("JOB-PAL3D-0927"),
+        "vnd": by_ref.get("HS-1027"),
+        "deposit": by_ref.get("INV-DML-1010"),
     }
 
 def main():
     ids = story_ids()
     headers = {}
-    auth = os.environ.get("CHECKRAIL_BASIC_AUTH")
+    auth = os.environ.get("SCREENSHOT_AUTH") or os.environ.get("CHECKRAIL_BASIC_AUTH")
+    if not auth and os.environ.get("CHECKRAIL_USERS"):
+        # First configured login, user:password (the role part is dropped).
+        auth = ":".join(os.environ["CHECKRAIL_USERS"].split(",")[0].split(":")[:2])
     if auth:
         headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
     shots = [
@@ -51,6 +56,13 @@ def main():
         ("daily-close-dark.png", "/close", 1440, 1100, "dark"),
         ("autonomy-settings.png", "/settings", 1440, 1100, "light"),
         ("demo.png", "/demo", 1440, 1000, "light"),
+        ("vnd-invoice.png", f"/obligations/{ids['vnd']}", 1440, 1500, "light"),
+        ("deposit.png", f"/obligations/{ids['deposit']}", 1440, 1300, "light"),
+        ("vendor-checks.png", "/vendors", 1440, 1300, "light"),
+        ("payment-runs.png", "/runs", 1440, 1000, "light"),
+        ("books.png", "/books", 1440, 1200, "light"),
+        ("departures.png", "/departures", 1440, 900, "light"),
+        ("team.png", "/settings", 1440, 1700, "light"),
     ]
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
