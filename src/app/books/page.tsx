@@ -56,7 +56,7 @@ export default async function BooksPage() {
                       </td>
                       <td className="num text-ink-soft">{r.reference}</td>
                       <td className="num hidden text-ink-soft sm:table-cell">{r.dueDate}</td>
-                      <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} days late` : "not yet due"}</td>
+                      <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
                       <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : r.state.replace(/_/g, " ")}</td>
                       <td className="r num">{formatMoney(r.amountMinor, r.currency)}</td>
                     </tr>

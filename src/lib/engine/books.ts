@@ -193,7 +193,8 @@ function bucketOf(days: number): (typeof AGE_BUCKETS)[number] {
 
 /**
  * What the business owes and how late it is: open bills at their open amount, and payments not tied to a bill that
- * are agreed or waiting but not yet paid. Overdue counts from the due date, or the date raised when there is none.
+ * are agreed or waiting but not yet paid. Blocked requests are left out until fixed: a duplicate is not owed, and a
+ * mismatched amount is not owed as asked. Overdue counts from the due date, or the date raised when there is none.
  */
 export function agedPayables(db: Db, businessId: string, today = localDateString()): { rows: PayableRow[]; totals: Record<string, number>; baseCurrency: string } {
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get()!;
@@ -210,7 +211,7 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
     .select({ o: obligations, vendorName: vendors.name })
     .from(obligations)
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
-    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence", "blocked"])))
+    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence"])))
     .all();
   for (const { o, vendorName } of obs) {
     if (o.billId || !o.amountMinor || !o.currency) continue;

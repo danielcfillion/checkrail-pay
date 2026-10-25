@@ -147,7 +147,7 @@ export interface EvidenceItem {
   reference: string | null;
   excerpt: string | null;
   /** Who supplied this record. Operator-supplied evidence is untrusted; system evidence comes from an integration. Unset means system. */
-  provenance?: "system" | "operator" | "document";
+  provenance?: "system" | "operator" | "document" | "vendor";
 }
 
 /** Output of the AI obligation agent. The agent has no spending authority; it only produces this. */

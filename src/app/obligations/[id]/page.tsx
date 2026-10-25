@@ -12,6 +12,7 @@ import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
 import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, stateLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
+import { VendorLinkButton } from "@/components/VendorLinkButton";
 import { ObligationStageProvider, StageCheckLine } from "@/components/ObligationStage";
 import { RouteCompare } from "@/components/RouteCompare";
 import { RuleChecklist } from "@/components/RuleChecklist";
@@ -262,6 +263,11 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           ) : null}
           <Panel title="Actions" aside={stateLabel(o.state)}>
             <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} vendorChoices={vendorChoices} />
+            {o.vendorId && (["sent", "settled"].includes(o.state) ? !viewer || viewer.can("pay") : ["needs_evidence", "blocked", "awaiting_approval"].includes(o.state) && (!viewer || viewer.can("amend"))) ? (
+              <div className="mt-4 border-t pt-3 hairline">
+                <VendorLinkButton kind={["sent", "settled"].includes(o.state) ? "remittance" : "evidence"} obligationId={o.id} />
+              </div>
+            ) : null}
           </Panel>
 
           {bill ? (

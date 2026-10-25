@@ -27,7 +27,7 @@ export function middleware(req: NextRequest) {
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
 
   if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
-  if (/^\/(onboard|evidence)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
+  if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
     headers.set(PUBLIC_HEADER, "1");
     return NextResponse.next({ request: { headers } });
   }

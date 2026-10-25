@@ -450,3 +450,22 @@ export const reconciliations = sqliteTable("reconciliations", {
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+/** Links sent to a vendor about one payment: a remittance advice to view, or a request to upload missing evidence. */
+export const vendorLinks = sqliteTable(
+  "vendor_links",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    kind: text("kind").notNull(), // remittance | evidence
+    tokenHash: text("token_hash").notNull(),
+    obligationId: text("obligation_id").notNull(),
+    vendorId: text("vendor_id").notNull(),
+    note: text("note"),
+    expiresAt: text("expires_at").notNull(),
+    usedAt: text("used_at"),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("vendor_links_token_hash_unique").on(t.tokenHash)]
+);

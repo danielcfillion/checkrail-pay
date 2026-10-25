@@ -187,7 +187,7 @@ export function ActionBar(p: Props) {
       if (!can.amend) return <Waiting>Held until a job sheet, invoice or contract is attached. A clerk or the owner adds it.</Waiting>;
       return (
         <div className="space-y-3">
-          <p className="text-ink-soft">Policy is holding this until a job sheet, invoice or contract is attached. There is no evidence form on this page yet: re-create the obligation with the records attached and cancel this one.</p>
+          <p className="text-ink-soft">Policy is holding this until a job sheet, invoice or contract is attached. Ask the vendor for it with the link below (their upload is read and checked like any record), or re-create the request with the records attached and cancel this one.</p>
           <div className="flex flex-wrap gap-2">
             <Link href="/obligations/new" className="btn">
               Re-create with evidence

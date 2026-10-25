@@ -24,6 +24,7 @@ import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
 import { importDepartures, setRate } from "@/lib/engine/rates";
 import { parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
+import { createEvidenceRequest, createRemittanceLink, remittanceMessage, viewRemittance } from "@/lib/engine/vendorLinks";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -595,6 +596,28 @@ export async function setPeriodLockAction(through: string | null): Promise<Actio
     await withBusiness((db, b, who) => setPeriodLock(db, b, who, through || null));
     done(["/books"]);
     return { ok: true, message: through ? `Books closed through ${through}.` : "Period reopened." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Vendor links: remittance advice and evidence requests. */
+
+export async function createVendorLinkAction(kind: "remittance" | "evidence", obligationId: string, note?: string): Promise<ActionResult & { path?: string; text?: string }> {
+  try {
+    if (kind !== "remittance" && kind !== "evidence") throw new Error("Unknown link");
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const who = await currentActor();
+    if (kind === "remittance") {
+      const token = createRemittanceLink(db, biz.id, who, obligationId);
+      const r = viewRemittance(db, token)!;
+      return { ok: true, message: "Remittance link ready. Copy it now: it is shown once.", path: `/remit/${token}`, text: remittanceMessage(r, "{link}") };
+    }
+    const token = createEvidenceRequest(db, biz.id, who, obligationId, typeof note === "string" ? note : null);
+    done([`/obligations/${obligationId}`]);
+    return { ok: true, message: "Evidence request ready. Copy it now: it is shown once.", path: `/evidence/${token}` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

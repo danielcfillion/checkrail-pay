@@ -916,7 +916,25 @@ export function listEvidence(db: Db, obligationId: string): EvidenceItem[] {
     .from(evidenceTable)
     .where(eq(evidenceTable.obligationId, obligationId))
     .all()
-    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : e.provenance === "document" ? ("document" as const) : ("system" as const) }));
+    .map((e) => ({ id: e.id, kind: e.kind, label: e.label, amountMinor: e.amountMinor, currency: e.currency, reference: e.reference, excerpt: e.excerpt, provenance: e.provenance === "operator" ? ("operator" as const) : e.provenance === "document" ? ("document" as const) : e.provenance === "vendor" ? ("vendor" as const) : ("system" as const) }));
+}
+
+/**
+ * Add a record to a payment that is still being prepared (missing evidence, or blocked), then read and check it
+ * again. Used by the vendor's evidence link; the record is marked as the vendor's, which policy treats as a claim.
+ */
+export async function addEvidence(db: Db, obligationId: string, actor: string, item: Omit<EvidenceItem, "id">, attachmentId: string | null): Promise<void> {
+  const ob = mustGet(db, obligationId);
+  if (!["drafted", "needs_evidence", "blocked", "awaiting_approval"].includes(ob.state)) throw new Error("This payment is no longer waiting for evidence");
+  db.transaction((tx) => {
+    tx.insert(evidenceTable).values({ id: newId("evd"), obligationId, kind: item.kind, label: item.label.slice(0, 120), amountMinor: item.amountMinor, currency: item.currency, reference: item.reference, excerpt: item.excerpt?.slice(0, 600) ?? null, provenance: item.provenance ?? "operator", attachmentId, createdAt: now() }).run();
+    if (attachmentId) tx.update(attachments).set({ obligationId }).where(eq(attachments.id, attachmentId)).run();
+  });
+  // Approvals given before the new record no longer cover what is now on file.
+  db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
+  audit(db, { obligationId, actor, action: "evidence.added", detail: { kind: item.kind, label: item.label, provenance: item.provenance ?? "operator", attachmentId } });
+  if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.resolved", { note: "new evidence" });
+  await processObligation(db, obligationId);
 }
 
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {

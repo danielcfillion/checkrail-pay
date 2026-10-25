@@ -55,10 +55,11 @@ describe("books", () => {
   });
 
   it("ages what is owed from the due date", () => {
-    db.update(obligations).set({ dueDate: "2026-07-01" }).where(eq(obligations.id, story.blockedMismatch)).run();
+    db.update(obligations).set({ dueDate: "2026-07-01" }).where(eq(obligations.id, story.paypal)).run();
     const a = agedPayables(db, DEMO_BUSINESS_ID, "2026-10-26");
-    const row = a.rows.find((r) => r.id === story.blockedMismatch)!;
+    const row = a.rows.find((r) => r.id === story.paypal)!;
     expect(row).toMatchObject({ bucket: "Over 90 days", daysOverdue: 117 });
-    expect(a.totals["Over 90 days"]).toBeGreaterThanOrEqual(96_000);
+    expect(a.totals["Over 90 days"]).toBe(18_000);
+    expect(a.rows.some((r) => r.id === story.blockedMismatch)).toBe(false);
   });
 });

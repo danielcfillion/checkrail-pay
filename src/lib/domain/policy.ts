@@ -70,6 +70,10 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   if (evidence.some((e) => e.provenance === "operator")) {
     rules.push(warn("evidence_provenance", "Evidence supplied by operator, not system; check it against the source documents"));
   }
+  // A document the vendor uploaded through their link is their claim: a person reads it before it counts.
+  if (evidence.some((e) => e.provenance === "vendor")) {
+    rules.push(warn("evidence_provenance", "The vendor uploaded a document through their evidence link; read it before approving"));
+  }
 
   // R3a: the request itself should name the payee. Without this a reader (rules or Claude) that picked a vendor
   // from the documents alone could pay whoever a supplier's invoice happens to name.
