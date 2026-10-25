@@ -8,6 +8,7 @@ import { getViewer, isPublicPage } from "@/lib/viewer";
 import { ROLE_LABEL } from "@/lib/auth/roles";
 import { getDb } from "@/lib/db";
 import { pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
+import { listRuns } from "@/lib/engine/runs";
 
 /*
  * Archivo variable (weight 100 to 900, width 62 to 125), the same file Google
@@ -47,6 +48,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   let viewer = null;
   let waiting = 0;
   let vendorChecks = 0;
+  let runsToRelease = 0;
   try {
     businessName = getBusiness()?.name ?? null;
     system = getSystemModes();
@@ -57,6 +59,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       const db = getDb();
       vendorChecks = pendingChanges(db, bizId).filter((c) => !verifyBarrier(db, bizId, viewer!.actor.id, c)).length;
     }
+    if (viewer && bizId && viewer.can("release_run")) runsToRelease = listRuns(getDb(), bizId).filter((r) => r.status === "draft" && r.createdBy !== viewer!.actor.id).length;
   } catch {
     // Database unavailable: render the shell without a business.
   }
@@ -67,7 +70,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           <Shell
             businessName={businessName}
             system={system}
-            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks } : null}
+            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks, runsToRelease } : null}
           >
             {children}
           </Shell>

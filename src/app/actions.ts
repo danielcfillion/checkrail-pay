@@ -18,6 +18,7 @@ import { seedDemo } from "@/lib/demo/seed";
 import type { Rail, SourceType } from "@/lib/domain/types";
 import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
+import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/runs";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
 
 /**
@@ -394,6 +395,53 @@ export async function createInviteAction(opts: { vendorId?: string | null; label
   try {
     const r = await withBusiness((db, b, who) => createInvite(db, b, who, { vendorId: typeof opts?.vendorId === "string" ? opts.vendorId : null, label: typeof opts?.label === "string" ? opts.label : null }));
     return { ok: true, message: "Link created. Copy it now: it is shown only once.", path: `/onboard/${r.token}`, expiresAt: r.expiresAt };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+/* Payment runs. */
+
+export async function createRunAction(name: string, obligationIds: string[]): Promise<ActionResult & { id?: string }> {
+  try {
+    const id = await withBusiness((db, b, who) => createRun(db, b, who, { name, obligationIds }));
+    done(["/runs"]);
+    return { ok: true, message: "Run created. An approver reviews and releases it.", id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function removeRunItemAction(runId: string, itemId: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => removeRunItem(db, b, who, runId, itemId));
+    done([`/runs/${runId}`, "/runs"]);
+    return { ok: true, message: "Removed from the run." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function cancelRunAction(runId: string): Promise<ActionResult> {
+  try {
+    await withBusiness((db, b, who) => cancelRun(db, b, who, runId));
+    done(["/runs", `/runs/${runId}`]);
+    return { ok: true, message: "Run cancelled. Nothing was paid." };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+}
+
+export async function releaseRunAction(runId: string): Promise<ActionResult> {
+  try {
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const r = await releaseRun(db, biz.id, await currentActor(), runId);
+    done();
+    done([`/runs/${runId}`, "/runs"]);
+    const parts = [`${r.paid} paid`, r.skipped ? `${r.skipped} skipped` : "", r.failed ? `${r.failed} failed` : "", r.unclear ? `${r.unclear} unclear` : ""].filter(Boolean);
+    return { ok: r.failed === 0 && r.unclear === 0, message: `Run released: ${parts.join(", ")}.` };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

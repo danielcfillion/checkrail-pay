@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecutionRequest, ExecutionResult, PaymentRail, Rail, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
+import type { ExecutionRequest, ExecutionResult, PaymentRail, Rail, RailBalance, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
 import { quotePayPal, quoteStellar } from "./quoteModel";
 
 /**
@@ -17,9 +17,21 @@ function shouldFail(req: ExecutionRequest): boolean {
   return req.memo.includes("FAIL");
 }
 
+/** Simulated balances, so the payment run's funding check has something to compare against. Override per rail in .env. */
+function mockBalance(rail: Rail, currency: string): RailBalance | null {
+  if (currency !== "USD") return null;
+  const env = rail === "paypal" ? process.env.MOCK_PAYPAL_BALANCE_USD : process.env.MOCK_STELLAR_BALANCE_USD;
+  const value = env !== undefined && env !== "" ? Number(env) : rail === "paypal" ? 3_000 : 2_000;
+  return Number.isFinite(value) ? { availableMinor: Math.round(value * 100), currency, source: "simulated" } : null;
+}
+
 export class MockPayPalRail implements PaymentRail {
   readonly rail = "paypal" as const;
   readonly mode = "mock" as const;
+
+  async balance(currency: string): Promise<RailBalance | null> {
+    return mockBalance("paypal", currency);
+  }
 
   async quote(i: { vendor: VendorPayoutProfile; amountMinor: number; currency: string; businessCountry: string }): Promise<RouteQuote> {
     return quotePayPal(i.vendor, i.amountMinor, i.currency, i.businessCountry);
@@ -51,6 +63,10 @@ export class MockPayPalRail implements PaymentRail {
 export class MockStellarRail implements PaymentRail {
   readonly rail = "stellar" as const;
   readonly mode = "mock" as const;
+
+  async balance(currency: string): Promise<RailBalance | null> {
+    return mockBalance("stellar", currency);
+  }
 
   async quote(i: { vendor: VendorPayoutProfile; amountMinor: number; currency: string; businessCountry: string }): Promise<RouteQuote> {
     return quoteStellar(i.vendor, i.amountMinor, i.currency, i.businessCountry);

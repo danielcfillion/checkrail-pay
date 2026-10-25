@@ -9,6 +9,7 @@ export type SystemModes = { railModes: Record<string, string>; ai: string; accou
 export const NAV = [
   { href: "/", label: "Overview", icon: "overview" },
   { href: "/obligations", label: "Inbox", icon: "inbox" },
+  { href: "/runs", label: "Payment runs", icon: "runs" },
   { href: "/vendors", label: "Vendors", icon: "vendors" },
   { href: "/ledger", label: "Ledger", icon: "ledger" },
   { href: "/exceptions", label: "Exceptions", icon: "exceptions" },
@@ -18,7 +19,7 @@ export const NAV = [
   { href: "/settings", label: "Settings", icon: "settings" },
 ] as const;
 
-export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number; vendorChecks?: number };
+export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number; vendorChecks?: number; runsToRelease?: number };
 
 export function Shell({ businessName, system, who, children }: { businessName: string | null; system: SystemModes | null; who?: WhoProps | null; children: ReactNode }) {
   return (

@@ -77,6 +77,14 @@ function Icon({ name }: { name: string }) {
           <path d="M12 9.3c1.2.6 2 1.9 2 3.7" />
         </svg>
       );
+    case "runs":
+      return (
+        <svg {...common}>
+          <path d="M2.5 4.5h7M2.5 8h7M2.5 11.5h4.5" />
+          <path d="M11 9.5l2.5 2-2.5 2" />
+          <path d="M9.5 11.5h4" />
+        </svg>
+      );
     case "ledger":
       return (
         <svg {...common}>

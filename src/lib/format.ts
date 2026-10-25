@@ -276,3 +276,8 @@ export function truncateMiddle(s: string | null | undefined, keep = 6): string {
 export function pluralise(n: number, one: string, many = one + "s"): string {
   return `${n} ${n === 1 ? one : many}`;
 }
+
+/** Today's date (YYYY-MM-DD) in the display time zone, for default names and filenames. */
+export function localDateString(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+}

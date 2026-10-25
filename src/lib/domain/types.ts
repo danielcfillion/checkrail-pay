@@ -325,4 +325,13 @@ export interface PaymentRail {
   findByIdempotencyKey?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
   /** Optional: does this provider id belong to the attempt with this idempotency key? null when the provider could not be asked. */
   externalIdMatchesKey?(externalId: string, key: string): Promise<boolean | null>;
+  /** Optional: money available to send in this currency. null when the provider cannot be asked (no permission, outage). */
+  balance?(currency: string): Promise<RailBalance | null>;
+}
+
+export interface RailBalance {
+  availableMinor: number;
+  currency: string;
+  /** "provider" = read from the account just now; "simulated" = mock rails. */
+  source: "provider" | "simulated";
 }

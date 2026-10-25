@@ -9,7 +9,7 @@ import { useToast } from "./Toast";
 type Persona = { username: string; name: string; role: string };
 
 /** Who is acting, and (on demo databases) a switch to act as another member of the demo team. */
-export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vendorChecks = 0 }: { name: string; role: string; username: string; viaLogin?: string; personas: readonly Persona[] | null; waiting: number; vendorChecks?: number }) {
+export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vendorChecks = 0, runsToRelease = 0 }: { name: string; role: string; username: string; viaLogin?: string; personas: readonly Persona[] | null; waiting: number; vendorChecks?: number; runsToRelease?: number }) {
   const [pending, start] = useTransition();
   const router = useRouter();
   const { toast } = useToast();
@@ -25,6 +25,12 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
           <>
             {" "}
             · <Link href="/obligations?filter=mine" className="link">{waiting} waiting for you</Link>
+          </>
+        ) : null}
+        {runsToRelease > 0 ? (
+          <>
+            {" "}
+            · <Link href="/runs" className="link">{runsToRelease} run{runsToRelease === 1 ? "" : "s"} to release</Link>
           </>
         ) : null}
         {vendorChecks > 0 ? (

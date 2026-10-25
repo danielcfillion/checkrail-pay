@@ -1,5 +1,5 @@
 import { Asset, BASE_FEE, Horizon, Keypair, Memo, Networks, Operation, StrKey, TransactionBuilder } from "@stellar/stellar-sdk";
-import type { ExecutionRequest, ExecutionResult, PaymentRail, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
+import type { ExecutionRequest, ExecutionResult, PaymentRail, RailBalance, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
 import { config, TESTNET_PYUSD_ISSUER } from "../config";
 import { isValidAmountMinor, minorToDecimal } from "../domain/money";
 import { quoteStellar } from "./quoteModel";
@@ -87,6 +87,19 @@ export class StellarRail implements PaymentRail {
     const memoText = (req.memo && /^[A-Za-z0-9 ._:-]{1,28}$/.test(req.memo) ? req.memo : req.idempotencyKey.slice(0, 28)).slice(0, 28);
     const amount = minorToDecimal(req.amountMinor, 7); // exact 7-decimal string, no float
     return this.serialize(() => this.send(req, destination, memoText, amount));
+  }
+
+  /** PYUSD held by the treasury account. Stellar pays in USD-pegged PYUSD, so only USD is answered. */
+  async balance(currency: string): Promise<RailBalance | null> {
+    if (currency !== "USD") return null;
+    try {
+      const account = await this.server.loadAccount(this.treasury.publicKey());
+      const line = account.balances.find((b) => "asset_code" in b && b.asset_code === this.asset.getCode() && "asset_issuer" in b && b.asset_issuer === this.asset.getIssuer());
+      if (!line) return { availableMinor: 0, currency, source: "provider" };
+      return { availableMinor: Math.round(Number(line.balance) * 100), currency, source: "provider" };
+    } catch {
+      return null;
+    }
   }
 
   private async send(req: ExecutionRequest, destination: string, memoText: string, amount: string): Promise<ExecutionResult> {

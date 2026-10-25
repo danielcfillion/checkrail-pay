@@ -272,3 +272,42 @@ export const auditEntries = sqliteTable(
   },
   (t) => [index("audit_obligation").on(t.obligationId), uniqueIndex("audit_seq_unique").on(t.seq)]
 );
+
+/**
+ * A payment run: the week's approved bills, reviewed as one list, funded and released once. Each item still pays
+ * through the normal execute path (policy re-runs, idempotency key, pinned payout details); the run only decides
+ * which ones and when.
+ */
+export const paymentRuns = sqliteTable(
+  "payment_runs",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    name: text("name").notNull(),
+    status: text("status").notNull(), // draft | releasing | released | cancelled
+    createdBy: text("created_by").notNull(),
+    releasedBy: text("released_by"),
+    releasedAt: text("released_at"),
+    cancelledBy: text("cancelled_by"),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("payment_runs_business_status").on(t.businessId, t.status)]
+);
+
+export const paymentRunItems = sqliteTable(
+  "payment_run_items",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    obligationId: text("obligation_id").notNull(),
+    amountMinor: integer("amount_minor").notNull(), // as reviewed when added; a changed obligation is skipped
+    currency: text("currency").notNull(),
+    rail: text("rail"),
+    status: text("status").notNull(), // queued | paid | skipped | failed | unclear
+    message: text("message"),
+    createdAt: text("created_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+  (t) => [index("payment_run_items_run").on(t.runId), index("payment_run_items_obligation").on(t.obligationId)]
+);

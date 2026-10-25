@@ -1,4 +1,4 @@
-import type { ExecutionRequest, ExecutionResult, PaymentRail, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
+import type { ExecutionRequest, ExecutionResult, PaymentRail, RailBalance, RouteQuote, SettlementStatus, VendorPayoutProfile } from "../domain/types";
 import { config } from "../config";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, minorToDecimal } from "../domain/money";
 import { quotePayPal } from "./quoteModel";
@@ -226,6 +226,16 @@ export class PayPalRail implements PaymentRail {
     }
     const res = await this.call("POST", "/v1/notifications/verify-webhook-signature", body);
     return res.ok && (res.json as { verification_status?: string } | null)?.verification_status === "SUCCESS";
+  }
+
+  /** Available balance from the Reporting API. Needs the Balance permission on the app; null when it is not granted. */
+  async balance(currency: string): Promise<RailBalance | null> {
+    const r = await this.call("GET", `/v1/reporting/balances?currency_code=${encodeURIComponent(currency)}`);
+    if (!r.ok) return null;
+    const list = (r.json as { balances?: Array<{ currency?: string; available_balance?: { value?: string; currency_code?: string } }> } | null)?.balances ?? [];
+    const row = list.find((b) => (b.available_balance?.currency_code ?? b.currency) === currency);
+    const value = Number(row?.available_balance?.value);
+    return Number.isFinite(value) ? { availableMinor: Math.round(value * 100), currency, source: "provider" } : null;
   }
 
   private async accessToken(): Promise<string> {
