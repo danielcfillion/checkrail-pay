@@ -4,7 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ingestAction, uploadEvidenceAction } from "@/app/actions";
 import type { SourceType } from "@/lib/domain/types";
+import { evidenceKindLabel } from "@/lib/format";
 import { useToast } from "@/components/Toast";
+import { RequestDropzone } from "@/components/RequestDropzone";
 
 type EvidenceRow = { kind: string; label: string; amount: string; currency: string; reference: string; excerpt: string; attachmentId?: string | null; readBy?: string | null; fileName?: string | null };
 
@@ -40,17 +42,17 @@ export function NewObligationForm() {
   const [rows, setRows] = useState<EvidenceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const [uploading, setUploading] = useState(false);
+  const [reading, setReading] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
 
-  const onFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setUploading(true);
+  const onFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setUploadNote(null);
     try {
-      for (const f of Array.from(files)) {
+      for (const f of files) {
+        setReading(f.name);
         const fd = new FormData();
         fd.append("file", f);
         const res = await uploadEvidenceAction(fd);
@@ -82,7 +84,7 @@ export function NewObligationForm() {
         setUploadNote(`${u.name}: read by ${u.reader === "claude" ? "Claude" : u.reader === "pdf-text" ? "the PDF text reader" : "the text reader"}. Check the figures; an edited figure counts as operator-supplied.`);
       }
     } finally {
-      setUploading(false);
+      setReading(null);
     }
   };
 
@@ -120,7 +122,7 @@ export function NewObligationForm() {
           })),
       });
       if (result.ok && result.id) {
-        toast("Obligation created. The agent has read it.");
+        toast("Request created. The agent has read it.");
         router.push(`/obligations/${result.id}`);
       } else {
         setError(result.message);
@@ -161,17 +163,8 @@ export function NewObligationForm() {
             <span className="dense text-ink-soft">{rows.length === 0 ? "none attached" : `${rows.length} attached`}</span>
           </div>
           <div className="space-y-4 p-4">
-            <div className="rounded border border-dashed p-3 hairline">
-              <label className="lbl" htmlFor="docs">
-                Upload the document itself
-              </label>
-              <input id="docs" type="file" className="mt-1 block w-full text-sm" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain" multiple disabled={uploading} onChange={(e) => void onFiles(e.target.files)} />
-              <p className="mt-1.5 text-xs text-ink-soft">
-                {uploading ? "Reading the file." : "PDF invoices and job sheets are read from their text. Photos and scans need the Claude reader (AI_MODE=live). Figures read from a PDF or photo are marked as document evidence. A plain-text file, and anything you type or change, is marked as operator-supplied and needs a look."}
-              </p>
-              {uploadNote ? <p className="mt-1.5 text-xs">{uploadNote}</p> : null}
-            </div>
-            {rows.length === 0 ? <p className="text-ink-soft">Without evidence the policy will hold the obligation. Upload a job sheet, invoice, contract or booking, or type one in, so the amount can be checked.</p> : null}
+            <RequestDropzone onFiles={(fs) => void onFiles(fs)} reading={reading} note={uploadNote} accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,application/pdf,image/png,image/jpeg,image/webp,image/gif,text/plain" />
+            {rows.length === 0 ? <p className="text-ink-soft">Without evidence, policy holds the request. Add a job sheet, invoice, contract or booking, or type one in, so the amount can be checked.</p> : null}
             {rows.map((r, i) => (
               <fieldset key={i} className="rounded border p-3 hairline">
                 <legend className="dense px-1 text-ink-soft">
@@ -186,7 +179,7 @@ export function NewObligationForm() {
                     <select id={`kind-${i}`} className="field" value={r.kind} onChange={(e) => update(i, { kind: e.target.value })}>
                       {KINDS.map((k) => (
                         <option key={k} value={k}>
-                          {k.replace("_", " ")}
+                          {evidenceKindLabel(k)}
                         </option>
                       ))}
                     </select>
@@ -244,7 +237,7 @@ export function NewObligationForm() {
         ) : null}
         <div className="flex flex-wrap items-center gap-3">
           <button type="submit" className="btn btn-primary" disabled={pending}>
-            {pending ? "Reading the request" : "Create obligation"}
+            {pending ? "Reading the request" : "Create request"}
           </button>
           <span className="text-ink-soft">Nothing is paid at this step. The agent proposes; policy decides; you approve.</span>
         </div>
@@ -255,10 +248,10 @@ export function NewObligationForm() {
           <h2 className="font-medium">Try an example</h2>
           <p className="mt-1 text-ink-soft">Two requests built from the Ridgeline roster. Load one, then create it.</p>
           <div className="mt-3 flex flex-col gap-2">
-            <button type="button" className="btn h-auto justify-start whitespace-normal py-1.5 text-left" onClick={() => load("clean")}>
+            <button type="button" className="btn w-full min-w-0 justify-start py-1.5 text-left" style={{ height: "auto", minHeight: 32, whiteSpace: "normal" }} onClick={() => load("clean")}>
               Clean job completion, Kalaw Trekking Collective
             </button>
-            <button type="button" className="btn h-auto justify-start whitespace-normal py-1.5 text-left" onClick={() => load("mismatch")}>
+            <button type="button" className="btn w-full min-w-0 justify-start py-1.5 text-left" style={{ height: "auto", minHeight: 32, whiteSpace: "normal" }} onClick={() => load("mismatch")}>
               Mismatched amount, Linh Family Homestay
             </button>
           </div>
@@ -270,7 +263,7 @@ export function NewObligationForm() {
             <li>The agent reads the text and names the vendor, amount and reference.</li>
             <li>Policy checks the amount against the evidence and the approval thresholds.</li>
             <li>The router quotes PayPal and Stellar and picks one, with a reason.</li>
-            <li>You approve, correct or pay from the obligation page.</li>
+            <li>You approve, correct or pay from the request page.</li>
           </ol>
         </section>
       </aside>

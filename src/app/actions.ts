@@ -115,7 +115,7 @@ export async function rejectAction(id: string, note?: string): Promise<ActionRes
     rejectObligation(getDb(), id, who.id, note);
     done([`/obligations/${id}`]);
     done();
-    return { ok: true, message: "Obligation cancelled." };
+    return { ok: true, message: "Request cancelled." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -278,7 +278,7 @@ export async function amendAction(id: string, patch: { amountMinor?: number; sou
     await amendObligation(getDb(), id, (await actOn(id, "amend", "correct payment requests")).id, patch, note);
     done([`/obligations/${id}`]);
     done();
-    return { ok: true, message: "Obligation corrected and re-evaluated." };
+    return { ok: true, message: "Request corrected and checked again." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
@@ -293,7 +293,7 @@ export async function ingestAction(input: { sourceType: SourceType; rawInput: st
     if (!biz) return { ok: false, message: "No business configured. Run the demo seed first." };
     const id = await ingestObligation(db, { businessId: biz.id, sourceType: input.sourceType, rawInput: input.rawInput, evidence: input.evidence ?? [], actor: (await act("ingest", "create payment requests")).id, evidenceSource: "operator" });
     done();
-    return { ok: true, message: "Obligation created.", id };
+    return { ok: true, message: "Request created.", id };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

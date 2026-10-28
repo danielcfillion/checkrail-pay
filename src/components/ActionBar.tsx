@@ -32,6 +32,8 @@ type Props = {
   billId?: string | null;
   /** Vendors to pick from when the request names nobody the business knows. */
   vendorChoices?: Array<{ id: string; name: string }>;
+  /** The decision card above already offers the primary action, so the same button here is secondary. */
+  primaryInCard?: boolean;
 };
 
 const ALL = { approve: true, pay: true, amend: true, resolveStuck: true, reconcile: true };
@@ -52,6 +54,7 @@ export function ActionBar(p: Props) {
   const router = useRouter();
   const { toast } = useToast();
   const { travel } = useStage();
+  const lead = p.primaryInCard ? "btn" : "btn btn-primary";
 
   const run = (label: string, fn: () => Promise<ActionResult>, after?: (r: ActionResult) => void) => {
     setBusy(label);
@@ -86,14 +89,14 @@ export function ActionBar(p: Props) {
                 <input id="approval-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Checked against the trip sheet" />
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
+                <button type="button" className={lead} disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
                   {busy === "approve" ? "Approving" : "Approve"}
                 </button>
                 <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, note || undefined))}>
                   {busy === "reject" ? "Rejecting" : "Reject"}
                 </button>
               </div>
-              <p className="text-xs text-ink-soft">Approving does not pay. Policy re-checks, then the obligation becomes ready to pay.</p>
+              <p className="text-xs text-ink-soft">Approving does not pay. Policy checks again, then the request is ready to pay.</p>
             </>
           ) : (
             <>
@@ -117,7 +120,7 @@ export function ActionBar(p: Props) {
           {can.pay ? (
             <div className="flex flex-wrap gap-2">
               {primary ? (
-                <button type="button" className="btn btn-primary" disabled={pending} onClick={() => pay(primary)}>
+                <button type="button" className={lead} disabled={pending} onClick={() => pay(primary)}>
                   {busy === `pay-${primary}` ? `Paying with ${railLabel(primary)}` : `Pay with ${railLabel(primary)}`}
                 </button>
               ) : null}
@@ -136,7 +139,7 @@ export function ActionBar(p: Props) {
           )}
           {can.approve ? (
             <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled before payment"))}>
-              {busy === "reject" ? "Cancelling" : "Cancel"}
+              {busy === "reject" ? "Cancelling" : "Cancel request"}
             </button>
           ) : null}
           {can.pay ? (
@@ -155,7 +158,7 @@ export function ActionBar(p: Props) {
       if (!p.vendorId && /not a known vendor/i.test(p.blockedReason ?? "")) return <PickVendor id={p.id} choices={p.vendorChoices ?? []} pending={pending} busy={busy} run={run} />;
       return (
         <div className="space-y-3">
-          <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} />
+          <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} lead={lead} />
           <CheckAgain id={p.id} pending={pending} busy={busy} run={run} />
         </div>
       );
@@ -170,7 +173,7 @@ export function ActionBar(p: Props) {
               <button
                 key={r}
                 type="button"
-                className={`btn ${r === p.selectedRail ? "btn-primary" : ""}`}
+                className={`btn ${r === p.selectedRail && !p.primaryInCard ? "btn-primary" : ""}`}
                 disabled={pending}
                 onClick={() =>
                   run(`pay-${r}`, async () => {
@@ -185,7 +188,7 @@ export function ActionBar(p: Props) {
             ))}
             {can.amend ? (
               <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled after failed payment"))}>
-                {busy === "reject" ? "Cancelling" : "Cancel"}
+                {busy === "reject" ? "Cancelling" : "Cancel request"}
               </button>
             ) : null}
           </div>
@@ -202,7 +205,7 @@ export function ActionBar(p: Props) {
               Re-create with evidence
             </Link>
             <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "No evidence supplied"))}>
-              {busy === "reject" ? "Cancelling" : "Cancel"}
+              {busy === "reject" ? "Cancelling" : "Cancel request"}
             </button>
           </div>
           <CheckAgain id={p.id} pending={pending} busy={busy} run={run} />
@@ -216,13 +219,13 @@ export function ActionBar(p: Props) {
             {railLabel(p.selectedRail) || "The rail"} did not give a clear answer, so this payment may or may not have gone through. Nothing here will pay it again: Reconcile asks {railLabel(p.selectedRail) || "the rail"} about the same payment under the same idempotency key and records what it finds.
           </p>
           {can.pay ? (
-            <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
+            <button type="button" className={lead} disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
               {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
             </button>
           ) : null}
           {can.resolveStuck ? (
-          <details className="text-sm">
-            <summary className="cursor-pointer text-ink-soft hover:text-ink">Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
+          <details className="group text-sm">
+            <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
             <div className="mt-3 space-y-3">
               <p className="text-ink-soft">Search the dashboard for this attempt&apos;s sender batch id. Both choices are recorded in the audit log under your name.</p>
               {p.pendingKey ? (
@@ -254,7 +257,7 @@ export function ActionBar(p: Props) {
       return (
         <div className="space-y-3">
           <p className="text-ink-soft">The payment has been handed to {railLabel(p.selectedRail) || "the rail"}. Check for settlement to pull the latest status.</p>
-          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => run("confirm", () => confirmAction(p.id), (r) => r.ok && travel(4))}>
+          <button type="button" className={lead} disabled={pending} onClick={() => run("confirm", () => confirmAction(p.id), (r) => r.ok && travel(4))}>
             {busy === "confirm" ? "Checking" : "Check settlement"}
           </button>
         </div>
@@ -265,8 +268,8 @@ export function ActionBar(p: Props) {
         <div className="space-y-3">
           <p className="text-ink-soft">{p.hasAccounting ? "Paid and recorded. Nothing left to do." : "Paid. Waiting for the accounting record."}</p>
           {can.reconcile ? (
-            <details className="text-sm">
-              <summary className="cursor-pointer text-ink-soft hover:text-ink">The money came back (found in PayPal)?</summary>
+            <details className="group text-sm">
+              <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>The money came back (found in PayPal)?</summary>
               <form
                 className="mt-2 flex flex-wrap items-center gap-2"
                 onSubmit={(e) => {
@@ -306,7 +309,7 @@ export function ActionBar(p: Props) {
   }
 }
 
-function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy, run }: { id: string; amountMinor: number | null; currency: string | null; blockedReason: string | null; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void }) {
+function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy, run, lead = "btn btn-primary" }: { id: string; amountMinor: number | null; currency: string | null; blockedReason: string | null; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void; lead?: string }) {
   const evidenced = evidencedAmountFromReason(blockedReason);
   const [value, setValue] = useState(evidenced !== null ? (evidenced / 100).toFixed(2) : amountMinor !== null ? (amountMinor / 100).toFixed(2) : "");
   const duplicate = /already used/.test(blockedReason ?? "");
@@ -343,13 +346,13 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
             </label>
             <input id="corrected-amount" className="field num w-40" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} />
           </div>
-          <button type="submit" className="btn btn-primary" disabled={pending || !valid}>
+          <button type="submit" className={lead} disabled={pending || !valid}>
             {busy === "amend" ? "Correcting" : `Correct to ${Number.isFinite(minor) ? formatMoney(minor, currency) : "amount"}`}
           </button>
         </form>
       )}
-      <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(id, duplicate ? "Duplicate of a paid obligation" : "Rejected after amount mismatch"))}>
-        {busy === "reject" ? "Cancelling" : "Cancel obligation"}
+      <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(id, duplicate ? "Duplicate of a paid request" : "Rejected after amount mismatch"))}>
+        {busy === "reject" ? "Cancelling" : "Cancel request"}
       </button>
     </div>
   );
@@ -396,8 +399,8 @@ function AmendDetails({ id, amountMinor, currency, pending, busy, run, note }: {
   const minor = value.trim() ? Math.round(Number(value.replace(/,/g, "")) * 100) : NaN;
   const valid = Number.isFinite(minor) && minor > 0 && minor !== amountMinor;
   return (
-    <details className="border-t pt-3 text-sm hairline">
-      <summary className="cursor-pointer text-ink-soft hover:text-ink">Correct the amount</summary>
+    <details className="group border-t pt-3 text-sm hairline">
+      <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>Correct the amount</summary>
       <form
         className="mt-3 flex flex-wrap items-end gap-2"
         onSubmit={(e) => {
