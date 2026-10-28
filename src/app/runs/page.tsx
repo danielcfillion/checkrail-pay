@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { listRuns, runCandidates } from "@/lib/engine/runs";
-import { formatDateTime, formatMoney, localDateString } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, humaniseActor, localDateString } from "@/lib/format";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { RunBuilder } from "@/components/RunBuilder";
 
@@ -34,7 +34,7 @@ export default async function RunsPage() {
           {candidates.length ? (
             <div className="p-4">
               <RunBuilder
-                defaultName={`Week of ${localDateString()}`}
+                defaultName={`Week of ${formatDate(localDateString())}`}
                 today={localDateString()}
                 rows={candidates.map((c) => ({ id: c.id, vendorName: c.vendorName, sourceRef: c.sourceRef, amountMinor: c.amountMinor!, currency: c.currency!, dueDate: c.dueDate, state: c.state, rail: c.selectedRail, scheduled: Boolean(c.releaseAt) }))}
               />
@@ -67,10 +67,10 @@ export default async function RunsPage() {
                       </Link>
                     </td>
                     <td className={r.status === "draft" ? "text-attention" : "text-ink-soft"}>{r.status === "draft" ? "waiting for release" : r.status}</td>
-                    <td className="hidden text-ink-soft sm:table-cell">{r.createdBy.replace(/^user:/, "")}</td>
-                    <td className="num hidden text-ink-soft md:table-cell">{formatDateTime(r.createdAt)}</td>
+                    <td className="hidden text-ink-soft sm:table-cell">{humaniseActor(r.createdBy)}</td>
+                    <td className="num hidden whitespace-nowrap text-ink-soft md:table-cell" title={formatDateTime(r.createdAt)}>{formatDate(r.createdAt)}</td>
                     <td className="r num">{r.status === "released" ? `${r.paid} of ${r.count} paid${r.withBank ? `, ${r.withBank} with the bank` : ""}` : r.count}</td>
-                    <td className="r num">{r.totals.map((t) => formatMoney(t.minor, t.currency)).join(" + ")}</td>
+                    <td className="r num whitespace-nowrap">{r.totals.map((t) => formatMoney(t.minor, t.currency)).join(" + ")}</td>
                   </tr>
                 ))}
               </tbody>

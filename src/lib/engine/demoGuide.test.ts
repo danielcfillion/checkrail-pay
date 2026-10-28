@@ -53,30 +53,31 @@ afterEach(() => {
 });
 
 describe("the /demo guide, in order (mock rails, rule-based reader, no keys)", () => {
-  it("step 1: Phuong is blocked at USD 960; corrected to USD 800, approved and paid over PayPal", async () => {
+  it("step 1: the overview shows two blocks and USD 340 of errors prevented", () => {
+    const blocked = db.select().from(obligations).where(eq(obligations.state, "blocked")).all().map((o) => o.id);
+    expect(blocked.sort()).toEqual([story.blockedMismatch, story.blockedDuplicate].sort());
+  });
+
+  it("step 2: Phuong is blocked at USD 960; Correct to USD 800.00 moves it to Awaiting approval", async () => {
     expect(get(story.blockedMismatch).state).toBe("blocked");
     expect(get(story.blockedMismatch).blockedReason).toMatch(/Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00/);
     await as(() => amendObligation(db, story.blockedMismatch, "user:daniel", { amountMinor: 80_000 }, "Corrected to evidenced amount USD 800.00"));
     expect(get(story.blockedMismatch).state).toBe("awaiting_approval");
-    as(() => approveObligation(db, story.blockedMismatch, "user:daniel"));
-    expect(get(story.blockedMismatch).state).toBe("approved");
-    expect(get(story.blockedMismatch).selectedRail).toBe("paypal");
-    expect(await pay(story.blockedMismatch)).toBe("settled");
   });
 
-  it("step 2: the Maria duplicate is blocked and cancelled", () => {
+  it("step 3: the Maria duplicate is blocked and Cancel moves no money", () => {
     expect(get(story.blockedDuplicate).blockedReason).toMatch(/JOB-HG4D-0914 was already used/);
     as(() => rejectObligation(db, story.blockedDuplicate, "user:daniel", "Duplicate of a paid obligation"));
     expect(get(story.blockedDuplicate).state).toBe("cancelled");
   });
 
-  it("step 3: Maria JOB-HG4D-0921 is ready to pay and settles over PayPal", async () => {
+  it("step 4: Maria JOB-HG4D-0921 is ready to pay and settles over PayPal", async () => {
     expect(get(story.paypal).state).toBe("approved");
     expect(get(story.paypal).selectedRail).toBe("paypal");
     expect(await pay(story.paypal)).toBe("settled");
   });
 
-  it("step 4: Ana needs approval, then settles on simulated Stellar", async () => {
+  it("step 5: Ana needs approval, then settles on simulated Stellar", async () => {
     expect(get(story.stellar).state).toBe("awaiting_approval");
     as(() => approveObligation(db, story.stellar, "user:daniel"));
     expect(get(story.stellar).selectedRail).toBe("stellar");
@@ -84,39 +85,33 @@ describe("the /demo guide, in order (mock rails, rule-based reader, no keys)", (
   });
 
   let rosa = "";
-  it("step 5: Rosa's trip completion sheet comes out ready to pay, confirmed by the rate card and departure", async () => {
-    rosa = await newRequest("tripsheet-ceb2d-1024.pdf", "Trip sheet attached for Rosa, please pay.", "job_completion");
+  it("step 6: Rosa's trip completion sheet comes out Ready to pay, confirmed by her rate card and departure", async () => {
+    rosa = await newRequest("tripsheet-ceb2d-1024.pdf", "Trip sheet attached for Rosa, please pay.", "invoice"); // the form's default source type
     const ob = get(rosa);
     expect(ob.state).toBe("approved");
     expect(ob.policyDecision).toBe("auto_execute");
     expect(ob.amountMinor).toBe(19_000);
     expect(ob.sourceRef).toBe("JOB-CEB2D-1024");
     expect(ob.selectedRail).toBe("paypal");
-    expect(ob.releaseAt).toBeNull(); // Assist: nothing is sent without a person yet
+    expect(ob.releaseAt).toBeNull(); // Assist: a person still presses send
     const rules = JSON.parse(db.select().from(auditEntries).where(and(eq(auditEntries.obligationId, rosa), eq(auditEntries.action, "policy.evaluated"))).get()!.detailJson!).rules as Array<{ ruleId: string; passed: boolean; message: string }>;
     expect(rules.find((r) => r.ruleId === "expected_amount")).toMatchObject({ passed: true });
     expect(rules.find((r) => r.ruleId === "expected_amount")!.message).toMatch(/CEB-2D-1024: 2 days x USD 95.00 = USD 190.00/);
   });
 
-  it("step 5, contrast: Rosa's own invoice waits for a person", async () => {
-    const id = await newRequest("invoice-rosa-0942.pdf", "Invoice attached from Rosa, please pay.", "invoice");
-    expect(get(id).state).toBe("awaiting_approval");
-    expect(get(id).policyReasonsJson).toMatch(/Only the vendor's own documents/);
-    as(() => rejectObligation(db, id, "user:daniel", "Demo contrast"));
-  });
-
-  it("step 6: turning on Autopilot schedules Rosa with a countdown, and the heartbeat releases it after the window", async () => {
+  it("step 7: turning on Autopilot schedules Rosa with a countdown, and the heartbeat sends it after the window", async () => {
     as(() => setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 60 }));
     const first = await runAutopilot(db, { businessId: DEMO_BUSINESS_ID }); // what the Settings action runs right after saving
     expect(first.scheduled).toEqual([rosa]);
     const st = autopilotStatus(db, DEMO_BUSINESS_ID);
-    expect(st.scheduled.map((s) => s.id)).toEqual([rosa]);
+    expect(st.scheduled.map((x) => x.id)).toEqual([rosa]);
     const left = new Date(st.scheduled[0].releaseAt).getTime() - Date.now();
     expect(left).toBeGreaterThan(55_000);
     expect(left).toBeLessThanOrEqual(60_000);
-    // The daily cap counts every payment in the last 24 hours, people's too: 800 + 180 + 750 sent, 190 scheduled.
-    expect(st.committed24hMinor).toBe(192_000);
-    expect(st.committed24hMinor).toBeLessThanOrEqual(st.dailyCapMinor);
+    // The daily cap counts every payment in the last 24 hours, people's too: Maria 180 and Ana 750 sent, Rosa 190 scheduled.
+    expect(st.committed24hMinor).toBe(112_000);
+    // Phuong was corrected and is waiting for approval; it is a person's, and autopilot leaves it alone.
+    expect(get(story.blockedMismatch).releaseAt).toBeNull();
 
     // A heartbeat inside the window sends nothing.
     expect((await runAutopilot(db)).released).toEqual([]);
@@ -131,20 +126,30 @@ describe("the /demo guide, in order (mock rails, rule-based reader, no keys)", (
     expect(get(rosa).state).toBe("settled");
     const started = db.select().from(auditEntries).where(and(eq(auditEntries.obligationId, rosa), eq(auditEntries.toState, "execution_pending"))).get()!;
     expect(started.actor).toBe(AGENT_ACTOR);
-
-    const close = getDailyClose(db, DEMO_BUSINESS_ID, "USD");
-    expect(close.paidByAgent.map((p) => p.id)).toEqual([rosa]);
-    expect(close.totals.agentMinor).toBe(19_000);
-    expect(close.paidByPeople.map((p) => p.id).sort()).toEqual([story.blockedMismatch, story.paypal, story.stellar].sort());
   });
 
-  it("step 7: on Autopilot, Tam's re-issued invoice is blocked and Bayan's USD 640 waits for a person", async () => {
+  it("step 8: on Autopilot, Rosa's own invoice and Bayan's USD 640 wait for a person, and Tam's re-issue is blocked", async () => {
+    const invoice = await newRequest("invoice-rosa-0942.pdf", "Invoice attached from Rosa, please pay.", "invoice");
+    expect(get(invoice).state).toBe("awaiting_approval");
+    expect(get(invoice).policyReasonsJson).toMatch(/Only the vendor's own documents/);
     const tam = await newRequest("invoice-tam-0834b.pdf", "Invoice attached from Tam, please pay.", "invoice");
     expect(get(tam).state).toBe("blocked");
     expect(get(tam).blockedReason).toMatch(/Same job as .* INV-TAM-0834/);
-    const bayan = await newRequest("invoice-bayan-0944.pdf", "Invoice attached from Bayan for last week's charters, please pay.", "invoice");
+    const bayan = await newRequest("invoice-bayan-0944.pdf", "Invoice attached from Bayan, please pay.", "invoice");
     expect(get(bayan).state).toBe("awaiting_approval");
-    expect(get(bayan).releaseAt).toBeNull();
+    expect(get(bayan).policyReasonsJson).toMatch(/autopilot per-payment cap USD 500.00/);
+    // Maria's HG-5D-1005 sheet: no departure on file, so only the uploaded sheet supports it and a person approves.
+    const maria5 = await newRequest("tripsheet-hg5d-1005.pdf", "Trip sheet attached for Maria, please pay.", "invoice");
+    expect(get(maria5).state).toBe("awaiting_approval");
+    expect(autopilotStatus(db, DEMO_BUSINESS_ID).scheduled).toEqual([]);
+  });
+
+  it("step 9: the Daily close separates the agent's USD 190 from people's USD 930", () => {
+    const close = getDailyClose(db, DEMO_BUSINESS_ID, "USD");
+    expect(close.paidByAgent.map((p) => p.id)).toEqual([rosa]);
+    expect(close.totals.agentMinor).toBe(19_000);
+    expect(close.paidByPeople.map((p) => p.id).sort()).toEqual([story.paypal, story.stellar].sort());
+    expect(close.totals.peopleMinor).toBe(93_000);
   });
 
   it("restores the login setting", () => {

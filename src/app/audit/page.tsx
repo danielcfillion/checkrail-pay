@@ -16,9 +16,9 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
   const oldest = rows.at(-1)?.seq;
   return (
     <>
-      <PageHeader title="Audit log" lede="Every step every actor took, newest first. The agent, the policy engine, the router, the rails and people all write here; nothing is edited after the fact." />
+      <PageHeader title="Audit log" lede="Every step every actor took, newest first. The agent, the policy engine, the router, the rails and people all write here. Nothing is edited after the fact." />
       {rows.length === 0 ? (
-        <EmptyState title="No entries yet" body="The log fills as soon as the first obligation is created." />
+        <EmptyState title="No entries yet" body="The log fills as soon as the first payment request is created." />
       ) : (
         <div className="panel overflow-x-auto">
           <table className="ledger">
@@ -31,7 +31,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                 <th scope="col">Actor</th>
                 <th scope="col">Action</th>
                 <th scope="col" className="hidden md:table-cell">
-                  Obligation
+                  Request
                 </th>
                 <th scope="col" className="hidden lg:table-cell">
                   Transition
@@ -57,7 +57,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                         {a.sourceRef ? <span className="num text-ink-soft">, {a.sourceRef}</span> : null}
                       </Link>
                     ) : (
-                      <span className="text-ink-soft">system</span>
+                      <span className="text-ink-soft">Business setting</span>
                     )}
                   </td>
                   <td className="hidden text-ink-soft lg:table-cell">{a.toState ? (a.fromState ? `${stateLabel(a.fromState)} to ${stateLabel(a.toState)}` : stateLabel(a.toState)) : ""}</td>

@@ -1,85 +1,197 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { findObligationsBySourceRef, getOverview } from "@/lib/queries";
 import type { ObligationRow } from "@/lib/queries";
 import { formatMoneySymbol } from "@/lib/format";
+import { getDb } from "@/lib/db";
+import { autopilotStatus } from "@/lib/engine/autopilot";
 import { CheckLine } from "@/components/CheckLine";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
+import { AutoRefresh } from "@/components/AutoRefresh";
 import { EmptyState, Money, PageHeader, RailTag, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Demo guide" };
 
-const STORY: Array<{ ref: string; title: string; line: string; pick: (rows: ObligationRow[]) => ObligationRow | undefined }> = [
-  {
-    ref: "INV-2026-0152",
-    title: "A request for more than the evidence supports",
-    line: "Phuong asks for $960 for a four-day van hire. The trip sheet says 4 times 200 is $800. Policy breaks the line at verified; nobody overpays.",
-    pick: (rows) => rows.find((r) => r.sourceRef === "INV-2026-0152"),
-  },
-  {
-    ref: "JOB-HG4D-0914",
-    title: "An invoice for a job already paid",
-    line: "Maria's invoice for JOB-HG4D-0914 looks fine on its own. The duplicate check finds it was settled on 16 September, so it stops.",
-    pick: (rows) => rows.filter((r) => r.sourceRef === "JOB-HG4D-0914").find((r) => r.state !== "settled") ?? rows.find((r) => r.sourceRef === "JOB-HG4D-0914"),
-  },
-  {
-    ref: "JOB-HG4D-0921",
-    title: "A clean one, paid over PayPal",
-    line: "Under the $250 threshold and matching its trip sheet, this cleared on its own. Both rails cost the same within a fraction of a percent at this size, so the router takes PayPal, whose whole path runs end to end today. Pay, and watch the marker travel.",
-    pick: (rows) => rows.find((r) => r.sourceRef === "JOB-HG4D-0921"),
-  },
-  {
-    ref: "JOB-PAL3D-0927",
-    title: "Above threshold, paid over Stellar",
-    line: "Ana's $750 needs a person. Approve, then pay with Stellar, the rail she asked for. Here the Stellar leg is simulated; with the anchor leg built she would see a PHP bank deposit in about 15 minutes.",
-    pick: (rows) => rows.find((r) => r.sourceRef === "JOB-PAL3D-0927"),
-  },
-];
+/** The trip completion sheet a presenter uploads in step 6. Its reference is how the guide finds it again. */
+const ROSA_SHEET_REF = "JOB-CEB2D-1024";
+const STORY_REFS = ["INV-2026-0152", "JOB-HG4D-0914", "JOB-HG4D-0921", "JOB-PAL3D-0927", ROSA_SHEET_REF];
+
+type Step = { title: string; doThis: ReactNode; happens: ReactNode; row?: ObligationRow; done?: boolean; open?: { href: string; label: string } };
+
+function Doc({ file, children }: { file: string; children: ReactNode }) {
+  return (
+    <a href={`/demo-documents/${file}`} className="link" download>
+      {children}
+    </a>
+  );
+}
 
 export default function DemoPage() {
-  const rows = findObligationsBySourceRef(STORY.map((s) => s.ref));
+  const rows = findObligationsBySourceRef(STORY_REFS);
   const o = getOverview();
   const base = o.business?.baseCurrency ?? "USD";
-  const found = STORY.map((s) => ({ ...s, row: s.pick(rows) }));
-  const missing = found.filter((f) => !f.row);
+  const by = (ref: string) => rows.find((r) => r.sourceRef === ref);
+  const phuong = by("INV-2026-0152");
+  // The duplicate shares its reference with the settled original: the open one is the story.
+  const dupe = rows.filter((r) => r.sourceRef === "JOB-HG4D-0914").find((r) => r.state !== "settled");
+  const maria = by("JOB-HG4D-0921");
+  const ana = by("JOB-PAL3D-0927");
+  const rosa = rows.filter((r) => r.sourceRef === ROSA_SHEET_REF).find((r) => r.state !== "blocked" && r.state !== "cancelled") ?? by(ROSA_SHEET_REF);
+  const ap = o.business ? autopilotStatus(getDb(), o.business.id) : null;
+  const autopilotOn = ap?.level === "autopilot" && !ap.paused;
+
+  const steps: Step[] = [
+    {
+      title: "Start on the overview",
+      doThis: "Open the overview.",
+      happens: "Two requests are blocked, and Errors prevented shows USD 340: the USD 160 Phuong would have been overpaid plus a USD 180 job that was already paid.",
+      open: { href: "/", label: "Open overview" },
+    },
+    {
+      title: "A request for more than the evidence supports",
+      doThis: <>Open Phuong&apos;s USD 960 request and press Correct to USD 800.00.</>,
+      happens: "The check line breaks at Verified: the trip sheet says 4 vehicle-days at USD 200 is USD 800. After the correction it moves to Awaiting approval: USD 800 is above the USD 250 line where a person signs, and the trip sheet names the driver only as Phuong, so a person confirms the payee. Leave it there.",
+      row: phuong,
+      done: phuong ? phuong.state !== "blocked" : false,
+    },
+    {
+      title: "An invoice for a job already paid",
+      doThis: "Open Maria's JOB-HG4D-0914 request and press Cancel.",
+      happens: "The duplicate check found that JOB-HG4D-0914 was paid 17 days ago, so the request is blocked. Cancelling it moves no money.",
+      row: dupe,
+      done: dupe ? dupe.state === "cancelled" : false,
+    },
+    {
+      title: "A clean one, paid over PayPal",
+      doThis: "Open Maria's JOB-HG4D-0921 request and press Pay with PayPal.",
+      happens: "It cleared on its own: USD 180 is under the USD 250 line and matches its trip sheet. The marker travels to Paid, then Reconciled, on simulated PayPal.",
+      row: maria,
+      done: maria ? ["sent", "settled"].includes(maria.state) : false,
+    },
+    {
+      title: "Above the line, paid over Stellar",
+      doThis: "Open Ana's USD 750 request, press Approve, then Pay with Stellar.",
+      happens: "A person approves anything above USD 250. Ana asked for Stellar, so the router picks it, and here it settles at once on simulated Stellar. In the live PayPal sandbox run her payout came back unclaimed and was held, not paid twice.",
+      row: ana,
+      done: ana ? ["sent", "settled", "refunded"].includes(ana.state) : false,
+    },
+    {
+      title: "A new request, confirmed by your own records",
+      doThis: (
+        <>
+          Open New request, type &quot;Trip sheet attached for Rosa, please pay.&quot;, upload <Doc file="tripsheet-ceb2d-1024.pdf">Rosa&apos;s trip completion sheet (USD 190)</Doc> and create the request.
+        </>
+      ),
+      happens: "The reader takes USD 190 and JOB-CEB2D-1024 from the PDF. Rosa's rate card (USD 95 a day) and departure CEB-2D-1024 (2 days) on file say USD 190, so the business's own records confirm the amount and it comes out Ready to pay. On Assist a person still presses send.",
+      row: rosa,
+      done: Boolean(rosa && rosa.state !== "blocked" && rosa.state !== "cancelled"),
+      open: rosa ? undefined : { href: "/obligations/new", label: "New request" },
+    },
+    {
+      title: "Hand the routine ones to the agent",
+      doThis: "Open Settings, choose Autopilot, set Time to cancel to 1 minute, press Turn on autopilot and confirm.",
+      happens: (
+        <>
+          Rosa&apos;s USD 190 is scheduled straight away. The overview shows it with a countdown and a Cancel button. When the minute is up, the agent sends it over simulated PayPal and it settles. Press Cancel instead and it stays Ready to pay for a person to send. Autopilot only sends what policy cleared on its own: never a payment a person approved, never above USD 500 a payment or USD 2,000 a day.
+        </>
+      ),
+      done: Boolean(rosa && (rosa.releaseAt || ["sent", "settled"].includes(rosa.state)) && autopilotOn),
+      open: { href: "/settings#autonomy", label: "Open Settings" },
+    },
+    {
+      title: "Try to fool it",
+      doThis: (
+        <>
+          Upload <Doc file="invoice-rosa-0942.pdf">Rosa&apos;s own invoice (USD 205)</Doc>, <Doc file="invoice-tam-0834b.pdf">Tam&apos;s re-issued invoice</Doc> or <Doc file="invoice-bayan-0944.pdf">Bayan&apos;s USD 640 charter</Doc>, with a line that names the vendor, for example &quot;Invoice attached from Bayan, please pay.&quot;
+        </>
+      ),
+      happens: "Rosa's invoice waits for a person, even on Autopilot: only her own document supports it. Tam's is blocked as the same job as INV-TAM-0834, paid 38 days ago. Bayan's waits for a person: USD 640 is above the USD 500 autopilot cap.",
+      open: { href: "/obligations/new", label: "New request" },
+    },
+    {
+      title: "Read the day and sign off",
+      doThis: "Open Daily close.",
+      happens: "What needs a look comes first: Rosa's USD 190 is listed as an unusual amount, twice her usual day-trip fee, because this was a two-day trip. Then what the agent sent (Rosa, USD 190) apart from what people sent (Maria and Ana, USD 930). Sign off records exactly what was on the page.",
+      open: { href: "/close", label: "Open Daily close" },
+    },
+    {
+      title: "The same records, ready for the books",
+      doThis: "Open Ledger, then Accounting.",
+      happens: "Every settled payment has one record with gross, fee, net and the account code, exported as a CSV in Xero's record shape.",
+      open: { href: "/accounting", label: "Open Accounting" },
+    },
+  ];
+
+  const storyMissing = !phuong && !dupe && !maria && !ana;
 
   return (
     <>
-      <PageHeader title="Presenter" lede="The four obligations the three-minute video walks through, in order. Open each one from here; reset between takes." actions={<ResetDemoButton />} />
+      <AutoRefresh seconds={10} />
+      <PageHeader
+        title="Demo guide"
+        lede="Ten steps, about ten minutes. Each step says what to do and what happens. Everything runs on simulated rails with the rule-based reader, so no keys are needed."
+        actions={<ResetDemoButton />}
+      />
 
       <div className="mb-6 grid grid-cols-2 gap-4 border-y hairline py-3 sm:grid-cols-4">
         <Stat label="Needs you" value={String(o.counts.needsAction)} />
         <Stat label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} />
         <Stat label="Paid, 30 days" value={formatMoneySymbol(o.money.paid30dMinor, base)} />
-        <Stat label="Modes" value={`${o.system.railModes.paypal} / ${o.system.railModes.stellar}`} small />
+        <Stat label="Autonomy" value={ap ? (ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot") : ap.level === "review" ? "Review" : "Assist") : "none"} small />
       </div>
 
-      {missing.length === STORY.length ? (
-        <EmptyState title="The story is not loaded" body="Reset the demo to seed the four obligations and a month of history." action={<ResetDemoButton />} />
+      <section className="mb-6 panel p-4">
+        <h2 className="font-medium">Before you start</h2>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-soft">
+          <li>This demo is shared by everyone using it. If Rosa&apos;s trip sheet comes out Blocked as a duplicate, someone else already uploaded it: press Reset demo and start again.</li>
+          <li>The hosted copy also puts the opening requests back after 30 minutes without use.</li>
+          <li>The sidebar switch lets you act as Minh (approver), Lan (AP clerk) or Thu (accountant) to see what each role may do.</li>
+        </ul>
+      </section>
+
+      {storyMissing ? (
+        <EmptyState title="The story is not loaded" body="Reset the demo to load the four opening requests and three months of history." action={<ResetDemoButton />} />
       ) : (
-        <ol className="space-y-4">
-          {found.map((f, i) => (
-            <li key={f.ref} className="panel">
-              <div className="grid gap-4 px-5 py-4 sm:grid-cols-[32px_minmax(0,1fr)_auto]">
+        <ol className="space-y-3">
+          {steps.map((s, i) => (
+            <li key={s.title} className="panel">
+              <div className="grid gap-3 px-4 py-4 sm:grid-cols-[32px_minmax(0,1fr)_auto] sm:px-5">
                 <span className="wide num text-xl text-ink-soft">{i + 1}</span>
                 <div className="min-w-0">
-                  <h2 className="font-medium">{f.title}</h2>
-                  <p className="mt-1 text-ink-soft">{f.line}</p>
-                  {f.row ? (
+                  <h2 className="flex flex-wrap items-baseline gap-x-3 font-medium">
+                    {s.title}
+                    {s.done ? <span className="dense text-settled">Done</span> : null}
+                  </h2>
+                  <p className="mt-1">
+                    <span className="text-ink-soft">Do: </span>
+                    {s.doThis}
+                  </p>
+                  <p className="mt-1">
+                    <span className="text-ink-soft">What happens: </span>
+                    {s.happens}
+                  </p>
+                  {s.row ? (
                     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                      <CheckLine state={f.row.state} variant="compact" hasAccounting />
-                      <StatePill state={f.row.state} />
-                      <span className="num text-ink-soft">{f.row.vendorName}, {f.ref}</span>
-                      <Money minor={f.row.amountMinor} currency={f.row.currency} />
-                      {f.row.selectedRail ? <RailTag rail={f.row.selectedRail} /> : null}
+                      <CheckLine state={s.row.state} variant="compact" hasAccounting />
+                      <StatePill state={s.row.state} />
+                      <span className="num text-ink-soft">
+                        {s.row.vendorName}, {s.row.sourceRef}
+                      </span>
+                      <Money minor={s.row.amountMinor} currency={s.row.currency} />
+                      {s.row.selectedRail ? <RailTag rail={s.row.selectedRail} /> : null}
+                      {s.row.releaseAt && s.row.state === "approved" ? <span className="text-attention">Scheduled by autopilot, countdown on the overview</span> : null}
                     </div>
-                  ) : (
-                    <p className="mt-3 text-attention">Not in the database. Reset the demo.</p>
-                  )}
+                  ) : null}
                 </div>
                 <div className="flex items-start sm:justify-end">
-                  {f.row ? (
-                    <Link href={`/obligations/${f.row.id}`} className="btn btn-primary">
-                      Open obligation
+                  {s.row ? (
+                    <Link href={`/obligations/${s.row.id}`} className="btn btn-primary">
+                      Open request
+                    </Link>
+                  ) : s.open ? (
+                    <Link href={s.open.href} className="btn">
+                      {s.open.label}
                     </Link>
                   ) : null}
                 </div>
@@ -89,48 +201,6 @@ export default function DemoPage() {
         </ol>
       )}
 
-      <section className="mt-8 grid gap-6 lg:grid-cols-2">
-        <div className="panel p-4">
-          <h2 className="font-medium">Suggested order</h2>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-ink-soft">
-            <li>Overview: the shared check line, two breaks, errors prevented.</li>
-            <li>Phuong: the mismatch, the rule that caught it, correct to $800.</li>
-            <li>Maria duplicate: the reference was paid 17 days ago; cancel it.</li>
-            <li>Maria JOB-HG4D-0921: pay with PayPal, marker travels to reconciled.</li>
-            <li>Ana: approve, compare rails, pay, open the settlement.</li>
-            <li>
-              New request: type &quot;Invoice attached from Rosa, please pay.&quot; and upload <a href="/demo-documents/invoice-rosa-0942.pdf" className="link" download>Rosa&apos;s invoice (USD 205)</a>. The amount and reference are read from the document, which names Rosa in full, so it comes out clean and pre-approved. Leave the vendor out of the message and it waits for a person to confirm the payee instead: a document can mention several people.
-            </li>
-            <li>Settings: turn on Autopilot. Back on the overview it is scheduled with a countdown. Cancel it, or let the window run out and watch the agent send it.</li>
-            <li>Try to fool it: upload <a href="/demo-documents/invoice-tam-0834b.pdf" className="link" download>Tam&apos;s re-issued invoice</a> (blocked as a duplicate) or <a href="/demo-documents/invoice-bayan-0944.pdf" className="link" download>Bayan&apos;s USD 640 charter</a> (held for a person, even on Autopilot).</li>
-            <li>Daily close: what needs a look, what the agent sent, what people sent. Sign off.</li>
-            <li>Ledger and accounting: the same records, ready for Xero.</li>
-          </ol>
-          <p className="mt-3 text-sm text-ink-soft">
-            This demo runs on simulated rails and the rule-based reader, so it works with no keys. Ana settles on simulated Stellar here; in the live PayPal sandbox run her payout came back UNCLAIMED instead. The hosted copy restores the opening requests after 30 minutes without use, or press Reset demo.
-          </p>
-        </div>
-        <div className="panel p-4">
-          <h2 className="font-medium">Links</h2>
-          <ul className="mt-2 space-y-1">
-            {[
-              ["/", "Overview"],
-              ["/obligations?filter=needs_action", "Inbox, needs action"],
-              ["/exceptions", "Exceptions"],
-              ["/ledger", "Ledger"],
-              ["/accounting", "Accounting"],
-              ["/vendors/ven_ana", "Ana Reyes, vendor page"],
-              ["/settings", "Settings and modes"],
-            ].map(([href, label]) => (
-              <li key={href}>
-                <Link href={href} className="link">
-                  {label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
     </>
   );
 }

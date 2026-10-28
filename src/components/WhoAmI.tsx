@@ -15,9 +15,10 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
   const { toast } = useToast();
   return (
     <div className="border-t hairline px-3 py-3 lg:px-5">
-      <p className="dense text-ink-soft">Signed in as</p>
-      <p className="truncate text-sm font-medium" title={viaLogin ? `${name}, via login ${viaLogin}` : name}>
-        {name}
+      <p className="text-sm" title={viaLogin ? `Signed in as ${name}, demo login ${viaLogin}` : `Signed in as ${name}`}>
+        <span className="text-ink-soft">Signed in as </span>
+        <span className="font-medium">{name}</span>
+        {viaLogin ? <span className="hidden text-ink-soft lg:inline">, demo login {viaLogin}</span> : null}
       </p>
       <p className="dense text-ink-soft">
         {role}
@@ -49,13 +50,12 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
             disabled={pending}
             onChange={(e) =>
               start(async () => {
-                const r = await setPersonaAction(e.target.value === viaLogin ? null : e.target.value);
+                const r = await setPersonaAction(e.target.value);
                 toast(r.message, r.ok ? "ok" : "error");
                 router.refresh();
               })
             }
           >
-            {viaLogin && !personas.some((p) => p.username === viaLogin) ? <option value={viaLogin}>{viaLogin} (your login)</option> : null}
             {personas.map((p) => (
               <option key={p.username} value={p.username}>
                 {p.name}

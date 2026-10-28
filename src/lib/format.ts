@@ -138,32 +138,54 @@ export function stateLabel(state: string | null | undefined): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
+/**
+ * What each audit action did, as a verb phrase with no subject, so it reads after the actor ("Agent (rules) read the
+ * request", "Policy held it for approval") and on its own in a column. Never repeat the actor here.
+ */
 const ACTION_LABELS: Record<string, string> = {
-  "obligation.created": "Obligation created",
-  "evidence.attached": "Evidence attached",
-  "ai.interpreted": "Agent read the request",
-  "policy.evaluated": "Policy rules evaluated",
-  "policy.verified": "Verified against evidence",
-  "policy.require_approval": "Held for approval",
-  "policy.auto_execute": "Cleared to auto-pay",
-  "policy.block": "Blocked by policy",
-  "policy.hold": "Held for evidence",
-  "route.selected": "Rail selected",
+  "obligation.created": "Created the request",
+  "evidence.attached": "Attached evidence",
+  "evidence.added": "Added evidence",
+  "ai.interpreted": "Read the request",
+  "policy.evaluated": "Checked the rules",
+  "policy.verified": "Verified it against the evidence",
+  "policy.require_approval": "Held it for approval",
+  "policy.auto_execute": "Cleared it to pay",
+  "policy.block": "Blocked it",
+  "policy.hold": "Held it for evidence",
+  "route.selected": "Chose the rail",
+  "route.overridden": "Changed the rail",
   "approval.granted": "Approved",
-  "approval.rejected": "Rejected",
-  "execution.started": "Payment started",
-  "execution.submitted": "Payment submitted to rail",
-  "execution.failed": "Payment failed",
-  "settlement.confirmed": "Settlement confirmed",
-  "settlement.pending": "Settlement pending",
-  "settlement.checked": "Settlement checked",
-  "settlement.exception": "Payout needs attention",
-  "accounting.queued": "Queued for accounting",
-  "accounting.exported": "Exported to accounting",
-  "obligation.amended": "Obligation corrected",
-  "obligation.cancelled": "Cancelled",
-  "execution.refused": "Refused at the last check",
-  "execution.unknown": "Outcome unclear, needs reconciling",
+  "approval.rejected": "Cancelled the request",
+  "approval.superseded": "Set the approval aside after a new warning",
+  "approvals.superseded": "Set the approvals aside after the request changed",
+  "approval.refused": "Was refused the approval",
+  "approval.self": "Approved a request they prepared",
+  "execution.started": "Started the payment",
+  "execution.submitted": "Submitted the payment to the rail",
+  "execution.failed": "Reported the payment failed",
+  "execution.refused": "Refused the payment at the last check",
+  "execution.unknown": "Got no clear answer from the rail",
+  "execution.resolved": "Resolved the unclear payment",
+  "execution.resolved_by_hand": "Resolved the unclear payment by hand",
+  "execution.retry_requested": "Asked to retry the payment",
+  "execution.reconcile": "Reconciled the payment",
+  "settlement.confirmed": "Confirmed it settled",
+  "settlement.pending": "Reported settlement pending",
+  "settlement.checked": "Checked settlement",
+  "settlement.exception": "Flagged the payout for attention",
+  "settlement.failed": "Reported the payout failed",
+  "settlement.returned": "Recorded the money coming back",
+  "accounting.queued": "Queued it for accounting",
+  "accounting.exported": "Exported it to accounting",
+  "accounting.changed_after_export": "Changed it after it went to the books",
+  "accounting.xero_bills_exported": "Exported bills for Xero",
+  "obligation.amended": "Corrected the request",
+  "obligation.cancelled": "Cancelled the request",
+  "obligation.dates_set": "Set the invoice dates",
+  "obligation.repays": "Requested a returned payment again",
+  "review.recheck": "Checked it again",
+  "review.resolved": "Resolved the review",
   "autopilot.scheduled": "Scheduled the payment",
   "autopilot.releasing": "Released the payment",
   "autopilot.refused": "Stopped at the last check",
@@ -173,9 +195,34 @@ const ACTION_LABELS: Record<string, string> = {
   "autopilot.resumed": "Resumed autopilot",
   "autonomy.changed": "Changed the autonomy setting",
   "daily_close.reviewed": "Signed off the daily close",
+  "vendor.created": "Added a vendor",
+  "vendor.updated": "Updated a vendor",
+  "vendor.payout_change_requested": "Asked to change payout details",
+  "vendor.change_rejected": "Rejected a payout change",
+  "vendor.invite_created": "Made a vendor invite link",
+  "vendor.onboarding_submitted": "Sent their details through the invite link",
+  "bill.created": "Recorded a bill",
+  "bill.linked": "Linked it to a bill",
+  "bill.voided": "Voided a bill",
+  "bill.reopened": "Reopened a bill",
+  "bill.credit_applied": "Applied a credit",
+  "bill.advance_settled": "Settled an advance",
+  "run.created": "Built a payment run",
+  "run.item_removed": "Removed a payment from a run",
+  "run.cancelled": "Cancelled a payment run",
+  "run.release_started": "Started releasing a run",
+  "run.released": "Released a payment run",
+  "bank_file.downloaded": "Downloaded a bank file",
+  "bank_file.confirmed": "Confirmed a bank file",
+  "bank_file.line_returned": "Recorded a bank payment coming back",
+  "books.reconciled": "Reconciled the PayPal statement",
+  "rate.set": "Set a rate card",
+  "departures.imported": "Imported departures",
+  "team.changed": "Changed the team",
+  "user.role_synced": "Updated a role from the login settings",
 };
 
-/** "settlement.checked:seed" -> "Settlement checked (seed)". */
+/** "settlement.checked:seed" -> "Checked settlement (seed)". */
 export function humaniseAction(action: string | null | undefined): string {
   if (!action) return "";
   const [base, qualifier] = action.split(":");
@@ -274,6 +321,30 @@ export function truncateMiddle(s: string | null | undefined, keep = 6): string {
   if (!s) return "";
   if (s.length <= keep * 2 + 1) return s;
   return `${s.slice(0, keep)}…${s.slice(-keep)}`;
+}
+
+/**
+ * An audit entry as subject and verb phrase: "Agent (rules)" + "read the request". If a label still starts with the
+ * actor's own word (an unknown action named after its actor, "policy.foo" by Policy), the word is not said twice.
+ */
+export function entryParts(actor: string | null | undefined, action: string | null | undefined): { who: string; what: string } {
+  const who = humaniseActor(actor);
+  let what = humaniseAction(action);
+  const first = who.split(" ")[0]?.toLowerCase();
+  if (first && what.toLowerCase().startsWith(`${first} `)) what = what.slice(first.length + 1);
+  return { who, what: who ? `${what.charAt(0).toLowerCase()}${what.slice(1)}` : what };
+}
+
+/** One line for an audit entry: "Agent (rules) read the request", "Policy held it for approval". */
+export function humaniseEntry(actor: string | null | undefined, action: string | null | undefined): string {
+  const { who, what } = entryParts(actor, action);
+  return who ? `${who} ${what}` : what;
+}
+
+/** "USD 930" when the amount is whole, "USD 930.50" otherwise: for caps and limits in running text. */
+export function formatMoneyShort(minor: number | null | undefined, currency: string | null | undefined): string {
+  const s = formatMoney(minor, currency);
+  return s.replace(/\.00$/, "");
 }
 
 export function pluralise(n: number, one: string, many = one + "s"): string {
