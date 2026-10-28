@@ -5,9 +5,11 @@
 
 // Scripts (tsx) do not load .env on their own; Next does. Load it here so both agree.
 // Variables already set in the environment win. Skipped silently where unsupported (edge runtime).
+// Never under the test runner: a developer's real .env (logins, live keys, a bank account) must not
+// change what the tests prove, and must not let a test reach a live rail.
 try {
   const pl = process as unknown as { loadEnvFile?: (path?: string) => void };
-  if (typeof pl.loadEnvFile === "function") pl.loadEnvFile(".env");
+  if (typeof pl.loadEnvFile === "function" && !process.env.VITEST) pl.loadEnvFile(".env");
 } catch {
   /* no .env file, or not supported here */
 }
