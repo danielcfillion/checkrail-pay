@@ -10,6 +10,7 @@ import { describeChange, pendingChanges, verifyBarrier } from "@/lib/engine/vend
 import { PendingChange } from "@/components/VendorControls";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Vendors" };
 
 export default async function VendorsPage() {
   const vendors = listVendors();
@@ -94,8 +95,8 @@ export default async function VendorsPage() {
                   <td className="hidden text-ink-soft sm:table-cell">{countryName(v.country)}</td>
                   <td className="hidden md:table-cell">
                     <span className="flex flex-wrap gap-1.5">
-                      {v.paypalEmail ? <span className="dense rounded-sm bg-paypal-soft px-1.5 py-0.5 text-paypal">PayPal</span> : null}
-                      {v.stellarAccount ? <span className="dense rounded-sm bg-stellar-soft px-1.5 py-0.5 text-stellar">Stellar</span> : null}
+                      {v.paypalEmail ? <span className="dense rounded-sm bg-paypal-soft px-1.5 py-0.5 text-paypal-text">PayPal</span> : null}
+                      {v.stellarAccount ? <span className="dense rounded-sm bg-stellar-soft px-1.5 py-0.5 text-stellar-text">Stellar</span> : null}
                       {v.bankLabel ? <span className="dense rounded-sm bg-paper px-1.5 py-0.5 text-ink-soft">{v.bankLabel}</span> : null}
                     </span>
                   </td>

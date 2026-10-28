@@ -19,6 +19,10 @@ import { obligations as obligationsTable } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const d = getVendorDetail((await params).id);
+  return { title: d ? d.vendor.name : "Vendor not found" };
+}
 
 export default async function VendorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

@@ -8,6 +8,7 @@ import { EmptyState, PageHeader } from "@/components/ui";
 import { pluralise } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Inbox" };
 
 const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }> = [
   { key: "all", label: "All" },

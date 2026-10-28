@@ -2,11 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { submitEvidenceAction } from "@/app/evidence/actions";
+import { FileDrop } from "./FileDrop";
 
 export function EvidenceUpload({ token }: { token: string }) {
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [fileName, setFileName] = useState<string | null>(null);
   if (done) return <p className="panel p-5">{done}</p>;
   return (
     <form
@@ -21,12 +23,25 @@ export function EvidenceUpload({ token }: { token: string }) {
         });
       }}
     >
-      <input name="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="field" required />
-      <p className="text-xs text-ink-soft">PDF or a clear photo, 10 MB at most.</p>
+      <FileDrop
+        name="file"
+        accept="application/pdf,image/png,image/jpeg,image/webp"
+        required
+        hint="PDF or a clear photo, 10 MB at most."
+        busy={pending ? `Sending ${fileName ?? "your document"}` : null}
+        onFiles={(f) => {
+          setFileName(f?.[0]?.name ?? null);
+          setError(null);
+        }}
+      />
       <button type="submit" className="btn btn-primary" disabled={pending}>
         {pending ? "Sending" : "Send document"}
       </button>
-      {error ? <p className="text-attention">{error}</p> : null}
+      {error ? (
+        <p className="text-attention" role="alert">
+          {error}
+        </p>
+      ) : null}
     </form>
   );
 }

@@ -5,6 +5,7 @@ import { CheckLine } from "@/components/CheckLine";
 import { EmptyState, Money, PageHeader, RelativeTime, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Exceptions" };
 
 export default function ExceptionsPage() {
   const rows = listObligations({ states: ["blocked", "failed"], limit: 500 });

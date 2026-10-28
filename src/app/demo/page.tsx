@@ -7,6 +7,7 @@ import { ResetDemoButton } from "@/components/ResetDemoButton";
 import { EmptyState, Money, PageHeader, RailTag, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Demo guide" };
 
 const STORY: Array<{ ref: string; title: string; line: string; pick: (rows: ObligationRow[]) => ObligationRow | undefined }> = [
   {

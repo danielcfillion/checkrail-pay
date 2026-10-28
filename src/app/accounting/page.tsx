@@ -11,6 +11,7 @@ import { auditEntries, obligations } from "@/lib/db/schema";
 import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Accounting" };
 
 export default function AccountingPage() {
   const rows = listAccountingSyncs();
