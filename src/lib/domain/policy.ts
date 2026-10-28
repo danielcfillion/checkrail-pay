@@ -111,7 +111,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       namesVendor.size > 0
         ? pass("evidence_names_vendor", `Evidence names ${vendor.name}`)
         : mentions.size > 0
-          ? warn("evidence_names_vendor", `The attached records mention ${vendor.name} only by part of the name; confirm the payee`)
+          ? warn("evidence_names_vendor", `${evidence.filter((e) => mentions.has(e.id)).map((e) => e.label).join(", ")} ${mentions.size === 1 ? "names" : "name"} the payee only by part of the name, not "${vendor.name}" in full; confirm who is being paid before approving`)
           : warn("evidence_names_vendor", `None of the attached records name ${vendor.name}; confirm the payee`),
     );
   }
