@@ -513,8 +513,12 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
   let billId = existing && existing.status !== "void" ? existing.id : null;
   if (!billId && ai.paymentPart?.kind === "deposit") {
     const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor!);
-    const total = ai.paymentPart.ofTotalMinor ?? evidenced?.amountMinor ?? null;
+    // The bill's total becomes the ceiling for every later payment against it, so it comes from a record the business
+    // holds (evidence naming this reference), never from the reader's number alone. A reader total that disagrees with
+    // the record creates no bill; the deposit is then checked like any other payment.
+    const total = evidenced?.amountMinor ?? null;
     if (!total || total <= ob.amountMinor) return;
+    if (ai.paymentPart.ofTotalMinor && ai.paymentPart.ofTotalMinor !== total) return;
     billId = createBill(db, ob.businessId, "agent", ob.vendorId, { kind: "invoice", reference: ob.sourceRef, totalMinor: total, currency: ob.currency, billDate: ob.invoiceDate, dueDate: ob.dueDate, note: `Recorded from a deposit request (${obligationId})` });
   }
   if (!billId) return;

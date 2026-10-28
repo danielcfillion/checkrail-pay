@@ -56,6 +56,19 @@ describe("deposits and balances", () => {
     await expect(payBill(db, DEMO_BUSINESS_ID, as("lan"), bill.id, 100)).rejects.toThrow(/closed/);
   });
 
+  it("never sets a bill's total from the reader's number alone", async () => {
+    // The request claims a USD 5,000 total, but no record the business holds carries a total for this reference.
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Dao Mountain Lodge invoice INV-DML-1099, total USD 5,000. 10% deposit USD 500 now, balance on arrival.",
+      evidence: [{ kind: "booking", label: "Booking note", amountMinor: null, currency: "USD", reference: "INV-DML-1099", excerpt: "Dao Mountain Lodge holds 10 rooms." }],
+      actor: "user:lan",
+    });
+    expect(ob(id).billId).toBeNull();
+    expect(findBill(db, "ven_dao", "INV-DML-1099")).toBeFalsy();
+  });
+
   it("applies a credit note to an invoice, lowering what is left to pay", async () => {
     const inv = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_dao", { kind: "invoice", reference: "INV-DML-1020", totalMinor: 60_000, currency: "USD" });
     const cn = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_dao", { kind: "credit_note", reference: "CN-DML-07", totalMinor: 15_000, currency: "USD", note: "Two rooms cancelled on INV-DML-0919" });

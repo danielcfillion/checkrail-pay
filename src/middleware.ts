@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
+import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 
 /** Set on public vendor pages so the layout renders them without the app's navigation or business data. */
 export const PUBLIC_HEADER = "x-checkrail-public";
@@ -21,13 +22,33 @@ export const PUBLIC_HEADER = "x-checkrail-public";
  * signature itself) and the vendor onboarding and evidence pages (a vendor has no login; each link carries a
  * single-use token). Static build assets are excluded by the matcher.
  */
+/*
+ * A small in-memory throttle (per server process, which is what one Render instance is): ten wrong passwords from
+ * one address in 15 minutes lock that address out for the rest of the window, and the token pages for vendors take
+ * at most 30 requests a minute per address. It slows guessing; it is not a substitute for a strong demo password.
+ */
+const FAIL_LIMIT = 10;
+const FAIL_WINDOW_MS = 15 * 60_000;
+const TOKEN_LIMIT = 30;
+const TOKEN_WINDOW_MS = 60_000;
+const failures = newThrottle();
+const tokenHits = newThrottle();
+
+function tooMany(retryMs: number) {
+  return new NextResponse("Too many attempts. Wait a few minutes and try again.", { status: 429, headers: { "Retry-After": String(Math.ceil(retryMs / 1000)) } });
+}
+
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
+  const ip = clientIp(req.headers);
   const headers = new Headers(req.headers);
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
 
   if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
+  // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
+  if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return NextResponse.next({ request: { headers } });
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
+    if (overLimit(tokenHits, ip, TOKEN_LIMIT, TOKEN_WINDOW_MS)) return tooMany(TOKEN_WINDOW_MS);
     headers.set(PUBLIC_HEADER, "1");
     return NextResponse.next({ request: { headers } });
   }
@@ -38,7 +59,10 @@ export function middleware(req: NextRequest) {
   let actor: string;
   let role: string;
   if (users.length > 0) {
+    if (overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS, Date.now(), false)) return tooMany(FAIL_WINDOW_MS);
     const who = authenticate(req.headers.get("authorization"), users);
+    // A missing header is the browser asking for the password prompt, not a guess; only wrong passwords count.
+    if (!who && req.headers.get("authorization")) overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);
     if (!who) return new NextResponse("Authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"' } });
     actor = who.user;
     role = who.role;

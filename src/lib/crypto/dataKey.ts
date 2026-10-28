@@ -5,15 +5,22 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  * bank file need in full. AES-256-GCM with a random IV per value; the key comes from CHECKRAIL_DATA_KEY (32 bytes,
  * base64 or hex) and never touches the database. Screens and the audit log only ever see the last four digits.
  *
- * Without a key, a fixed development key is used only where no real money can move; anywhere else, storing or
- * reading a full account number refuses.
+ * Without a key, a fixed and public development key is used only on a development server or the simulated hosted
+ * demo; anywhere else (live rails, sandbox included, or a production server), storing or reading a full account
+ * number refuses.
  */
 
 const PREFIX = "v1";
 const DEV_KEY = createHash("sha256").update("checkrail-pay development key: never protects real data").digest();
 
-function realMoneyPossible(): boolean {
-  return process.env.RAIL_MODE === "live" || process.env.PAYPAL_ENV === "live" || process.env.STELLAR_NETWORK === "public" || process.env.WISE_ENV === "live";
+/**
+ * Where a real key is required: any live rail (sandbox and testnet included, since testers type real-looking account
+ * numbers there), live provider environments, and any production server that is not the simulated demo. Only a
+ * development server, or the hosted demo on simulated rails with demo personas, may use the public development key.
+ */
+function realKeyRequired(): boolean {
+  if (process.env.RAIL_MODE === "live" || process.env.PAYPAL_ENV === "live" || process.env.STELLAR_NETWORK === "public" || process.env.WISE_ENV === "live") return true;
+  return process.env.NODE_ENV === "production" && process.env.CHECKRAIL_DEMO_PERSONAS !== "1" && process.env.CHECKRAIL_INSECURE_DEMO !== "1";
 }
 
 function key(): Buffer {
@@ -25,7 +32,7 @@ function key(): Buffer {
     if (raw.length < 24) throw new Error("CHECKRAIL_DATA_KEY is too short: use 32 random bytes, base64 or hex");
     return createHash("sha256").update(raw).digest();
   }
-  if (realMoneyPossible()) throw new Error("CHECKRAIL_DATA_KEY is not set; full bank account numbers cannot be stored or read with live rails");
+  if (realKeyRequired()) throw new Error("CHECKRAIL_DATA_KEY is not set: full bank account numbers cannot be stored or read here. Generate one with: openssl rand -base64 32");
   if (!warned && process.env.NODE_ENV !== "test") {
     warned = true;
     console.warn("[checkrail] CHECKRAIL_DATA_KEY is not set: bank account numbers are encrypted with the public development key. Fine for a mock demo; set a random key before storing anyone's real account.");
