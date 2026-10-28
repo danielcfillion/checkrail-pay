@@ -1,5 +1,6 @@
 import { senderOutlayMinor } from "@/lib/domain/routing";
 import type { Rail } from "@/lib/domain/types";
+import { lowerFirst, routerNote } from "./route-note";
 import { formatFxRate, formatMoney, formatMoneySymbol, humaniseEta, railLabel } from "@/lib/format";
 
 export type Quote = {
@@ -70,17 +71,18 @@ export function RouteCompare({ quotes, selectedRail, routeReason }: { quotes: Qu
           );
         })}
       </div>
-      {quiet.length ? (
-        <p className="mt-2 text-xs text-ink-soft">
-          {quiet.map((q) => `${railLabel(q.rail)}: ${q.unavailableReason ?? "unavailable"}`).join(". ")}.
-        </p>
-      ) : null}
-      {routeReason ? (
-        <p className="mt-3 border-t pt-2 text-xs hairline">
-          <span className="text-ink-soft">Router: </span>
-          {routeReason}
-        </p>
+      {quiet.length || routeReason ? (
+        <div className="mt-3 border-t pt-2 text-xs hairline">
+          {routeReason ? (
+            <p>
+              <span className="text-ink-soft">Router: </span>
+              {routerNote(routeReason)}
+            </p>
+          ) : null}
+          {quiet.length ? <p className={`text-ink-soft ${routeReason ? "mt-1" : ""}`}>{quiet.map((q) => `${railLabel(q.rail)} cannot pay this: ${lowerFirst(q.unavailableReason ?? "unavailable")}`).join(". ")}.</p> : null}
+        </div>
       ) : null}
     </div>
   );
 }
+

@@ -21,7 +21,12 @@ import { RuleChecklist } from "@/components/RuleChecklist";
 import { Timeline } from "@/components/Timeline";
 import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
-import { KeyValue, Linkified, Money, Panel, RailTag, StatePill } from "@/components/ui";
+import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
+import { DecisionCard } from "@/components/DecisionCard";
+import { decide, toneText, type Decision } from "@/components/decision-model";
+import { Disclosure, ReferencePanel, WorkingPanel } from "@/components/RequestPanels";
+import { toolCallSentence } from "@/components/tool-call-sentence";
+import { earlierPayments } from "@/lib/earlier-payment";
 
 export const dynamic = "force-dynamic";
 /** Tab title: "Phuong Transport, INV-2026-0152". */
@@ -32,7 +37,18 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: [o.vendorName ?? "Unknown vendor", o.sourceRef].filter(Boolean).join(", ") };
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** Pretty JSON for the raw view of a tool call; stored values are clipped, so fall back to the text. */
+const raw = (s: string) => {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s;
+  }
+};
+
+/** Mobile order (under 1024px): actions, evidence, then the rest. Desktop keeps the three columns. */
+const ORDER = { exception: "order-1", actions: "order-2", evidence: "order-3", deciding: "order-4", policy: "order-5", request: "order-6", agent: "order-7", route: "order-8", recipient: "order-9", bill: "order-10", settlement: "order-11", attempts: "order-12", approvals: "order-13", history: "order-14" } as const;
+const ord = (k: keyof typeof ORDER) => `${ORDER[k]} lg:order-none`;
 
 export default async function ObligationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -54,6 +70,36 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const approveRefusal = viewer && o.state === "awaiting_approval" ? runAs(viewer.login, () => approvalGate(getDb(), o.id, viewer.actor.id)).refusal : null;
   const dualGap = o.state === "awaiting_approval" && o.amountMinor != null && o.currency ? dualControlGap(getDb(), o.businessId, baseMinor ?? (o.currency === base ? o.amountMinor : undefined)) : null;
   const vendorChoices = !o.vendorId && o.state === "blocked" ? listVendors().map((v) => ({ id: v.id, name: v.name })) : undefined;
+  const earlier = earlierPayments([o.blockedReason, ...d.policyReasons, ...d.policyRules.map((r) => r.message)]);
+  const selectedQuote = d.quotes.find((x) => x.rail === o.selectedRail && x.available) ?? null;
+  const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
+  const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
+  const decision: Decision = decide({
+    state: o.state,
+    amountMinor: o.amountMinor,
+    currency: o.currency,
+    blockedReason: o.blockedReason,
+    policyReasons: d.policyReasons,
+    rules: d.policyRules,
+    selectedRail: o.selectedRail,
+    quote: selectedQuote,
+    availableRails,
+    hasAccounting,
+    settlement: d.settlement,
+    releaseAt: o.releaseAt,
+    earlier: firstId ? earlier.get(firstId) ?? null : null,
+  });
+  // An agent concern that only restates a failing amount check is the same reason twice: Policy keeps the check.
+  const amountBlocked = d.policyRules.some((r) => !r.passed && r.severity === "block" && (r.ruleId === "amount_matches_evidence" || r.ruleId === "expected_amount"));
+  const rules = d.policyRules.filter((r) => !(amountBlocked && r.ruleId === "ai_flag" && /differs from/i.test(r.message)));
+  const ruleMessages = new Set(d.policyRules.map((r) => r.message));
+  // The agent's concerns become policy warnings; list them here only if Policy does not already show them.
+  const concernsElsewhere = d.aiFlags.length > 0 && d.aiFlags.every((f) => ruleMessages.has(f));
+  const missingElsewhere = d.aiMissing.length > 0 && d.aiMissing.every((m) => ruleMessages.has(`Agent wants: ${m}`));
+  const otherFailing = rules.filter((r) => !r.passed && r.message !== decision.statedReason);
+  const otherBlocks = otherFailing.filter((r) => r.severity === "block").length;
+  const otherWarnings = otherFailing.length - otherBlocks;
+  const perm = { approve: perms?.approve ?? true, pay: perms?.pay ?? true, amend: perms?.amend ?? true };
 
   return (
     <ObligationStageProvider>
@@ -96,24 +142,26 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
         </div>
       </header>
 
+      <DecisionCard id={o.id} decision={decision} perms={perm} approveRefusal={approveRefusal} shownWarnings={shownWarnings} />
+
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)_minmax(0,5fr)]">
-        {/* Column 1: the request and its evidence */}
-        <div className="space-y-6">
-          <Panel title="The request" aside={sourceTypeLabel(o.sourceType)}>
+        {/* Column 1: the request and its evidence. Under 1024px the columns dissolve so each panel can be ordered. */}
+        <div className="contents lg:block lg:space-y-6">
+          <WorkingPanel className={ord("request")} title="The request" aside={sourceTypeLabel(o.sourceType)}>
             <blockquote className="whitespace-pre-wrap leading-5">{o.rawInput}</blockquote>
             <dl className="num mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t pt-3 text-xs hairline">
               <dt className="text-ink-soft">Created</dt>
               <dd>{formatDateTime(o.createdAt)}</dd>
               <InvoiceDates id={o.id} invoiceDate={o.invoiceDate} dueDate={o.dueDate} editable={Boolean(viewer?.can("amend")) && !["settled", "cancelled", "refunded"].includes(o.state)} />
-              <dt className="text-ink-soft">Obligation</dt>
+              <dt className="text-ink-soft">Request id</dt>
               <dd className="flex items-center gap-1">
                 {o.id}
-                <CopyButton value={o.id} label="Copy obligation id" />
+                <CopyButton value={o.id} label="Copy request id" />
               </dd>
             </dl>
-          </Panel>
+          </WorkingPanel>
 
-          <Panel title="Evidence" aside={d.evidence.length ? `${d.evidence.filter((e) => !e.supersededBy).length} on file` : "none"}>
+          <WorkingPanel className={ord("evidence")} title="Evidence" aside={d.evidence.length ? `${d.evidence.filter((e) => !e.supersededBy).length} on file` : "none"}>
             {d.evidence.length ? (
               <ul className="space-y-4">
                 {d.evidence.map((e) => (
@@ -136,10 +184,10 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             ) : (
               <p className="text-ink-soft">No evidence attached. Policy will not pay without a job sheet, invoice or contract.</p>
             )}
-          </Panel>
+          </WorkingPanel>
 
           {d.vendor ? (
-            <Panel title="Recipient" aside={<Link href={`/vendors/${d.vendor.id}`} className="link">Vendor page</Link>}>
+            <ReferencePanel className={ord("recipient")} title="Recipient" aside={<Link href={`/vendors/${d.vendor.id}`} className="link">Vendor page</Link>}>
               <KeyValue
                 rows={[
                   ["Name", d.vendor.name],
@@ -150,15 +198,15 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                   ["Verified", d.vendor.verifiedAt ? formatDate(d.vendor.verifiedAt) : "not verified"],
                 ]}
               />
-            </Panel>
+            </ReferencePanel>
           ) : null}
         </div>
 
         {/* Column 2: agent reading, policy, route */}
-        <div className="space-y-6">
-          <Panel title="What the agent read" aside={o.aiConfidence !== null ? <span className="num">confidence {o.aiConfidence}%</span> : null}>
+        <div className="contents lg:block lg:space-y-6">
+          <WorkingPanel className={ord("agent")} title="What the agent read" aside={o.aiConfidence !== null ? <span className="num">confidence {o.aiConfidence}%</span> : null}>
             {o.aiSummary ? <p>{o.aiSummary}</p> : <p className="text-ink-soft">The agent has not read this yet.</p>}
-            {d.aiFlags.length ? (
+            {d.aiFlags.length && !concernsElsewhere ? (
               <div className="mt-3">
                 <p className="dense text-attention">Concerns</p>
                 <ul className="mt-1 list-disc space-y-1 pl-5">
@@ -178,7 +226,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 </ul>
               </div>
             ) : null}
-            {d.aiMissing.length ? (
+            {d.aiMissing.length && !missingElsewhere ? (
               <div className="mt-3">
                 <p className="dense text-attention">Wants before paying</p>
                 <ul className="mt-1 list-disc space-y-1 pl-5">
@@ -188,67 +236,76 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 </ul>
               </div>
             ) : null}
+            {concernsElsewhere || missingElsewhere ? (
+              <p className="mt-3 text-ink-soft">
+                {[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. {d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} covered under Policy.
+              </p>
+            ) : null}
             {d.agentRun ? (
               <div className="mt-3 border-t pt-3 hairline">
                 <p className="dense text-ink-soft">Read by</p>
                 <p className="mt-0.5">
-                  {d.agentRun.engine === "claude" ? <>Claude <span className="num text-ink-soft">{d.agentRun.model}</span></> : <>Rules extractor <span className="text-ink-soft">(no model call; set AI_MODE=live to use Claude)</span></>}
+                  {d.agentRun.engine === "claude" ? <>Claude <span className="num text-ink-soft">{d.agentRun.model}</span></> : <>Rule-based reader <span className="text-ink-soft">(no model call)</span></>}
                 </p>
-                <p className="dense mt-2 text-ink-soft">Agent tool calls</p>
+                <p className="dense mt-2 text-ink-soft">What the agent checked</p>
                 {d.agentRun.toolCalls.length ? (
-                  <ul className="mt-1 space-y-1.5">
-                    {d.agentRun.toolCalls.map((t, i) => (
-                      <li key={i} className="rounded bg-[color:var(--paper)] px-2.5 py-1.5">
-                        <span className="num font-medium">{t.name}</span>
-                        {t.input && t.input !== "{}" ? <span className="num ml-2 text-xs text-ink-soft">{clip(t.input, 90)}</span> : null}
-                        {t.resultPreview ? <p className="num mt-0.5 text-xs text-ink-soft">{clip(t.resultPreview, 160)}</p> : null}
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="mt-1 space-y-1">
+                      {d.agentRun.toolCalls.map((t, i) => (
+                        <li key={i} className="grid grid-cols-[12px_1fr] gap-x-2">
+                          <span aria-hidden className="mt-[7px] h-1.5 w-1.5 rounded-full bg-[color:var(--ink-soft)]" />
+                          <span>{toolCallSentence(t, { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length })}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <Disclosure className="mt-2" summary="Show raw">
+                      <ul className="space-y-1.5">
+                        {d.agentRun.toolCalls.map((t, i) => (
+                          <li key={i} className="rounded bg-[color:var(--paper)] px-2.5 py-1.5">
+                            <p className="num text-xs font-medium">{t.name}</p>
+                            <pre className="num mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit" }}>
+                              {t.input && t.input !== "{}" ? `input ${raw(t.input)}\n` : ""}
+                              {t.resultPreview ? `result ${raw(t.resultPreview)}` : ""}
+                            </pre>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1 text-2xs text-ink-soft">Results are stored clipped to 200 characters.</p>
+                    </Disclosure>
+                  </>
                 ) : (
                   <p className="mt-0.5 text-ink-soft">None. This reading used no tools{d.agentRun.engine === "rules" ? "" : " beyond the request and attached records"}.</p>
                 )}
               </div>
             ) : null}
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
-          </Panel>
+          </WorkingPanel>
 
           {["awaiting_approval", "blocked", "needs_evidence"].includes(o.state) ? (
-            <Panel title="What you are deciding" aside="at a glance">
+            <WorkingPanel className={ord("deciding")} title="What you are deciding" aside="at a glance">
               <ApprovalContext
                 ask={formatMoney(o.amountMinor, o.currency)}
                 evidence={d.evidence.filter((e) => e.amountMinor !== null && !e.supersededBy).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
                 destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : (o.selectedRail === "wise" || o.selectedRail === "bank_file") && d.vendor.bankLabel ? `bank account ${d.vendor.bankLabel}${d.vendor.accountHolder ? ` (${d.vendor.accountHolder})` : ""}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
-                route={(() => { const q = d.quotes.find((x) => x.rail === o.selectedRail && x.available); return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
-                why={o.blockedReason ?? d.policyReasons[0] ?? (o.state === "needs_evidence" ? "No evidence attached" : "")}
+                route={(() => { const q = selectedQuote; return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
+                why={otherFailing.length ? `Policy also found ${[otherBlocks ? `${otherBlocks} more ${otherBlocks === 1 ? "block" : "blocks"}` : null, otherWarnings ? `${otherWarnings} ${otherWarnings === 1 ? "warning" : "warnings"}` : null].filter(Boolean).join(" and ")}, listed first under Policy.` : ""}
+                whyColour={toneText(decision.tone)}
               />
-            </Panel>
+            </WorkingPanel>
           ) : null}
-          <Panel title="Policy" aside={o.policyDecision ? decisionText(o.policyDecision) : null}>
-            <RuleChecklist rules={d.policyRules} />
-            {o.blockedReason ? (
-              <p className="mt-3 rounded bg-blocked-soft px-3 py-2 text-blocked">
-                <span className="font-medium">Blocked: </span>
-                <Linkified text={o.blockedReason} />
-              </p>
-            ) : d.policyReasons.length ? (
-              <ul className="mt-3 space-y-1 rounded bg-attention-soft px-3 py-2 text-attention">
-                {d.policyReasons.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
-            ) : null}
-          </Panel>
+          <WorkingPanel className={ord("policy")} title="Policy" aside={o.policyDecision ? decisionText(o.policyDecision) : null}>
+            <RuleChecklist rules={rules} earlier={earlier} />
+          </WorkingPanel>
 
-          <Panel title="Route">
+          <WorkingPanel className={ord("route")} title="Route">
             <RouteCompare quotes={d.quotes} selectedRail={o.selectedRail} routeReason={o.routeReason} />
-          </Panel>
+          </WorkingPanel>
         </div>
 
         {/* Column 3: actions, settlement, history */}
-        <div className="space-y-6">
+        <div className="contents lg:block lg:space-y-6">
           {d.payoutException ? (
-            <section className="panel" style={{ borderColor: "var(--attention)" }} aria-label="Payout needs attention">
+            <section className={`panel ${ord("exception")}`} style={{ borderColor: "var(--attention)" }} aria-label="Payout needs attention">
               <div className="flex items-baseline justify-between gap-3 border-b px-4 py-2.5 hairline">
                 <h2 className="font-medium text-attention">Payout needs attention</h2>
                 <span className="dense num text-ink-soft">{d.payoutException.externalStatus}</span>
@@ -260,25 +317,25 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </section>
           ) : null}
           {o.state === "approved" && o.releaseAt ? (
-            <Panel title="Autopilot" aside="scheduled">
+            <WorkingPanel className={ord("exception")} title="Autopilot" aside="scheduled">
               <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>
               <div className="mt-2">
                 <ScheduledReleases compact rows={[{ id: o.id, vendorName: o.vendorName, amountText: formatMoney(o.amountMinor, o.currency), releaseAt: o.releaseAt }]} />
               </div>
-            </Panel>
+            </WorkingPanel>
           ) : null}
-          <Panel title="Actions" aside={stateLabel(o.state)}>
+          <WorkingPanel className={ord("actions")} label="Actions" title="Actions" aside={stateLabel(o.state)}>
             {dualGap ? <p className="mb-2 rounded border border-attention bg-attention-soft px-3 py-2 text-xs text-ink" role="status">{dualGap}</p> : null}
-            <ActionBar id={o.id} shownWarnings={d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult))} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} billId={o.billId} vendorChoices={vendorChoices} />
+            <ActionBar id={o.id} shownWarnings={shownWarnings} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} billId={o.billId} vendorChoices={vendorChoices} primaryInCard={Boolean(decision.action)} />
             {o.vendorId && (["sent", "settled"].includes(o.state) ? !viewer || viewer.can("pay") : ["needs_evidence", "blocked", "awaiting_approval"].includes(o.state) && (!viewer || viewer.can("amend"))) ? (
               <div className="mt-4 border-t pt-3 hairline">
                 <VendorLinkButton kind={["sent", "settled"].includes(o.state) ? "remittance" : "evidence"} obligationId={o.id} />
               </div>
             ) : null}
-          </Panel>
+          </WorkingPanel>
 
           {bill ? (
-            <Panel title={`Part of ${bill.kind === "advance" ? "advance" : "invoice"} ${bill.reference}`} aside={o.paymentKind ?? "payment"}>
+            <ReferencePanel className={ord("bill")} title={`Part of ${bill.kind === "advance" ? "advance" : "invoice"} ${bill.reference}`} aside={o.paymentKind ?? "payment"}>
               <KeyValue
                 rows={[
                   ["Bill total", formatMoney(bill.totalMinor, bill.currency)],
@@ -293,10 +350,10 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                   All bills for this vendor
                 </Link>
               ) : null}
-            </Panel>
+            </ReferencePanel>
           ) : null}
           {d.settlement ? (
-            <Panel title="Settlement" aside={<RailTag rail={d.settlement.rail} />}>
+            <ReferencePanel className={ord("settlement")} title="Settlement" aside={<RailTag rail={d.settlement.rail} />}>
               <KeyValue
                 rows={[
                   ["Paid", <Money key="g" minor={d.settlement.grossMinor} currency={d.settlement.grossCurrency} />],
@@ -343,11 +400,11 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 ]}
               />
               <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">{d.settlement.note ?? "Delivery to the recipient is modelled from the quote, not observed."}</p>
-            </Panel>
+            </ReferencePanel>
           ) : null}
 
           {d.attempts.length ? (
-            <Panel title="Payment attempts" aside={`${d.attempts.length}`}>
+            <ReferencePanel className={ord("attempts")} title="Payment attempts" aside={`${d.attempts.length}`}>
               <ul className="space-y-2">
                 {d.attempts.map((a) => (
                   <li key={a.id} className="flex items-baseline justify-between gap-3">
@@ -364,11 +421,11 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                   </li>
                 ))}
               </ul>
-            </Panel>
+            </ReferencePanel>
           ) : null}
 
           {d.approvals.length ? (
-            <Panel title="Approvals">
+            <ReferencePanel className={ord("approvals")} title="Approvals">
               <ul className="space-y-2">
                 {d.approvals.map((a) => (
                   <li key={a.id}>
@@ -380,14 +437,16 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                   </li>
                 ))}
               </ul>
-            </Panel>
+            </ReferencePanel>
           ) : null}
 
-          <Panel title="History" aside={`${d.audit.length} entries`}>
+          <ReferencePanel className={ord("history")} title="History" aside={`${d.audit.length} entries`}>
             <Timeline entries={d.audit} />
-          </Panel>
+          </ReferencePanel>
         </div>
       </div>
+      {/* Room for the phone action bar, so it never covers the last panel. */}
+      {decision.action ? <div className="h-14 lg:hidden" aria-hidden /> : null}
       <p className="sr-only">Amount {formatMoney(o.amountMinor, o.currency)}</p>
     </ObligationStageProvider>
   );
@@ -417,7 +476,7 @@ function shortReason(reason: string): string {
 }
 
 /** The four facts an approver needs side by side: what was asked, what the evidence says, where the money goes, and what it costs. */
-function ApprovalContext({ ask, evidence, destination, route, why }: { ask: string; evidence: string[]; destination: string; route: string; why: string }) {
+function ApprovalContext({ ask, evidence, destination, route, why, whyColour }: { ask: string; evidence: string[]; destination: string; route: string; why: string; whyColour: string }) {
   return (
     <div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
@@ -430,7 +489,11 @@ function ApprovalContext({ ask, evidence, destination, route, why }: { ask: stri
         <dt className="dense text-ink-soft">Route</dt>
         <dd>{route}</dd>
       </dl>
-      {why ? <p className="mt-3 border-t pt-3 text-attention hairline">{why}</p> : null}
+      {why ? (
+        <p className="mt-3 border-t pt-3 font-medium hairline" style={{ color: whyColour }}>
+          {why}
+        </p>
+      ) : null}
     </div>
   );
 }

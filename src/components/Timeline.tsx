@@ -27,7 +27,7 @@ export function Timeline({ entries }: { entries: AuditRow[] }) {
             {showDay ? <p className="dense mb-0.5 text-ink-soft">{day}</p> : null}
             <div className="flex items-baseline justify-between gap-2">
               <p className="min-w-0">
-                <span className="font-medium">{humaniseAction(e.action)}</span>
+                <span className="font-medium">{humaniseAction(e.action).replace(/^Obligation\b/, "Request")}</span>
                 <span className="text-ink-soft"> by {humaniseActor(e.actor)}</span>
               </p>
               <time dateTime={e.createdAt} title={formatDateTime(e.createdAt)} className="num shrink-0 text-xs text-ink-soft">

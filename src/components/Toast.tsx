@@ -11,7 +11,7 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
-/** Minimal toasts: bottom left, one line, auto-dismiss, confirm in the same words as the button. */
+/** Minimal toasts: bottom centre of the content (above the phone nav and action bar), one line, auto-dismiss, confirm in the same words as the button. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Toast[]>([]);
   const seq = useRef(0);
@@ -24,7 +24,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed bottom-16 left-4 z-50 flex flex-col gap-2 sm:bottom-4 md:left-[244px]" aria-live="polite" aria-atomic="false">
+      <div className="pointer-events-none fixed inset-x-4 bottom-[116px] z-50 flex flex-col items-center gap-2 md:bottom-20 md:left-16 md:right-0 lg:bottom-6 lg:left-[220px]" aria-live="polite" aria-atomic="false">
         {items.map((t) => (
           <div key={t.id} role="status" className={`pointer-events-auto panel flex items-center gap-2 px-3 py-2 ${t.tone === "error" ? "border-blocked text-blocked" : ""}`} style={{ borderColor: t.tone === "error" ? "var(--blocked)" : undefined }}>
             <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: t.tone === "error" ? "var(--blocked)" : "var(--settled)" }} />
