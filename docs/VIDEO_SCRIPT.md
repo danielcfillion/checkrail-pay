@@ -12,7 +12,7 @@ Claude reads, policy decides, the agent pays inside your limits, and you sign of
 
 ## Captions
 
-Burn the captions in. Judges often watch muted. One line at a time, bottom centre, Archivo 600 at about 44px on a 1080p frame, ink #10233A on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
+Burn the captions in. Judges often watch muted. The cold open is 24 words over 0:03 to 0:13, about 2.4 words a second; do not add words to it. One line at a time, bottom centre, Archivo 600 at about 44px on a 1080p frame, ink #10233A on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
 
 ## Shot list (hackathon cut)
 
@@ -20,18 +20,17 @@ Crop values are relative to the full 1440px frame. "2x" means the crop is half t
 
 | Time | On screen | Crop and zoom | Action | Voiceover |
 |---|---|---|---|---|
-| 0:00 to 0:03 | Title card: the mark (`public/brand/checkrail-lockup.svg`) on paper #EDF0F2, "Checkrail Pay" beneath | Full frame, still | Hold. Cut on 0:03. | (none, or a soft room tone) |
-| 0:03 to 0:12 | Phuong request page, the raw request: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently for fuel on the next trip." | 2x on the request text | Hold | "Pay Phuong nine sixty today, he needs it for fuel." I run a tour company and I get this message every week. This one is one hundred and sixty dollars wrong. |
-| 0:12 to 0:22 | Overview: autopilot strip, the check line, Money out chart | Full frame, then ease to 1.5x on the check line | Move the cursor along the five stations | This is Checkrail Pay. Every supplier payment travels one line: read, verified, routed, paid, reconciled. Claude reads each request. A fixed set of rules decides. |
+| 0:00 to 0:13 | Phuong request page, the raw request: "Hey can you pay Phuong Transport INV-2026-0152 today? ... total $960. He needs it urgently for fuel on the next trip." From 0:03, lower third bottom left: the lockup (`public/brand/checkrail-lockup.svg`) and "Checkrail Pay" on a white band, held to 0:08 | 2x on the request text from the first frame | Hold. No title card: the chat message is the first frame. | (from 0:03) "Pay Phuong nine sixty today, he needs it for fuel." I get this every week. This one is a hundred and sixty dollars wrong. |
+| 0:13 to 0:22 | Overview: autopilot strip, the check line, Money out chart | Full frame, then ease to 1.5x on the check line | Move the cursor along the five stations | This is Checkrail Pay. Every supplier payment travels one line: read, verified, routed, paid, reconciled. Claude reads each request. A fixed set of rules decides. |
 | 0:22 to 0:46 | Phuong request page | 2x on "What the agent read" and its tool calls, cut to 2x on the check line broken at verified, then 2x on the red rule row "Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00" | Point at each in turn | Claude read the message and both attached records, and checked PayPal's own transactions. The contract is two hundred a day, the trip sheet says four days. Policy compared them and blocked it: one hundred and sixty over. Claude advises. It has no way to pay. |
-| 0:46 to 0:58 | Maria JOB-HG4D-0914 request page | 2x on the red duplicate rule row and the link to the settled payment | Point at both | The second looks perfect: right guide, right amount, a signed job sheet. Except that job was paid seventeen days ago. Blocked. Two errors caught before any money moved. |
+| 0:46 to 0:58 | Maria JOB-HG4D-0914 request page | 2x on the red banner "Blocked: USD 180 already paid for JOB-HG4D-0914", then 2.5x on the policy row "PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com" | Point at the PayPal transaction id | The second looks perfect: right guide, right amount, a signed job sheet. But PayPal's own records say that job was paid seventeen days ago. Blocked, with PayPal's transaction id. Two errors caught before any money moved. |
 | 0:58 to 1:20 | Maria JOB-HG4D-0921 request page | 2x on the route comparison, then 2.5x on the check line from routed to reconciled, framed so the marker sits in the centre third as it travels | Click "Pay with PayPal", let the marker travel to paid, then reconciled | Third: one hundred and eighty dollars for last week's trip. Evidence matches. Both rails are quoted on what the guide actually receives per dollar I spend. Pay with PayPal. That is a real PayPal sandbox payout. (Money shot one.) |
 | 1:20 to 1:27 | PayPal sandbox dashboard, the payout batch | 2x on the batch id | Hold three seconds on the id the request page shows | Here it is on PayPal's side. Same batch id. |
 | 1:27 to 1:39 | Settings, Autonomy panel | 1.5x on the three "Who does what" cards (Review everything, Assist, Autopilot) | Hold four seconds on the cards. Click Autopilot, "Turn on autopilot", "Yes, turn on autopilot". Cut. | Most of my suppliers are boring and correct. So I hand the routine ones to the agent: up to five hundred per payment, two thousand a day. |
 | 1:39 to 1:58 | Overview, the autopilot strip with the scheduled payment and its countdown | 2x on the scheduled row and the countdown, held while it ticks | Hold on the countdown, then hold as it flips to sent. | This one matched its trip sheet, so Autopilot scheduled it. Until the window ends, I can cancel. Autonomy removes the approval step and nothing else: a wrong amount, a duplicate or changed bank details still stop it, and policy runs again the moment money moves. (Money shot two.) |
 | 1:58 to 2:12 | Ana request page | 2x on the UNCLAIMED status and the "Payout needs attention" panel | Point at the status, then the message | One more thing real payments do. Ana's PayPal email does not exist, so the payout came back unclaimed. Checkrail Pay holds it for a person and will not pay twice. |
 | 2:12 to 2:34 | Daily close | Full frame for "Needs a look", then 2x on "Sent by autopilot" and the cap meter, then 2x on the Sign off confirm | Scroll from "Needs a look" through "Sent by autopilot" and "Sent by people" to the cap meter, then click Sign off and confirm | At the end of the day I read one page. What needs a look comes first. Then what the agent sent, what people sent, and spend against the cap. Sign off, and that goes in the audit log too. |
-| 2:34 to 2:42 | End card: the mark, "Checkrail Pay", the tagline | Full frame, still | Hold | Checkrail Pay. Claude reads. Policy decides. You sign off. |
+| 2:34 to 2:44 | End card: the mark, "Checkrail Pay", the tagline, then "Try it: [hosted URL]/demo" | Full frame, still | Hold | Checkrail Pay. Claude reads. Policy decides. You sign off. |
 
 The countdown runs ten minutes by default. Either set a short cancel window in Settings before the take (the caption band then says "Cancel window shortened for the video; default 10 minutes"), or keep the default and cut from the countdown to the sent state with a visible jump cut and a caption "10 minutes later". Never fake the transition.
 
@@ -42,6 +41,28 @@ The countdown runs ten minutes by default. Either set a short cancel window in S
 3. **Rehearse step 1 once in live mode.** With Claude reading, any concern it raises holds the payment, so the autopilot shot will not schedule. If it holds, read the concern on the request page and adjust the covering message.
 4. Do not press Reset demo after step 2: Ana's payout is real sandbox state, and resetting is disabled in live mode anyway.
 
+## The PayPal record in the duplicate shot (0:46 to 0:58): prep before a live take
+
+The policy row "PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to ..." comes from the app's own read of PayPal Transaction Search. What that read returns depends on the mode:
+- **Simulated rails (the hosted demo, `RAIL_MODE=mock`):** the history is what the simulated PayPal rail paid, so the row always appears for JOB-HG4D-0914.
+- **Live sandbox:** the seeded month of history is simulated and never went through the sandbox, so the real sandbox account has no JOB-HG4D-0914 payout. The real sandbox payouts of 12 Oct 2026 were for JOB-HG4D-0921 (batch RGS5PUZPH4CNY) and JOB-PAL3D-0927 (batch W55KNGQK57JC4).
+
+So for a live take, do one of these, at least three hours before recording (Transaction Search can lag that long):
+1. **Preferred:** send one real sandbox payout of USD 180 to the `DEMO_PAYPAL_RECIPIENT` account with the note "JOB-HG4D-0914" (from the PayPal sandbox dashboard or a one-off replay), then confirm on `/obligations/<0914 id>` that the row shows that PayPal transaction id.
+2. Or record this one beat on simulated rails and caption it "Simulated PayPal rail" for the length of the beat.
+
+Two more live-mode checks, because Transaction Search covers the last 31 days:
+- **JOB-HG4D-0921 (money shot one).** Until about 12 Nov 2026 the sandbox still holds the 12 Oct payout for JOB-HG4D-0921. If the PayPal record matches on the recipient email, the clean request is blocked as already paid and money shot one fails. Rehearse it: if it blocks, record after the 12 Oct payout has left the 31-day range, or reseed with a new job id for the clean request (builder task). This depends on which Transaction Search field carries the recipient email (see `HUMAN_ACTION_QUEUE.md`, H16).
+- **If the row reads "PayPal's transaction history could not be read",** Transaction search is off on the PayPal app. The block then comes from this app's own history only, and the voiceover must say "this app's history", not "PayPal's records".
+
+## Fallback for the unclaimed shot (1:58 to 2:12)
+
+An UNCLAIMED result depends on the sandbox recipient email having no account, and a fresh take may not come back UNCLAIMED on demand. If it does not by the time you record:
+- Show the saved state of batch W55KNGQK57JC4 (USD 750 to Ana Reyes, 12 Oct 2026, UNCLAIMED and held) instead: the PayPal sandbox dashboard page for that batch, held three seconds on the id and the UNCLAIMED status.
+- Caption: "Recorded sandbox run, 12 Oct 2026".
+- Voiceover unchanged except "came back unclaimed" becomes "came back unclaimed in our sandbox run".
+- Never stage an UNCLAIMED state the app did not receive.
+
 ## The one insert that matters most
 
 The PayPal sandbox payout batch id on PayPal's own dashboard, matching the id on the request page (1:20 to 1:27). It answers "did a real PayPal call happen" in three seconds. The first one was RGS5PUZPH4CNY on 12 Oct 2026; a fresh take produces a new id.
@@ -51,8 +72,9 @@ The PayPal sandbox payout batch id on PayPal's own dashboard, matching the id on
     [mark]
     Checkrail Pay
     Claude reads. Policy decides. You sign off.
+    Try it: [hosted URL]/demo
 
-Add the repository link to the end card only once the public repo exists. Add checkrailpay.com only once it serves the landing page.
+Founder: replace `[hosted URL]` with the Render URL from H14 before you export. If the hosted demo is not live on the day you export, drop the "Try it" line rather than show a placeholder. Add the repository link only once the public repo exists, and checkrailpay.com only once it serves the landing page.
 
 ## SCF cut
 
@@ -62,7 +84,7 @@ Same footage plus a Stellar shot once a testnet payment exists: a release throug
 
 | Time | On screen | Caption |
 |---|---|---|
-| 0:00 to 0:04 | Phuong page, 2x on the line broken at verified and the red rule row | "Pay Phuong $960 today, urgent." |
+| 0:00 to 0:04 | Phuong page, 2x on the line broken at verified and the red rule row, lockup as a lower third | "Pay Phuong $960 today, urgent." |
 | 0:04 to 0:08 | 2x on "Trip sheet HG-4D-0927 says USD 800.00" | "The trip sheet says $800." |
 | 0:08 to 0:12 | 2x on the autopilot countdown | "The right ones pay themselves." |
 | 0:12 to 0:16 | Daily close, Sign off | "You sign off in two minutes." |

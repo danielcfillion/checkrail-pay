@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="540" viewBox="0 0 1280 540" font-family="Archivo, 'Helvetica Neue', Arial, sans-serif">
+<title>Checkrail spend policy: propose, cancel window, release with the rules checked again, payee; the owner can cancel and pause</title>
+<rect width="1280" height="540" fill="#EDF0F2"/>
+<text x="40" y="58" font-size="26" font-weight="600" fill="#10233A">How a payment leaves the spend-policy contract</text>
+<text x="40" y="88" font-size="17" fill="#5B6B7C">The agent key can only propose. Release is open to anyone after the window, and the contract checks every rule again.</text>
+<line x1="288" y1="234.0" x2="330" y2="234.0" stroke="#10233A" stroke-width="3"/><path d="M326 227.0l12 7-12 7z" fill="#10233A"/>
+<rect x="40" y="170" width="248" height="128" rx="10" fill="#FFFFFF" stroke="#C5CDD5" stroke-width="1"/>
+<text x="60" y="206" font-weight="600" font-size="19" fill="#10233A">1. Propose</text>
+<text x="60" y="236" font-size="17" fill="#10233A">Agent key sends payee,</text>
+<text x="60" y="258" font-size="17" fill="#10233A">amount and a payment id.</text>
+<text x="60" y="280" font-size="15" fill="#5B6B7C">Caps, allow-list, pause checked</text>
+<line x1="606" y1="234.0" x2="648" y2="234.0" stroke="#10233A" stroke-width="3"/><path d="M644 227.0l12 7-12 7z" fill="#10233A"/>
+<rect x="338" y="170" width="268" height="128" rx="10" fill="#FFFFFF" stroke="#C5CDD5" stroke-width="1"/>
+<text x="358" y="206" font-weight="600" font-size="19" fill="#10233A">2. Cancel window</text>
+<text x="358" y="236" font-size="17" fill="#10233A">Nothing moves until it ends</text>
+<text x="358" y="258" font-size="17" fill="#10233A">(default 10 minutes).</text>
+<text x="358" y="280" font-size="15" fill="#5B6B7C">Scheduled ones count to the cap</text>
+<line x1="940" y1="234.0" x2="982" y2="234.0" stroke="#10233A" stroke-width="3"/><path d="M978 227.0l12 7-12 7z" fill="#10233A"/>
+<rect x="656" y="170" width="284" height="128" rx="10" fill="#FFFFFF" stroke="#0E7C5B" stroke-width="2"/>
+<text x="676" y="206" font-weight="600" font-size="19" fill="#10233A">3. Release</text>
+<text x="676" y="236" font-size="17" fill="#10233A">Anyone can call it after the</text>
+<text x="676" y="258" font-size="17" fill="#10233A">window. Every rule is checked</text>
+<text x="676" y="280" font-size="17" fill="#10233A">again, at the limits in force then.</text>
+<rect x="990" y="170" width="250" height="128" rx="10" fill="#FFFFFF" stroke="#C5CDD5" stroke-width="1"/>
+<text x="1010" y="206" font-weight="600" font-size="19" fill="#10233A">4. Payee</text>
+<text x="1010" y="236" font-size="17" fill="#10233A">PYUSD or USDC goes from</text>
+<text x="1010" y="258" font-size="17" fill="#10233A">the business's contract</text>
+<text x="1010" y="280" font-size="17" fill="#10233A">to an allowed payee.</text>
+<circle cx="1214" cy="200" r="11" fill="#0E7C5B"/><path d="M1208.5 200.5l4 4 7-8" stroke="#FFFFFF" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="338" y="392" width="602" height="116" rx="10" fill="#FFFFFF" stroke="#A8261D" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="358" y="426" font-size="19" font-weight="600" fill="#A8261D">Owner, at any point before release</text>
+<text x="358" y="454" font-size="17" fill="#10233A">Cancel a scheduled payment. Pause: owner or agent can pull it,</text>
+<text x="358" y="476" font-size="17" fill="#10233A">only the owner lifts it. Change the caps and the allow-list.</text>
+<text x="358" y="498" font-size="15" fill="#5B6B7C">Withdraw the balance at any time. Checkrail never holds funds.</text>
+<line x1="472" y1="392" x2="472" y2="302" stroke="#A8261D" stroke-width="2" stroke-dasharray="5 4"/><path d="M466 310l6-10 6 10z" fill="#A8261D"/>
+<line x1="798" y1="392" x2="798" y2="302" stroke="#A8261D" stroke-width="2" stroke-dasharray="5 4"/><path d="M792 310l6-10 6 10z" fill="#A8261D"/>
+<text x="990" y="422" font-size="15" fill="#5B6B7C">Anchor payouts: the on-chain payee is</text>
+<text x="990" y="443" font-size="15" fill="#5B6B7C">the anchor, so an allow-list binds the</text>
+<text x="990" y="464" font-size="15" fill="#5B6B7C">supplier only with the SEP-31 receiver</text>
+<text x="990" y="485" font-size="15" fill="#5B6B7C">id (planned, not built).</text>
+</svg>

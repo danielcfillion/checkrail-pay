@@ -7,7 +7,8 @@
 <meta name="description" content="Checks every supplier payment before money moves. Claude reads. Policy decides. You sign off.">
 <meta property="og:title" content="Checkrail Pay">
 <meta property="og:description" content="Checks every supplier payment before money moves.">
-<meta property="og:image" content="brand/og.png">
+<meta property="og:image" content="https://checkrailpay.com/brand/og.png">
+<meta property="og:image:alt" content="Checkrail Pay: a payment line broken at Verified because the request asked USD 960 and the trip sheet says USD 800">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="brand/checkrail-mark.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -34,7 +35,6 @@
       --blocked: #D4574C;
       --rule: rgb(147 163 180 / 0.24);
     }
-    .mark { background: var(--ink); border-radius: 10px; padding: 6px; }
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -60,7 +60,7 @@
     line-height: 1.04;
     letter-spacing: -0.01em;
     margin: 0;
-    max-width: 14ch;
+    max-width: 18ch;
   }
   .tagline { font-size: clamp(19px, 2.4vw, 24px); color: var(--ink-soft); margin: 20px 0 32px; }
   .tagline b { color: var(--ink); font-weight: 600; }
@@ -73,6 +73,15 @@
   }
   .btn-primary { background: var(--ink); color: var(--paper); }
   .btn-ghost { background: transparent; color: var(--ink); }
+  .btn-wrap { display: flex; flex-direction: column; gap: 6px; }
+  .btn-note { font-size: 14px; color: var(--ink-soft); margin: 0; }
+  /* A placeholder whose link is still "#" never shows, with or without the script below. */
+  [data-placeholder-link][hidden], a[data-placeholder-link][href="#"], [data-placeholder-link]:has(a[href="#"]), [data-fallback-link][hidden] { display: none !important; }
+  .fallback { color: var(--ink-soft); margin: 0; }
+  .shot { margin: 40px 0 0; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--rule); }
+  .shot figcaption { color: var(--ink-soft); font-size: 15px; margin: 10px 0 28px; }
+  .shot { margin-top: 32px; }
   .btn:focus-visible { outline: 3px solid var(--settled); outline-offset: 3px; }
   .sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; }
   .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin: 0; padding: 0; list-style: none; }
@@ -83,23 +92,19 @@
   section { padding: 56px 0 0; }
   h2 { font-stretch: 108%; font-weight: 600; font-size: 26px; margin: 0 0 8px; }
   .lede { color: var(--ink-soft); margin: 0 0 28px; max-width: 60ch; }
-  .line { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); padding: 32px 24px 28px; }
-  .line::before {
-    content: ""; position: absolute; left: calc(24px + 10%); right: calc(24px + 10%); top: 45px;
-    border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); height: 6px;
-  }
-  .stop { position: relative; text-align: center; padding: 0 8px; }
-  .dot {
-    width: 28px; height: 28px; margin: 0 auto 14px; border-radius: 50%;
-    background: var(--sheet); border: 2px solid var(--ink); position: relative; z-index: 1;
-  }
-  .stop:last-child .dot { background: var(--settled); border-color: var(--settled); }
-  .stop:last-child .dot::after {
-    content: ""; position: absolute; left: 8px; top: 4px; width: 7px; height: 12px;
-    border: solid var(--sheet); border-width: 0 3px 3px 0; transform: rotate(45deg);
-  }
+  .line { padding: 28px 24px 24px; }
+  .track { display: block; width: 100%; height: 40px; overflow: visible; }
+  .track .run { stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+  .track .tick { stroke: var(--ink); stroke-width: 2; }
+  .track .start { fill: var(--ink); }
+  .track .end { fill: var(--settled); }
+  .track .endtick { stroke: var(--sheet); stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .stops { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin: 10px 0 0; padding: 0; list-style: none; }
   .stop b { display: block; font-stretch: 108%; }
   .stop span { display: block; color: var(--ink-soft); font-size: 15px; margin-top: 4px; }
+  .stops li:nth-child(1) { text-align: left; }
+  .stops li:nth-child(2), .stops li:nth-child(3), .stops li:nth-child(4) { text-align: center; }
+  .stops li:nth-child(5) { text-align: right; }
   .promise { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .promise div { padding: 24px; }
   .promise b { display: block; font-size: 20px; font-stretch: 108%; margin-bottom: 6px; }
@@ -111,11 +116,15 @@
     .points { grid-template-columns: 1fr; }
     .points li { border-left: 0; border-top: 1px solid var(--rule); padding: 20px; }
     .points li:first-child { border-top: 0; }
-    .line { grid-template-columns: 1fr; gap: 18px; padding: 24px 20px; }
-    .line::before { left: 33px; right: auto; top: 38px; bottom: 38px; height: auto; width: 6px; border: 0; border-left: 2px solid var(--ink); border-right: 2px solid var(--ink); }
-    .stop { display: grid; grid-template-columns: 28px 1fr; gap: 16px; text-align: left; padding: 0; align-items: start; }
-    .dot { margin: 0; }
-    .stop span { margin-top: 2px; }
+    .line { padding: 20px; }
+    .track { display: none; }
+    .stops { grid-template-columns: 1fr; gap: 0; margin: 0; }
+    .stops li { position: relative; text-align: left !important; padding: 0 0 18px 32px; }
+    .stops li::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: -6px; border-left: 3px solid var(--ink); }
+    .stops li::after { content: ""; position: absolute; left: 0; top: 6px; width: 15px; height: 3px; background: var(--ink); }
+    .stops li:last-child { padding-bottom: 0; }
+    .stops li:last-child::before { display: none; }
+    .stops li:last-child::after { width: 16px; height: 16px; top: 2px; left: 0; border-radius: 50%; background: var(--settled); }
     .promise { grid-template-columns: 1fr; }
     .btn { flex: 1 1 100%; }
   }
@@ -133,28 +142,63 @@
       <p class="eyebrow">Built for the PayPal AI Hackathon</p>
       <h1>Checks every supplier payment before money moves.</h1>
       <p class="tagline"><b>Claude reads. Policy decides. You sign off.</b></p>
+      <!--
+        Founder: each button below is a placeholder until you paste its URL into href.
+        A button whose href is still "#" is removed by the script at the end of this page, so a dead link never shows.
+        - Try the demo: the hosted Render URL plus /demo (H14).
+        - Watch the demo: the YouTube URL (H6).
+        - View on GitHub: the public repository URL (H3).
+        scripts/check-site.mjs fails if any "#" link would still show.
+      -->
       <div class="actions">
-        <!-- Founder: paste the YouTube video URL into the href of "Watch the demo", and the public GitHub repository URL into the href of "View on GitHub". -->
-        <a class="btn btn-primary" href="#">Watch the demo</a>
-        <a class="btn btn-ghost" href="#">View on GitHub</a>
+        <div class="btn-wrap" data-placeholder-link>
+          <a class="btn btn-primary" href="#">Try the demo</a>
+          <p class="btn-note">Login in the Devpost testing instructions</p>
+        </div>
+        <a class="btn btn-ghost" href="#" data-placeholder-link>Watch the demo</a>
+        <a class="btn btn-ghost" href="#" data-placeholder-link>View on GitHub</a>
+        <a class="btn btn-ghost" href="#how" data-fallback-link>Read how it works</a>
       </div>
     </div>
 
+    <figure class="shot">
+      <picture>
+        <source srcset="brand/product-phone-dark.png" media="(max-width: 760px) and (prefers-color-scheme: dark)">
+        <source srcset="brand/product-phone.png" media="(max-width: 760px)">
+        <source srcset="brand/product-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="brand/product.png" width="1200" height="580" alt="A blocked payment request in Checkrail Pay: Phuong Transport asked USD 960, the trip sheet says USD 800, and two policy rules block it">
+      </picture>
+      <figcaption>From the demo: the request asks USD 960, the trip sheet says 4 days at USD 200. Blocked, with the fix one click away.</figcaption>
+    </figure>
+
     <ul class="points sheet">
       <li><b>Stops the wrong ones</b><span>Blocks inflated and duplicate invoices against the evidence, with a one-line reason.</span></li>
-      <li><b>Pays the right ones</b><span>Pays over PayPal or Stellar, and the agent pays only inside your caps.</span></li>
+      <li><b>Pays the right ones</b><span>Pays the clean ones over PayPal, and the agent pays only inside your caps.</span></li>
       <li><b>Closes the day</b><span>Lands every payment in the books, with a two-minute Daily close.</span></li>
     </ul>
 
     <section aria-labelledby="how">
       <h2 id="how">How it works</h2>
       <p class="lede">For small service businesses that pay dozens of freelance suppliers from chat messages. Every request travels one line through five stations.</p>
-      <div class="line sheet" role="list">
-        <div class="stop" role="listitem"><div class="dot"></div><div><b>Read</b><span>Claude reads the request and its job sheet, invoice or photo.</span></div></div>
-        <div class="stop" role="listitem"><div class="dot"></div><div><b>Verified</b><span>Fixed rules check it against the job, the rate card and past payments.</span></div></div>
-        <div class="stop" role="listitem"><div class="dot"></div><div><b>Routed</b><span>Every rail is quoted on what the supplier receives.</span></div></div>
-        <div class="stop" role="listitem"><div class="dot"></div><div><b>Paid</b><span>The rules run again, then your own account pays.</span></div></div>
-        <div class="stop" role="listitem"><div class="dot"></div><div><b>Reconciled</b><span>Settlement is confirmed and lands in your books.</span></div></div>
+      <div class="line sheet">
+        <svg class="track" viewBox="0 0 1000 40" preserveAspectRatio="none" aria-hidden="true">
+          <line class="run" x1="8" y1="20" x2="992" y2="20"/>
+          <line class="tick" x1="250" y1="11" x2="250" y2="29"/>
+          <line class="tick" x1="500" y1="11" x2="500" y2="29"/>
+          <line class="tick" x1="750" y1="11" x2="750" y2="29"/>
+          <circle class="start" cx="8" cy="20" r="6"/>
+        </svg>
+        <svg class="track" viewBox="0 0 1000 40" aria-hidden="true" style="margin-top:-40px">
+          <circle class="end" cx="984" cy="20" r="12"/>
+          <path class="endtick" d="M978 20.5l4.5 4.5 8-9"/>
+        </svg>
+        <ol class="stops">
+          <li class="stop"><b>Read</b><span>Claude reads the request and its job sheet, invoice or photo.</span></li>
+          <li class="stop"><b>Verified</b><span>Fixed rules check it against the job, the rate card, past payments and PayPal's own records.</span></li>
+          <li class="stop"><b>Routed</b><span>Every rail is quoted on what the supplier receives.</span></li>
+          <li class="stop"><b>Paid</b><span>The rules run again, then your own account pays.</span></li>
+          <li class="stop"><b>Reconciled</b><span>Settlement is confirmed and lands in your books.</span></li>
+        </ol>
       </div>
     </section>
 
@@ -173,5 +217,18 @@
     <span>The hackathon demo runs on simulated rails and the PayPal sandbox. No real money moves.</span>
   </footer>
 </div>
+<script>
+  // Hide every placeholder button whose link has not been filled in, so a dead "#" link never shows.
+  // "Read how it works" stays only while no real link is filled in.
+  (function () {
+    var shown = 0;
+    document.querySelectorAll("[data-placeholder-link]").forEach(function (el) {
+      var a = el.tagName === "A" ? el : el.querySelector("a");
+      if (!a || a.getAttribute("href") === "#" || !a.getAttribute("href")) el.hidden = true;
+      else shown++;
+    });
+    if (shown) document.querySelectorAll("[data-fallback-link]").forEach(function (el) { el.hidden = true; });
+  })();
+</script>
 </body>
 </html>

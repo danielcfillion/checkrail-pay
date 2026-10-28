@@ -2,8 +2,8 @@
 """
 Generate the Checkrail Pay brand assets from one definition of the mark.
 
-    pip install playwright fonttools brotli uharfbuzz && python3 -m playwright install chromium
-    python3 scripts/brand-assets.py
+    pip install --target /tmp/brand-py fonttools brotli uharfbuzz   (any scratch folder, never the repo)
+    PYTHONPATH=/tmp/brand-py python3 scripts/brand-assets.py        (needs Python Playwright with Chromium)
 
 Writes:
     src/app/icon.svg                  favicon (follows the browser's light or dark scheme)
@@ -11,12 +11,16 @@ Writes:
     src/app/opengraph-image.png       1200 x 630 social card (and its alt text)
     public/brand/checkrail-mark.svg   the mark alone, for README, video and slides
     public/brand/checkrail-lockup.svg mark plus wordmark, text converted to outlines
+    site/brand/                       copies of the mark, the lockup and the social card (og.png) for the landing page
 
-The mark is drawn from the check line: two parallel rails, a short third "check rail" set inside the lower one,
-and a settled-green tick at the right end. The same path data lives in src/components/BrandMark.tsx; change both.
+The mark is a short length of track seen from above: four ties (sleepers) in soft ink, two ink rails, a short
+"check rail" laid inside the lower rail, and a settled-green tick where the track ends. The ties are what keep it
+from reading as a "checklist done" icon at 16px; keep at least three of them. The same path data lives in
+src/components/BrandMark.tsx; change both.
 """
 import base64
 import io
+import shutil
 from pathlib import Path
 
 from fontTools.pens.svgPathPen import SVGPathPen
@@ -30,24 +34,29 @@ ROOT = Path(__file__).resolve().parent.parent
 FONT = ROOT / "src" / "app" / "fonts" / "archivo-variable.woff2"
 
 INK, INK_DARK = "#10233A", "#E6ECF2"
+INK_SOFT_DARK = "#93A3B4"
 SETTLED, SETTLED_DARK = "#0E7C5B", "#3DB58F"
 PAPER, SHEET, INK_SOFT, BLOCKED = "#EDF0F2", "#FFFFFF", "#5B6B7C", "#A8261D"
 
-# 32 x 32 grid. Rails 2.5 units, tick 3 units, round caps.
-RAILS = ["M3 10H21", "M3 22H21", "M8 17.5H16"]
-TICK = "M21.5 16.5l3 3 5-6.5"
+# 32 x 32 grid, round caps. Ties 2 units (soft ink), rails 2.75, check rail 2.25, tick 3 (settled).
+TIES = ["M4.5 7V25", "M9.5 7V25", "M14.5 7V25", "M19.5 7V25"]
+RAILS = ["M2 10.5H21.5", "M2 21.5H21.5"]
+CHECK_RAIL = "M7 17.5H17"
+TICK = "M22.5 17l2.5 3 5-6.5"
 
 
-def mark_paths(ink: str, tick: str, cls: bool = False) -> str:
-    r = ' class="r"' if cls else f' stroke="{ink}"'
-    t = ' class="t"' if cls else f' stroke="{tick}"'
-    rails = "".join(f'<path{r} d="{d}"/>' for d in RAILS)
-    return f'<g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5">{rails}<path{t} stroke-width="3" d="{TICK}"/></g>'
+def mark_paths(ink: str, tick: str, soft: str = "", cls: bool = False) -> str:
+    def a(c: str, col: str) -> str:
+        return f' class="{c}"' if cls else f' stroke="{col}"'
+    ties = "".join(f'<path{a("s", soft or INK_SOFT)} stroke-width="2" d="{d}"/>' for d in TIES)
+    rails = "".join(f'<path{a("r", ink)} stroke-width="2.75" d="{d}"/>' for d in RAILS)
+    check = f'<path{a("r", ink)} stroke-width="2.25" d="{CHECK_RAIL}"/>'
+    return f'<g fill="none" stroke-linecap="round" stroke-linejoin="round">{ties}{rails}{check}<path{a("t", tick)} stroke-width="3" d="{TICK}"/></g>'
 
 
 ADAPTIVE_STYLE = (
-    f"<style>.r{{stroke:{INK}}}.t{{stroke:{SETTLED}}}"
-    f"@media (prefers-color-scheme:dark){{.r{{stroke:{INK_DARK}}}.t{{stroke:{SETTLED_DARK}}}}}</style>"
+    f"<style>.r{{stroke:{INK}}}.s{{stroke:{INK_SOFT}}}.t{{stroke:{SETTLED}}}"
+    f"@media (prefers-color-scheme:dark){{.r{{stroke:{INK_DARK}}}.s{{stroke:{INK_SOFT_DARK}}}.t{{stroke:{SETTLED_DARK}}}}}</style>"
 )
 
 
@@ -102,8 +111,8 @@ def lockup_svg() -> str:
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="40" viewBox="0 0 {total_w} 40">'
         f"<title>Checkrail Pay</title>"
-        f"<style>.r{{stroke:{INK}}}.t{{stroke:{SETTLED}}}.w{{fill:{INK}}}"
-        f"@media (prefers-color-scheme:dark){{.r{{stroke:{INK_DARK}}}.t{{stroke:{SETTLED_DARK}}}.w{{fill:{INK_DARK}}}}}</style>"
+        f"<style>.r{{stroke:{INK}}}.s{{stroke:{INK_SOFT}}}.t{{stroke:{SETTLED}}}.w{{fill:{INK}}}"
+        f"@media (prefers-color-scheme:dark){{.r{{stroke:{INK_DARK}}}.s{{stroke:{INK_SOFT_DARK}}}.t{{stroke:{SETTLED_DARK}}}.w{{fill:{INK_DARK}}}}}</style>"
         f'<g transform="scale({mark_scale})">{mark_paths("", "", cls=True)}</g>'
         f'<path class="w" transform="translate({text_x} {baseline})" d="{d}"/></svg>\n'
     )
@@ -181,7 +190,12 @@ def main() -> None:
     (ROOT / "src" / "app" / "opengraph-image.alt.txt").write_text(
         "Checkrail Pay: a payment line broken at Verified because the request asked USD 960 and the trip sheet says USD 800"
     )
-    print("wrote icon.svg, apple-icon.png, opengraph-image.png, public/brand/checkrail-mark.svg, public/brand/checkrail-lockup.svg")
+    site = ROOT / "site" / "brand"
+    site.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "public" / "brand" / "checkrail-mark.svg", site / "checkrail-mark.svg")
+    shutil.copyfile(ROOT / "public" / "brand" / "checkrail-lockup.svg", site / "checkrail-lockup.svg")
+    shutil.copyfile(ROOT / "src" / "app" / "opengraph-image.png", site / "og.png")
+    print("wrote icon.svg, apple-icon.png, opengraph-image.png (and alt), public/brand/*.svg, site/brand/ copies")
 
 
 if __name__ == "__main__":

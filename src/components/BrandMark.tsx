@@ -1,17 +1,27 @@
 /*
- * The Checkrail mark, drawn from the check line: two parallel rails, a short check rail set inside the lower one,
- * and a settled tick at the right end. Same path data as scripts/brand-assets.py (which writes the favicon,
- * the social card and public/brand/*.svg); change both together.
+ * The Checkrail mark: a short length of track seen from above. Four ties in soft ink, two ink rails, a short
+ * check rail laid inside the lower rail, and a settled tick where the track ends. The ties keep it from reading as
+ * a "checklist done" icon at 16px. Same path data as scripts/brand-assets.py (which writes the favicon, the social
+ * card, public/brand/*.svg and site/brand/); change both together.
  */
+
+const TIES = ["M4.5 7V25", "M9.5 7V25", "M14.5 7V25", "M19.5 7V25"];
+const RAILS = ["M2 10.5H21.5", "M2 21.5H21.5"];
+const CHECK_RAIL = "M7 17.5H17";
+const TICK = "M22.5 17l2.5 3 5-6.5";
 
 export function BrandMark({ size = 24, className = "", title }: { size?: number; className?: string; title?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" className={className} role={title ? "img" : undefined} aria-hidden={title ? undefined : true} aria-label={title} focusable="false">
-      <g fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}>
-        <path stroke="var(--ink)" d="M3 10H21" />
-        <path stroke="var(--ink)" d="M3 22H21" />
-        <path stroke="var(--ink)" d="M8 17.5H16" />
-        <path stroke="var(--settled)" strokeWidth={3} d="M21.5 16.5l3 3 5-6.5" />
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+        {TIES.map((d) => (
+          <path key={d} stroke="var(--ink-soft)" strokeWidth={2} d={d} />
+        ))}
+        {RAILS.map((d) => (
+          <path key={d} stroke="var(--ink)" strokeWidth={2.75} d={d} />
+        ))}
+        <path stroke="var(--ink)" strokeWidth={2.25} d={CHECK_RAIL} />
+        <path stroke="var(--settled)" strokeWidth={3} d={TICK} />
       </g>
     </svg>
   );

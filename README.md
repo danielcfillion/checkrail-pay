@@ -1,12 +1,18 @@
 # Checkrail Pay
 
-![Phuong Transport blocked: the request says USD 960, the trip sheet says USD 800](docs/screenshots/blocked-mismatch.png)
+![Phuong Transport blocked: the request says USD 960, the trip sheet says USD 800, and two policy rules block it](docs/screenshots/hero.png)
 
 **Checks every supplier payment before money moves.**
 
-- Blocks inflated and duplicate invoices against the evidence.
-- Pays over PayPal or Stellar, and the agent pays only inside your caps.
+- Blocks inflated and duplicate invoices against the evidence, and against PayPal's own record of what was already paid.
+- Pays the clean ones over PayPal, and the agent pays only inside your caps.
 - Lands every payment in the books, with a two-minute Daily close.
+
+**Try it.** Hosted demo and video: linked from the Devpost page. Login in the Devpost testing instructions.
+<!-- Founder: when they exist, replace the line above with:
+**Try it:** <hosted URL>/demo (login in the Devpost testing instructions). **Video:** <YouTube URL>
+[![Watch the demo video](docs/screenshots/hero.png)](<YouTube URL>)
+-->
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
@@ -21,9 +27,7 @@ Run it locally in two commands (Node 22 or later; SQLite is bundled, no external
 
 Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 6 and 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
 
-A hosted demo for judges is linked from the Devpost page, with its login in the testing instructions.
-
-Demo video: linked from the Devpost page.
+Hosted demo and video: linked from the Devpost page, with the hosted login in the Devpost testing instructions.
 
 ## How it works
 
@@ -43,13 +47,15 @@ As of 29 Oct 2026:
 
 - **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
 - **Claude (`claude-sonnet-5-5`): has read the full demo live.**
-- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). Not the PayPal Agent Toolkit package.
+- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). We call PayPal's REST endpoints directly rather than through the Agent Toolkit so the agent can reach only these three GET calls.
+- **PayPal's own records decide a block.** Before every decision that can move money, the app itself (deterministic code, not the model) reads PayPal Transaction Search and blocks with the PayPal transaction id when PayPal already paid this job to this payee (policy rule `paypal_history`, `src/lib/domain/paypalHistory.ts`). On simulated rails it reads what the simulated PayPal rail actually paid. Live it needs Transaction search enabled on the PayPal app. Transaction Search can lag by up to three hours, so Checkrail's own payment history stays the first duplicate check.
+- **Recorded Claude readings for the hosted demo.** Claude's readings of the six opening requests, recorded from a live run on 28 Oct 2026 (`claude-sonnet-5-5`, PayPal sandbox), are kept in `src/lib/demo/recordedReadings.ts` for the request page to show, labelled as recorded. Display only: on the hosted demo the decision still comes from the rule-based reader and the policy rules.
 - **Read from PayPal (Books):** reconciles from Transaction Search and ties a returned payout to its payout by reference id. Tested against fakes; needs live PayPal keys.
 - **Stellar PYUSD: simulated.** The adapter is written to the Stellar SDK and has never run on testnet.
 - **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 11 unit tests pass. Not deployed to testnet, not called by the app yet.
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
-- **Hosted demo:** simulated rails and the rule-based reader.
+- **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Tests:** 354 in 47 files. **Policy:** 25 named rules in `src/lib/domain/policy.ts`.
 
 The sidebar footer always shows which mode each rail and the reader are in.
@@ -61,7 +67,7 @@ Ridgeline Expeditions LLC, a US tour operator paying guides, drivers and homesta
 | Request | Outcome | Why |
 |---|---|---|
 | Phuong Transport, INV-2026-0152, USD 960 | Blocked | The trip sheet says 4 vehicle-days at USD 200 = USD 800. Correct it to USD 800 and it re-enters the flow. |
-| Maria Santos, JOB-HG4D-0914, USD 180 | Blocked | That job was settled 17 days earlier. Shared trip and job identifiers in the text and evidence also catch a re-invoice under a new number. |
+| Maria Santos, JOB-HG4D-0914, USD 180 | Blocked | That job was settled 17 days earlier, and PayPal's own record of that payout blocks it too, citing the PayPal transaction id. Shared trip and job identifiers in the text and evidence also catch a re-invoice under a new number. |
 | Maria Santos, JOB-HG4D-0921, USD 180 | Paid over PayPal | Under the USD 250 threshold and backed by a trip sheet. The rails are within 0.1% at this size, so the tie goes to PayPal. |
 | Ana Reyes, JOB-PAL3D-0927, USD 750 | Approved by a person, then sent | Above the threshold. On simulated rails it settles on Stellar, her preference. In the live sandbox run it went by PayPal and came back UNCLAIMED, and was held. |
 
@@ -80,6 +86,10 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents.
 - Policy runs again at release. If anything changed in the cancel window, no rail is called and the refusal shows in the Daily close.
 - The Daily close (`/close`) lists what needs a look first, then what autopilot sent, what people sent and spend against the cap. Sign off writes an audit entry of exactly what was on the page.
+
+![Autopilot has scheduled Rosa's USD 190 and counts down the cancel window](docs/screenshots/autopilot-scheduled.png)
+
+![The Daily close: what needs a look, what autopilot sent, what people sent and spend against the cap](docs/screenshots/daily-close.png)
 
 ## Safety
 
@@ -108,7 +118,7 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - Payout detail changes need a second person with a stated verification method.
 
 ### Reviews
-- Six independent review rounds on 16 Oct (`docs/CRITIC_REVIEW_02.md`, `docs/critic/`) and three outside audit rounds from 25 to 27 Oct by a security analyst and an AP practitioner (`docs/audits/`). Every finding was fixed with a test.
+- Six review rounds on 16 Oct by AI agents briefed as critics (`docs/CRITIC_REVIEW_02.md`, `docs/critic/`), and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Every finding was fixed with a test.
 
 ### Known gaps
 - No inbound email or Zalo intake yet: requests are pasted or uploaded. No notifications, so the cancel window is a delay, not an alert.

@@ -14,6 +14,8 @@ A Xero customer with freelance suppliers abroad (a tour operator, an agency with
 
 ## What Checkrail Pay writes into Xero
 
+![The Accounting page in the demo: one record per settled payment with gross, fee, net and the account code, and the Xero bills file to import](screenshots/accounting-xero.png)
+
 Today, bills go to Xero as a file in Xero's own "Import bills" template (Business, Bills to pay, Import), written at approval, so aged payables are right while payments are still waiting. One bill per invoice: a deposit and a balance against one invoice are one bill. The file carries the contact, invoice number, dates, account code, tax type, currency and a tracking option for the departure. Credit notes go in the same file as negative bills.
 
 For every settled payment the mapping produces four records that reconcile to the cent:
@@ -46,4 +48,4 @@ Clean, reconciled data; an honest, published corridor benchmark that advisors ca
 
 Xero is the right ledger for foreign-registered operators and their bookkeepers in the US, Australia and Singapore. In Vietnam the ledger market is MISA, so a MISA export is the regional next step, built the same way as the Xero bills file.
 
-Contact: Daniel Fillion, founder. Repository link added at submission.
+Contact: Daniel Fillion, founder. Repository: [paste the public GitHub URL once H3 is done].
