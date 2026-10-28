@@ -3,6 +3,7 @@ import Link from "next/link";
 import { NavLinks } from "./NavLinks";
 import { WhoAmI } from "./WhoAmI";
 import { railLabel } from "@/lib/format";
+import { configuredUsers, personasAllowed } from "@/lib/basicAuth";
 
 export type SystemModes = { railModes: Record<string, string>; ai: string; accounting: string };
 
@@ -23,6 +24,7 @@ export const NAV = [
 export type WhoProps = { name: string; role: string; username: string; viaLogin?: string; personas: ReadonlyArray<{ username: string; name: string; role: string }> | null; waiting: number; vendorChecks?: number; runsToRelease?: number };
 
 export function Shell({ businessName, system, who, children }: { businessName: string | null; system: SystemModes | null; who?: WhoProps | null; children: ReactNode }) {
+  const demoGuide = personasAllowed(process.env, (configuredUsers() ?? []).length > 0);
   return (
     <div className="min-h-screen md:grid md:grid-cols-[64px_1fr] lg:grid-cols-[220px_1fr]">
       <aside className="hidden md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
@@ -38,7 +40,7 @@ export function Shell({ businessName, system, who, children }: { businessName: s
           </p>
         </div>
         <nav className="flex-1 px-2 lg:px-3" aria-label="Main">
-          <NavLinks items={NAV} />
+          <NavLinks items={NAV} demoGuide={demoGuide} />
         </nav>
         {who ? <WhoAmI {...who} /> : null}
         <SystemFooter system={system} />
@@ -47,7 +49,7 @@ export function Shell({ businessName, system, who, children }: { businessName: s
         <main className="mx-auto w-full max-w-[1320px] px-4 pb-24 pt-5 sm:px-6 md:pb-10 md:pt-6">{children}</main>
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t hairline bg-sheet md:hidden" aria-label="Main, mobile">
-        <NavLinks items={NAV} mobile />
+        <NavLinks items={NAV} mobile demoGuide={demoGuide} />
       </nav>
     </div>
   );

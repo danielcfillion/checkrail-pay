@@ -36,7 +36,7 @@ export default async function OverviewPage() {
 
       {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} can={viewer ? { stop: viewer.can("stop"), settings: viewer.can("settings") } : undefined} /> : null}
 
-      <BookLine rows={all} />
+      <BookLine rows={all} currency={base} />
 
       <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-4 sm:divide-x sm:divide-[color:var(--rule)]">
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />

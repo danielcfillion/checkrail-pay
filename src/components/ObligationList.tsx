@@ -4,7 +4,7 @@ import { CheckLine } from "./CheckLine";
 import { Money, RailTag, RelativeTime, StatePill } from "./ui";
 
 /** One-line reason for a row in a "needs you" list. */
-const tidy = (s: string) => s.replace(/obligation obl_[a-z0-9]+ \((\w+)\)/i, "an earlier obligation ($1)");
+const tidy = (s: string) => s.replace(/obligation obl_[a-z0-9]+ \((\w+)\)/i, "an earlier request ($1)");
 
 export function reasonFor(r: ObligationRow): string {
   if (r.blockedReason) return tidy(r.blockedReason);
@@ -51,11 +51,11 @@ export function NeedsYouList({ rows }: { rows: ObligationRow[] }) {
     <ul className="divide-y hairline">
       {rows.map((r) => (
         <li key={r.id}>
-          <Link href={`/obligations/${r.id}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-1 px-4 py-3 hover:bg-paper/60 sm:grid-cols-[minmax(0,1fr)_96px_120px_110px]">
+          <Link href={`/obligations/${r.id}`} className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-1 px-4 py-3 hover:bg-paper/60 sm:grid-cols-[minmax(0,1fr)_96px_120px_110px]">
             <div className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium">{r.vendorName ?? "Unknown vendor"}</span>
-                <span className="num text-ink-soft">{r.sourceRef ?? "no reference"}</span>
+                <span className="num whitespace-nowrap text-ink-soft">{r.sourceRef ?? "no reference"}</span>
               </div>
               <p className="mt-0.5 line-clamp-2 text-ink-soft" title={reasonFor(r)}>
                 {reasonFor(r)}
@@ -81,10 +81,44 @@ export function NeedsYouList({ rows }: { rows: ObligationRow[] }) {
   );
 }
 
-/** Full table for the inbox. */
+/**
+ * The inbox. From 640px a ledger table; below it, two-line rows (vendor and amount, then reference, state and rail)
+ * where the whole row is the tap target, so nothing is clipped at the screen edge.
+ */
 export function ObligationTable({ rows }: { rows: ObligationRow[] }) {
   return (
-    <div className="panel overflow-x-auto">
+    <>
+      <ObligationCards rows={rows} />
+      <ObligationLedger rows={rows} />
+    </>
+  );
+}
+
+function ObligationCards({ rows }: { rows: ObligationRow[] }) {
+  return (
+    <ul className="panel divide-y hairline sm:hidden">
+      {rows.map((r) => (
+        <li key={r.id}>
+          <Link href={`/obligations/${r.id}`} className="block min-h-11 px-4 py-3 active:bg-paper">
+            <span className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 truncate font-medium">{r.vendorName ?? "Unknown vendor"}</span>
+              <Money minor={r.amountMinor} currency={r.currency} className="shrink-0 whitespace-nowrap font-medium" />
+            </span>
+            <span className="mt-1 flex items-center gap-2">
+              <span className="num min-w-0 truncate text-xs text-ink-soft">{r.sourceRef ?? "no reference"}</span>
+              <StatePill state={r.state} className="shrink-0" />
+              <RailTag rail={r.selectedRail} className="ml-auto shrink-0" />
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ObligationLedger({ rows }: { rows: ObligationRow[] }) {
+  return (
+    <div className="panel overflow-x-auto max-sm:hidden">
       <table className="ledger">
         <thead>
           <tr>
@@ -97,9 +131,7 @@ export function ObligationTable({ rows }: { rows: ObligationRow[] }) {
               Amount
             </th>
             <th scope="col">State</th>
-            <th scope="col" className="hidden sm:table-cell">
-              Rail
-            </th>
+            <th scope="col">Rail</th>
             <th scope="col" className="hidden md:table-cell">
               Updated
             </th>
@@ -120,16 +152,16 @@ export function ObligationTable({ rows }: { rows: ObligationRow[] }) {
               <td className="r whitespace-nowrap">
                 <Money minor={r.amountMinor} currency={r.currency} />
               </td>
-              <td>
+              <td className="whitespace-nowrap">
                 <div className="flex items-center gap-2.5">
                   <CheckLine state={r.state} variant="compact" hasAccounting />
                   <StatePill state={r.state} />
                 </div>
               </td>
-              <td className="hidden sm:table-cell">
+              <td className="whitespace-nowrap">
                 <RailTag rail={r.selectedRail} />
               </td>
-              <td className="hidden text-ink-soft md:table-cell">
+              <td className="hidden whitespace-nowrap text-ink-soft md:table-cell">
                 <RelativeTime iso={r.updatedAt} />
               </td>
             </tr>
