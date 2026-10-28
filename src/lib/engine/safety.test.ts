@@ -93,7 +93,7 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     await executeObligation(db, story.paypal, { actor: "user:daniel" });
     await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/must be approved/);
     db.update(obligations).set({ state: "approved" }).where(eq(obligations.id, story.paypal)).run();
-    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/not definitively failed/);
+    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/has not definitely failed/);
     expect(pp.requests).toHaveLength(1);
   });
 
@@ -447,7 +447,7 @@ describe("H6: the payout destination is pinned at approval", () => {
     installRails(pp);
     const v = db.select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!;
     db.update(vendors).set({ paypalEmail: "attacker@example.com", detailsHash: hashPayoutDetails(["attacker@example.com", v.stellarAccount, v.bankLabel]) }).where(eq(vendors.id, "ven_maria")).run();
-    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/changed after this obligation was approved/);
+    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/changed after this request was approved/);
     expect(pp.requests).toHaveLength(0);
   });
 

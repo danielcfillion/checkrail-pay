@@ -154,8 +154,8 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
             <BillsPanel vendorId={v.id} rows={billRows} position={vb.position} canIngest={!viewer || viewer.can("ingest")} canAmend={!viewer || viewer.can("amend")} defaultCurrency={v.bankCurrency && ["USD", "VND", "PHP", "THB"].includes(v.bankCurrency) && v.bankAccountEnc ? v.bankCurrency : "USD"} />
           </Panel>
           <div>
-          <h2 className="mb-3 font-medium">Obligations</h2>
-          {d.obligations.length ? <ObligationTable rows={d.obligations} /> : <EmptyState title="Nothing yet for this vendor" body="Obligations appear here once a request names them." />}
+          <h2 className="mb-3 font-medium">Payment requests</h2>
+          {d.obligations.length ? <ObligationTable rows={d.obligations} /> : <EmptyState title="Nothing yet for this vendor" body="Requests appear here once one names this vendor." />}
           </div>
         </div>
       </div>

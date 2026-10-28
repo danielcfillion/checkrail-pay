@@ -221,7 +221,7 @@ export function markReturnedByHand(db: Db, businessId: string, by: Actor, obliga
   const ref = statementRef.trim();
   if (!/^[A-Za-z0-9-]{6,40}$/.test(ref)) throw new Error("Enter the PayPal transaction id of the money that came back");
   const o = db.select().from(obligations).where(and(eq(obligations.id, obligationId), eq(obligations.businessId, businessId))).get();
-  if (!o) throw new Error("Obligation not found");
+  if (!o) throw new Error("Request not found");
   if (o.state !== "settled") throw new Error("Only a paid payment can be marked as come back");
   const used = db.select({ d: auditEntries.detailJson }).from(auditEntries).where(eq(auditEntries.action, "settlement.returned")).all().some((a) => (JSON.parse(a.d ?? "{}") as { statementRef?: string }).statementRef === ref);
   if (used) throw new Error("That PayPal transaction is already recorded against a payment");

@@ -265,7 +265,7 @@ export function interpretWithRules(input: {
   const descr = describe(rawInput, vendor, money, ref);
   const summary = vendor && money
     ? `${vendor.name} is owed ${fmt(money.amountMinor, money.currency)}${ref ? ` for ${ref}` : ""}${dueDate ? `, due ${dueDate}` : ""}. ${flags.length === 0 ? "The request matches the attached evidence." : `${flags.length} concern${flags.length === 1 ? "" : "s"} noted.`}`
-    : `Could not fully determine the obligation from the input. ${missing.length ? `Missing: ${missing.join(", ")}.` : ""}`;
+    : `Could not fully read the request. ${missing.length ? `Missing: ${missing.join(", ")}.` : ""}`;
 
   return {
     vendorName: vendor?.name ?? null,

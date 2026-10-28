@@ -19,7 +19,7 @@ import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domai
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
 import { addDays, extractInvoiceDates } from "../ai/extractor";
-import { localDateString } from "../format";
+import { localDateString, stateLabel } from "../format";
 import { getRails } from "../rails";
 import { buildAccountingRecord } from "../accounting/record";
 
@@ -618,14 +618,14 @@ function coveringApprovalBy(db: Db, obligationId: string, businessId: string, am
 
 export function approveObligation(db: Db, obligationId: string, actor: string, note?: string, shownFingerprints?: string[]): PolicyOutcome {
   const ob = mustGet(db, obligationId);
-  if (!["awaiting_approval", "verified", "blocked"].includes(ob.state)) throw new Error(`Cannot approve an obligation in state ${ob.state}`);
+  if (!["awaiting_approval", "verified", "blocked"].includes(ob.state)) throw new Error(`Cannot approve a request that is ${stateWord(ob.state)}`);
   const gate = approvalGate(db, obligationId, actor);
   if (gate.refusal) throw new Error(gate.refusal);
   if (gate.selfApproval) audit(db, { obligationId, actor, action: "approval.self", detail: { reason: "no other approver can approve this amount" } });
   // One approval per person per version of the obligation.
   const human = humanOf(actor, currentLogin());
   const already = db.select({ actor: approvals.actor, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all().some((a) => a.actor === actor || humanOf(a.actor, a.login) === human);
-  if (already) throw new Error("You have already approved this obligation; any further approval must come from a different person");
+  if (already) throw new Error("You have already approved this request; any further approval must come from a different person");
   // What the page showed: the last policy evaluation on record. Policy is then run fresh. If the fresh run has a
   // warning the page did not show (another payee billed this reference since the page was evaluated), the person
   // approved something they did not see: refuse, and the refreshed page shows the new warning.
@@ -716,7 +716,7 @@ export function validateAmendPatch(db: Db, businessId: string, patch: unknown): 
 /** Correct an obligation's amount or reference after human review, then re-run the pipeline from policy. */
 export async function amendObligation(db: Db, obligationId: string, actor: string, rawPatch: AmendPatch, note?: string): Promise<void> {
   const ob = mustGet(db, obligationId);
-  if (!["blocked", "needs_evidence", "awaiting_approval", "approved", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot amend an obligation in state ${ob.state}`);
+  if (!["blocked", "needs_evidence", "awaiting_approval", "approved", "verified", "drafted"].includes(ob.state)) throw new Error(`Cannot change a request that is ${stateWord(ob.state)}`);
   assertOpenPeriod(db, ob.businessId, ob.createdAt, "a payment");
   const patch = validateAmendPatch(db, ob.businessId, rawPatch);
   // Changing the payee of an obligation that already has one is not a correction, it is a different payment.
@@ -759,7 +759,7 @@ const OPEN_ATTEMPT = ["pending", "unknown", "submitted", "confirmed"];
  */
 export async function executeObligation(db: Db, obligationId: string, opts: ExecuteOptions): Promise<{ attemptId: string; status: string }> {
   let ob = mustGet(db, obligationId);
-  if (ob.state !== "approved") throw new Error(`Obligation must be approved before execution (state: ${ob.state})`);
+  if (ob.state !== "approved") throw new Error(`The request must be approved before it is paid (it is ${stateWord(ob.state)})`);
 
   const outcome = runPolicy(db, obligationId);
   if (outcome.decision !== "auto_execute") {
@@ -777,14 +777,14 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   // Policy just recomputed the tax kept back: what is sent below is the obligation as it stands now.
   ob = mustGet(db, obligationId);
   const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : undefined;
-  if (!vendorRow) throw new Error("Obligation has no vendor");
+  if (!vendorRow) throw new Error("The request has no vendor");
   refuseIfPayoutChanged(db, ob, vendorRow);
 
   const rail = opts.rail ?? (ob.selectedRail as Rail | null);
-  if (!rail) throw new Error("No route available for this obligation");
+  if (!rail) throw new Error("No payment route is available for this request");
   if (!RAILS.includes(rail)) throw new Error(`Unknown rail ${String(rail)}`);
   const quote = db.select().from(routeQuotes).where(and(eq(routeQuotes.obligationId, obligationId), eq(routeQuotes.rail, rail))).get();
-  if (!quote?.available) throw new Error(`${rail} is not an available route for this obligation`);
+  if (!quote?.available) throw new Error(`${rail} is not an available route for this request`);
 
   const vendor = toProfile(vendorRow);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
@@ -798,14 +798,14 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   const started = db.transaction(
     (tx) => {
       const cur = tx.select({ state: obligations.state, payoutHash: obligations.payoutHash }).from(obligations).where(eq(obligations.id, obligationId)).get();
-      if (cur?.state !== "approved") throw new Error(`Obligation must be approved before execution (state: ${cur?.state})`);
+      if (cur?.state !== "approved") throw new Error(`The request must be approved before it is paid (it is ${stateWord(cur?.state)})`);
       // Re-check the destination inside the lock: an edit between the check above and this point must not slip through.
       const vendorNow = tx.select().from(vendors).where(eq(vendors.id, vendorRow.id)).get();
       if (!vendorNow || !cur.payoutHash || payoutHashOf(vendorNow) !== cur.payoutHash) throw new Error("Execution refused: vendor payout details changed at the moment of release");
       const attempts = tx.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all();
       const open = attempts.filter((a) => OPEN_ATTEMPT.includes(a.status));
       if (open.length > 0) {
-        throw new Error(`Obligation already has a payment attempt that is not definitively failed (${open.map((a) => `${a.id}:${a.status}`).join(", ")}); reconcile it instead of paying again`);
+        throw new Error(`This request already has a payment attempt that has not definitely failed (${open.map((a) => `${a.id}:${a.status}`).join(", ")}); reconcile it instead of paying again`);
       }
       // Every remaining attempt definitively failed (nothing moved), so a fresh key cannot double-pay.
       const key = idempotencyKey(obligationId, attempts.length + 1);
@@ -834,8 +834,8 @@ function refuseIfPayoutChanged(db: Db, ob: typeof obligations.$inferSelect, vend
   const current = payoutHashOf(vendorRow);
   const reasons: string[] = [];
   if (current !== vendorRow.detailsHash) reasons.push("Vendor payout details were edited without re-verification");
-  if (!ob.payoutHash) reasons.push("No payout destination was recorded when this obligation was approved; approve it again");
-  else if (ob.payoutHash !== current) reasons.push("Vendor payout details changed after this obligation was approved");
+  if (!ob.payoutHash) reasons.push("No payout destination was recorded when this request was approved; approve it again");
+  else if (ob.payoutHash !== current) reasons.push("The vendor's payout details changed after this request was approved");
   if (reasons.length === 0) return;
   // Approvals were for a different destination; they no longer count.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, ob.id), eq(approvals.decision, "approved"))).run();
@@ -909,13 +909,13 @@ function finishAttempt(db: Db, obligationId: string, attemptId: string, rail: Ra
  */
 export async function retryAmbiguousExecution(db: Db, obligationId: string, opts: { actor: string }): Promise<{ attemptId: string; status: string }> {
   const ob = mustGet(db, obligationId);
-  if (ob.state !== "execution_pending") throw new Error(`Obligation is not awaiting reconciliation (state: ${ob.state})`);
+  if (ob.state !== "execution_pending") throw new Error(`The request is not waiting for reconciliation (it is ${stateWord(ob.state)})`);
   const attempt = db.select().from(paymentAttempts).where(and(eq(paymentAttempts.obligationId, obligationId))).orderBy(desc(paymentAttempts.createdAt)).all().find((a) => a.status === "unknown" || a.status === "pending");
   if (!attempt) throw new Error("No unresolved payment attempt found");
   const rail = attempt.rail as Rail;
   const adapter = getRails()[rail];
   const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId!)).get();
-  if (!vendorRow) throw new Error("Obligation has no vendor");
+  if (!vendorRow) throw new Error("The request has no vendor");
   if (!ob.payoutHash || ob.payoutHash !== payoutHashOf(vendorRow)) throw new Error("Vendor payout details changed since approval; resolve this attempt by hand in the provider dashboard");
   audit(db, { obligationId, actor: opts.actor, action: "execution.reconcile", detail: { attemptId: attempt.id, rail, key: attempt.idempotencyKey } });
 
@@ -998,7 +998,7 @@ export function retryFailed(db: Db, obligationId: string, actor: string): void {
   const open = db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all().filter((a) => OPEN_ATTEMPT.includes(a.status));
   if (open.length > 0) throw new Error("A payment attempt is still unresolved; reconcile it before retrying");
   const vendorRow = db.select().from(vendors).where(eq(vendors.id, ob.vendorId!)).get();
-  if (!vendorRow) throw new Error("Obligation has no vendor");
+  if (!vendorRow) throw new Error("The request has no vendor");
   const current = payoutHashOf(vendorRow);
   if (current !== vendorRow.detailsHash) throw new Error("Vendor payout details were edited without re-verification; verify the vendor first");
   if (ob.payoutHash && ob.payoutHash !== current) throw new Error("Vendor payout details changed since approval; review and approve this payment again");
@@ -1101,7 +1101,7 @@ function queueAccounting(db: Db, obligationId: string): void {
 
 export function mustGet(db: Db, id: string) {
   const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
-  if (!ob) throw new Error(`Obligation ${id} not found`);
+  if (!ob) throw new Error(`Request ${id} not found`);
   return ob;
 }
 
@@ -1174,3 +1174,9 @@ export async function addEvidence(db: Db, obligationId: string, actor: string, i
 export function toProfile(v: typeof vendors.$inferSelect): VendorPayoutProfile {
   return { id: v.id, name: v.name, country: v.country, preferredRail: (v.preferredRail as Rail | null) ?? null, paypalEmail: v.paypalEmail, stellarAccount: v.stellarAccount, bankCountry: v.bankCountry, bankCurrency: v.bankCurrency, bankLabel: v.bankLabel, detailsHash: v.detailsHash, verifiedAt: v.verifiedAt, status: v.status, hasBankAccount: Boolean(v.bankAccountEnc), bankCode: v.bankCode, accountHolder: v.accountHolder, retainerMinor: v.retainerMinor };
 }
+
+/** A state as a person reads it inside a sentence ("awaiting approval", "paid"). */
+function stateWord(state: string | null | undefined): string {
+  return stateLabel(state).toLowerCase() || "in an unknown state";
+}
+

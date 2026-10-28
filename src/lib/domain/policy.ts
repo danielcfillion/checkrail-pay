@@ -138,7 +138,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     const sameCurrency = evidenced.filter((e) => e.currency === obligation.currency);
     if (sameCurrency.length === 0) {
       rules.push(
-        warn("amount_matches_evidence", `Evidence is in ${evidenced[0].currency}, obligation is in ${obligation.currency}; cannot compare automatically`)
+        warn("amount_matches_evidence", `Evidence is in ${evidenced[0].currency}, the request is in ${obligation.currency}; cannot compare automatically`)
       );
     } else {
       const matches = sameCurrency.filter((e) => withinTolerance(obligation.amountMinor!, e.amountMinor!, policy.amountToleranceBps));
@@ -237,7 +237,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       } else if (sameAmount) {
         rules.push(warn("no_duplicate", `Same amount as obligation ${sameAmount.obligationId} (${sameAmount.state}) for this vendor in the last 30 days; confirm this is a different job${vendor?.retainerMinor === obligation.amountMinor ? " (a retainer is paid once a month)" : ""}`));
       } else {
-        rules.push(pass("no_duplicate", obligation.sourceRef ? "Reference and job identifiers have not been paid before" : "No earlier obligation matches this job"));
+        rules.push(pass("no_duplicate", obligation.sourceRef ? "Reference and job identifiers have not been paid before" : "No earlier request matches this job"));
       }
     }
   }
