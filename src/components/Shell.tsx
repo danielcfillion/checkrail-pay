@@ -45,6 +45,13 @@ export function Shell({ businessName, system, who, children }: { businessName: s
         <SystemFooter system={system} />
       </aside>
       <div className="min-w-0">
+        <header className="flex items-center justify-between gap-3 border-b hairline bg-sheet px-4 py-2.5 md:hidden">
+          <Link href="/" className="flex min-w-0 items-center gap-2 rounded-sm" aria-label="Checkrail Pay, overview">
+            <BrandMark size={24} className="shrink-0" />
+            <span className="wide whitespace-nowrap text-base leading-5">Checkrail Pay</span>
+          </Link>
+          {businessName ? <span className="truncate text-xs text-ink-soft">{businessName}</span> : null}
+        </header>
         <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] focus:outline-none px-4 pb-24 pt-5 sm:px-6 md:pb-10 md:pt-6">{children}</main>
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t hairline bg-sheet md:hidden" aria-label="Main, mobile">
