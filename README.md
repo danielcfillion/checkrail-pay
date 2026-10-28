@@ -1,94 +1,73 @@
 # Checkrail Pay
 
-**Verified supplier payments, routed and reconciled automatically.**
+![Phuong Transport blocked: the request says USD 960, the trip sheet says USD 800](docs/screenshots/blocked-mismatch.png)
 
-[checkrailpay.com](https://checkrailpay.com) (domain registered; site not live yet). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it. Checkrail Pay checks every payment before money moves.
+**Checks every supplier payment before money moves.**
 
-Checkrail Pay is an AI payables operations layer for small businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads payment requests as they arrive (a pasted message, a PDF invoice or job sheet read from its text, a photo read by Claude when a key is set), works out who is owed what, refuses the ones that are wrong, picks the rail (PayPal Payouts, Stellar PYUSD, Wise to a local bank, or a Vietnamese bank bulk file), pays, and lands every bill and settlement in an accounting-ready export.
+- Blocks inflated and duplicate invoices against the evidence.
+- Pays over PayPal or Stellar, and the agent pays only inside your caps.
+- Lands every payment in the books, with a two-minute Daily close.
 
-Since the 25 Oct audits it also runs the parts of accounts payable around the single payment: named logins with roles and approval limits, a vendor master with verified payout changes and onboarding links, weekly payment runs with a funding check, invoices in VND, PHP and THB, deposits and balances, credit notes and guide advances, rate cards and departures, Xero bills at approval, PayPal statement reconciliation, aged payables, period close, remittance advice and evidence requests, and tax withholding (US backup, VN PIT, PH EWT) with a 1099-NEC list.
+For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
-Built for the PayPal AI Hackathon (submissions close Nov 12, 2026; project started Oct 3) and the Stellar Community Fund #46 Build Award.
+Built for the PayPal AI Hackathon (project started 3 Oct 2026). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it.
 
-## 60-second overview
+## Try it
 
-A tour operator in the US pays guides, drivers and homestays in the Philippines (PayPal or Stellar) and Vietnam (PayPal only: Vietnam has no licensed crypto off-ramp, and the app refuses the Stellar route there). Requests arrive as invoices, job sheets and chat messages. Today the owner reconciles them by hand against contracts and a PayPal tab, and still pays duplicates and inflated invoices.
+Run it locally in two commands (Node 22 or later; SQLite is bundled, no external database):
 
-Checkrail Pay puts five fixed stations between "someone says we owe this" and "it is in the books":
+    npm run setup
+    npm run dev
+
+Then open http://localhost:3000/demo, the presenter page that walks the story in order. In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
+
+A hosted demo for judges is linked from the Devpost page, with its login in the testing instructions.
+
+Demo video: linked from the Devpost page.
+
+## How it works
+
+Every request travels one line through five stations:
 
     read ──── verified ──── routed ──── paid ──── reconciled
 
-1. **Read.** An agent reads the raw request and the attached evidence: Claude when `AI_MODE=live` and an API key is set, a rule-based extractor otherwise (the default, so the app runs with no keys). Claude has read the full demo live (`claude-sonnet-5-5`). In live mode Claude also has three read-only PayPal tools, direct REST calls to the Reporting and Invoicing APIs (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`), so it can check PayPal's own records. It returns a structured interpretation, a confidence score and plain-language flags. It cannot pay anyone.
-2. **Verified.** A deterministic policy engine (a pure function, no network, no model) runs its checks: known and unblocked vendor; the request names the payee; amount, currency and reference present, with every limit compared in the base currency at reference rates; evidence attached, who supplied it, and that it names the payee in full; amount matches a record that names the payee, or fits what is still open on the bill it pays; the rate card and departure say the job costs no more; the reference not already billed by another payee; no duplicate job for this payee; recipient details verified; corridor allowed; tax form on file and any withholding; and the agent's confidence, concerns and missing items. Every check is listed on the payment page. It returns block, hold, require approval or auto-execute. People then approve within their own limit, and never a payment they prepared while someone else can.
-3. **Routed.** Every rail is quoted. A static rule picks the default: vendor preference first, then the rail that delivers more to the recipient per unit the sender actually spends (Stellar's fee comes out of the amount, the others charge on top). A gap under 0.5% is a tie, and ties go PayPal, then Wise, then the bank file, then Stellar, by how much of the path runs end to end today. The quotes are shown to the operator.
-4. **Paid.** Execution re-runs policy, then calls PayPal Payouts or signs a Stellar PYUSD payment. Every attempt carries an idempotency key.
-5. **Reconciled.** Settlement is confirmed by polling the rail (or, for a bank file, when someone confirms the bank paid it). Bills go to Xero at approval in its import template; settlements export as CSV; the PayPal activity statement is matched back line by line.
+1. **Read.** An agent reads the request and its evidence (a pasted message, a PDF read from its text layer, a photo read by Claude when a key is set). Claude in live mode, a rule-based reader otherwise. It returns a structured reading, a confidence score and concerns. It cannot pay anyone.
+2. **Verified.** A deterministic policy engine, a pure function with no network and no model, runs 25 named rules: known and unblocked vendor, amount and currency, evidence attached and who supplied it, evidence that names the payee in full, amount against the evidence or what is still open on the bill, rate card and departure, duplicate job, the same reference on another payee, verified payout details, corridor, tax form, and the agent's confidence and concerns. Every rule that applies is listed on the payment page. Outcome: block, hold, require approval or pay.
+3. **Routed.** Every rail is quoted. Vendor preference first, then the rail that delivers more per dollar the sender actually spends. A gap under 0.5% is a tie, and ties go PayPal, then Wise, then the bank file, then Stellar.
+4. **Paid.** Policy runs again, then the rail is called with an idempotency key on the attempt.
+5. **Reconciled.** Settlement is confirmed by polling the rail. Bills go to a Xero import file at approval, settlements export as CSV, and the PayPal statement is matched back line by line.
 
-## Honest status
+## What is live and what is simulated
 
-What was proven live, as of 16 Oct 2026:
+As of 29 Oct 2026:
 
-- **PayPal Payouts, sandbox.** A real payout batch (RGS5PUZPH4CNY, USD 180 to Maria Santos) was created by the app and settled; a second (W55KNGQK57JC4, USD 750 to Ana Reyes) came back UNCLAIMED because the recipient email has no sandbox account, and the app held it for a person instead of paying again.
-- **Claude.** `AI_MODE=live` has read the demo requests end to end, with its tool calls recorded on each obligation page.
+- **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
+- **Claude (`claude-sonnet-5-5`): has read the full demo live.**
+- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). Not the PayPal Agent Toolkit package.
+- **Read from PayPal (Books):** reconciles from Transaction Search and ties a returned payout to its payout by reference id. Tested against fakes; needs live PayPal keys.
+- **Stellar PYUSD: simulated.** The adapter is written to the Stellar SDK and has never run on testnet.
+- **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 11 unit tests pass. Not deployed to testnet, not called by the app yet.
+- **Wise:** beta adapter, never run.
+- **Xero:** an import file, not a live push.
+- **Hosted demo:** simulated rails and the rule-based reader.
+- **Tests:** 307 in 38 files. **Policy:** 25 named rules in `src/lib/domain/policy.ts`.
 
-What is still simulated: the Stellar PYUSD rail (`STELLAR_RAIL=mock`; the adapter is written against the real SDK and type-checked but has not made a testnet call), the Xero push, and the anchor leg. Autopilot has run on mock rails and on the PayPal sandbox from a developer machine, never on a shared server. By default (`RAIL_MODE=mock`, `AI_MODE=mock`) everything runs offline with zero credentials, the "agent" is a rule-based extractor, and the sidebar footer says so. The hosted judging demo runs in that mode. Details in "Honesty" below; the remaining steps are in `HUMAN_ACTION_QUEUE.md`.
+The sidebar footer always shows which mode each rail and the reader are in.
 
 ## The demo story
 
-Ridgeline Expeditions LLC, a US tour operator, has four open obligations.
+Ridgeline Expeditions LLC, a US tour operator paying guides, drivers and homestays in Vietnam and the Philippines, has four open requests.
 
-| # | Obligation | What happens | Why |
-|---|---|---|---|
-| 1 | Phuong Transport, INV-2026-0152, requests USD 960 | **Blocked** | The trip sheet says 4 vehicle-days x USD 200 = USD 800. The request is USD 160 over. Operator can correct to USD 800 and it re-enters the flow. |
-| 2 | Maria Santos, JOB-HG4D-0914 | **Blocked** | The reference was settled 17 days earlier. Duplicate. The check also matches trip and job identifiers inside the text and evidence, so the same job re-invoiced under a new number is blocked too, and a bare same-amount invoice is held for a person. |
-| 3 | Maria Santos, JOB-HG4D-0921, USD 180 | **Auto-approved, paid via PayPal** | Under the USD 250 auto-execute threshold, evidence matches. At this size the two rails are within 0.1% per dollar spent (PHP 59.54 vs 59.58), so the tie goes to PayPal. |
-| 4 | Ana Reyes, JOB-PAL3D-0927, USD 750 | **Needs approval, then sent** | Above threshold, so a human approves. In mock mode the router picks Stellar (about 2% more PHP per dollar at this size, simulated) and it settles. In the live sandbox run it went by PayPal and came back UNCLAIMED, because Ana's email has no sandbox account; the app holds it for a person and will not pay twice. |
+| Request | Outcome | Why |
+|---|---|---|
+| Phuong Transport, INV-2026-0152, USD 960 | Blocked | The trip sheet says 4 vehicle-days at USD 200 = USD 800. Correct it to USD 800 and it re-enters the flow. |
+| Maria Santos, JOB-HG4D-0914, USD 180 | Blocked | That job was settled 17 days earlier. Shared trip and job identifiers in the text and evidence also catch a re-invoice under a new number. |
+| Maria Santos, JOB-HG4D-0921, USD 180 | Paid over PayPal | Under the USD 250 threshold and backed by a trip sheet. The rails are within 0.1% at this size, so the tie goes to PayPal. |
+| Ana Reyes, JOB-PAL3D-0927, USD 750 | Approved by a person, then sent | Above the threshold. On simulated rails it settles on Stellar, her preference. In the live sandbox run it went by PayPal and came back UNCLAIMED, and was held. |
 
-Outcome in mock mode: 2 settled, 2 errors prevented (USD 340 that would have left the business: the USD 160 overpayment plus the USD 180 duplicate), 2 accounting records exported. The Daily close shows the same day with the full requested amounts of the blocked requests, USD 1,140, under "Held back".
+Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 overpayment plus the USD 180 duplicate). `npm run demo:replay` runs the same story in the terminal. Demo documents to upload (a clean trip sheet, a re-issued duplicate, an unusual rate) are in `docs/demo-documents/`.
 
-![Overview: every open obligation on one check line](docs/screenshots/overview.png)
-
-![Phuong Transport blocked: the request says USD 960, the trip sheet says USD 800](docs/screenshots/blocked-mismatch.png)
-
-More in `docs/screenshots/`, including dark theme and mobile.
-
-## Architecture
-
-    request (invoice, job sheet, chat)
-          │
-          ▼
-    ┌─────────────────┐   read-only tools:    ┌──────────────────────┐
-    │  AI agent       │ ───────────────────▶  │ PayPal REST (read)   │
-    │  (Claude)       │   list_transactions   │ list_invoices, etc.  │
-    └────────┬────────┘   get_invoice ...     └──────────────────────┘
-             │ interpretation + confidence + flags (advice only)
-             ▼
-    ┌─────────────────┐
-    │  Policy engine  │  pure function: thresholds, evidence match,
-    │  (deterministic)│  duplicate ref, recipient verified, corridor, AI confidence
-    └────────┬────────┘
-             │ block | hold | require_approval | auto_execute
-             ▼
-    ┌─────────────────┐      ┌──────────────┐  ┌──────────────────────┐
-    │  Router         │ ◀──  │ PayPal quote │  │ Stellar quote        │
-    │  (static rule)  │      │ (fee model)  │  │ (PYUSD, anchor model)│
-    └────────┬────────┘      └──────────────┘  └──────────────────────┘
-             │ [human approval if required]
-             ▼
-    ┌─────────────────┐  re-runs policy, idempotency key per attempt
-    │  Executor       │ ───▶ PayPal Payouts API  or  signed Stellar payment
-    └────────┬────────┘
-             │ poll for settlement (webhooks only trigger a re-check)
-             ▼
-    ┌─────────────────┐
-    │  Audit log      │ ───▶ CSV export, Xero bill / payment / fee mapping
-    └─────────────────┘
-
-Every step appends to the audit log. No step can be skipped by a caller.
-
-## Autonomy: how much the agent does without asking
-
-One setting, three levels, described by who does each step (Settings, and a strip on the overview):
+## Autonomy
 
 | Level | Checks | Approves | Sends |
 |---|---|---|---|
@@ -96,129 +75,115 @@ One setting, three levels, described by who does each step (Settings, and a stri
 | Assist (default) | Agent | Agent, for clean requests up to USD 250 | You |
 | Autopilot | Agent | Agent | Agent, within your caps, after a cancel window |
 
-- **Autonomy removes the approval step and nothing else.** A mismatched amount, an already-paid job, changed payout details, missing evidence, a disabled corridor, the two-person rule above USD 5,000 and the per-vendor daily limit stop a payment at every level. `src/lib/engine/autopilot.test.ts` proves each one with autopilot on.
-- **Autopilot has hard limits**: a per-payment cap (default USD 500), a rolling 24-hour cap across the business (default USD 2,000), a cancel window before money moves (default 10 minutes, zero allowed) and a pause button that takes effect at once. Turning autopilot on asks for confirmation; turning it down or pausing never does.
-- **Policy runs again at the moment of release.** If anything changed during the cancel window (the vendor's payout email, a new duplicate, the cap), the payment is refused, no rail is called, and it shows up in the Daily close.
-- **The actor is recorded.** Autopilot sends are logged as `agent:autopilot`; setting changes, pauses and cancellations as the person who made them.
-- **Daily close** (`/close`): one page to read before signing out. What needs a look comes first (unclear outcomes, failures, last-moment refusals, new blocks, cancelled releases, slow settlements), then what autopilot sent, what people sent, spend against the cap and what is still waiting. "Sign off" writes an audit entry recording exactly what was on the page, and is refused if something changed after the page loaded.
-- **Heartbeat.** The server runs one autopilot pass every 15 seconds (`src/instrumentation.ts`). For more than one server process, set `AUTOPILOT_HEARTBEAT=off` and call `POST /api/autopilot/tick` from a scheduler.
+- Autonomy removes the approval step and nothing else. A mismatched amount, an already-paid job, changed payout details, missing evidence, a disabled corridor, the two-person rule above USD 5,000 and the per-vendor daily cap stop a payment at every level (`src/lib/engine/autopilot.test.ts`).
+- Autopilot limits: USD 500 per payment, USD 2,000 per rolling 24 hours across the business, a 10-minute cancel window and a pause that applies at once (defaults; the owner changes them).
+- Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents.
+- Policy runs again at release. If anything changed in the cancel window, no rail is called and the refusal shows in the Daily close.
+- The Daily close (`/close`) lists what needs a look first, then what autopilot sent, what people sent and spend against the cap. Sign off writes an audit entry of exactly what was on the page.
 
-The overview also has an interactive **Money out** chart: settled payments by rail over the last 7, 30 or 90 days, with a tooltip per column and a payment table that narrows when a column is selected.
+## Safety
 
-## The safety model: why the AI cannot pay
+### The model cannot pay
+- Its only output is an interpretation: vendor, amount, reference, summary, confidence, concerns.
+- Its PayPal tools are read-only REST calls (`src/lib/ai/paypalTools.ts`). There is no tool that moves money.
+- Its output is clamped and validated. Its concerns can add a reason to stop, never remove one.
+- Autopilot is a timer over policy, not the model deciding to pay.
 
-- **The model has no spending authority, at any autonomy level.** Autopilot is not the model deciding to pay: it is a timer that releases payments the deterministic policy has already cleared, inside caps a person set. The reading agent's only output is an `AiInterpretation` (vendor, amount, reference, summary, confidence, flags). Its PayPal tools are filtered to a read-only set at load time (`src/lib/ai/paypalTools.ts`). There is no tool that moves money.
-- **Policy is a pure function.** `evaluatePolicy(policy, input)` in `src/lib/domain/policy.ts` takes the same input and returns the same output, with no network and no model. The agent proposes the fields (vendor, amount, reference); policy then binds them to the evidence: the amount must match an attached record, that record must name the vendor in full (a first name or a place that shares a word with a vendor only raises a warning), the reference must not collide with a paid job or another payee's payment. A wrong proposal from the agent therefore fails a rule rather than changing the outcome. Its confidence and flags can add warnings that require a human, never remove one.
-- **Execution re-runs policy before touching a rail.** `executeObligation` in `src/lib/engine/orchestrator.ts` refuses if anything changed since approval (a duplicate appeared, details changed).
-- **Idempotency on every attempt, and no re-minting after an unclear answer.** PayPal: the attempt's key is both `sender_batch_id` and the `PayPal-Request-Id` header. Stellar: the key is the transaction memo, and the adapter looks through the treasury's history (paged back up to 14 days) for a payment with that memo, destination, asset and amount before sending; if it cannot read the history it does not send. A rail answers `failed` only when the provider definitively rejected the request. A timeout, 5xx, lost response or exception is `unknown`: the obligation stays in `execution_pending`, the attempt is `unknown`, and `retryAmbiguousExecution` replays the same request under the same key. A new key is only ever issued after a definitive failure. The Stellar transaction hash is stored before the transaction is submitted.
-- **One payer at a time.** Starting an execution (state check, attempt row, move to `execution_pending`) is one immediate SQLite transaction, state moves are compare-and-swap, and execution refuses while any earlier attempt is not definitively failed.
-- **Approvals mean people.** Dual approval counts distinct approvers. In live mode (or with `requireSeparateApprover` in the policy) the person who ingested an obligation cannot approve it.
-- **The destination is pinned at approval.** The hash of the vendor's payout details is stored when an obligation becomes approved; execution refuses (and sends it back to `blocked`) if the details were edited or no longer match.
-- **Webhooks never set state.** The PayPal webhook receiver verifies the signature, stores the event once (unique index on the event id), and asks the orchestrator to re-check settlement. A forged or replayed event cannot mark anything paid. A failed processing run returns 500 so PayPal retries; only fully processed events are skipped as duplicates.
-- **State transitions are whitelisted.** `TRANSITIONS` in `src/lib/domain/types.ts` lists every allowed move; anything else, including a same-state "move", is rejected.
-- **Input is validated at the boundary.** Amend patches accept only `amountMinor`, `currency`, `sourceRef` and `vendorId`, each checked; the agent's output is clamped; operator-typed evidence raises a policy warning; a vendor's rolling 24h total above the policy cap (default USD 1,000) forces approval.
-- **Live mode never falls back to a mock.** Missing or invalid credentials throw. A Stellar rail refuses to start on `STELLAR_NETWORK=public` with the testnet issuer or a testnet Horizon URL.
+### Policy decides
+- `evaluatePolicy` in `src/lib/domain/policy.ts` is a pure function: same input, same output.
+- Only the payee's full name on a record binds the amount to that payee. A partial name or a shared word raises a warning.
+- Each approval records the warnings on screen. A new warning sends the payment back for a fresh look.
 
-## Rails and modes
+### The money path
+- Every attempt carries an idempotency key: PayPal `sender_batch_id` plus the `PayPal-Request-Id` header; Stellar uses the memo and checks the treasury history before sending.
+- A timeout, 5xx or lost response is "unknown", never "failed". The payment stays pending and is replayed under the same key. A new key is issued only after a definitive failure.
+- Starting an execution is one SQLite transaction, and state moves are compare-and-swap through a whitelist (`TRANSITIONS` in `src/lib/domain/types.ts`).
+- The payout destination is pinned at approval. Edited details send the payment back to blocked.
+- Webhooks never set state. A signature-verified event only triggers a re-check.
+- Live mode never falls back to a mock. Missing credentials throw.
 
-| Variable | Values | What it does |
-|---|---|---|
-| `RAIL_MODE` | `mock` (default), `live` | `mock` uses deterministic offline adapters with the fee model from `docs/CORRIDOR_BENCHMARK.md`. `live` uses PayPal sandbox (or live, by `PAYPAL_ENV`) and Stellar testnet (or public, by `STELLAR_NETWORK`). |
-| `AI_MODE` | `mock` (default), `live` | `mock` uses a rule-based extractor. `live` calls Claude through the Anthropic API with the PayPal tools attached, and falls back to rules if the call fails. |
-| `CHECKRAIL_USERS` | `user:pass:role,...` | Named logins with roles: admin, approver, clerk, accountant (see Access control). |
-| `CHECKRAIL_BASIC_AUTH` | `user:pass` | Older single login, treated as the owner. |
-| `WISE_API_TOKEN`, `WISE_PROFILE_ID` | unset (default) | Wise local bank payouts. Unset shows Wise as not connected; `WISE_RAIL=mock` simulates it. |
-| `BANK_FILE_SOURCE_ACCOUNT` | unset (default) | The Vietnamese company account that bank bulk files pay from. Unset: no bank-file route. |
-| `CHECKRAIL_DATA_KEY` | 32 bytes | Encrypts full bank account numbers. Required wherever real money can move. |
-| `ACCOUNTING_DESTINATION` | `csv` (default), `xero` | `csv` writes the export. `xero` is the adapter interface with OAuth not yet wired. |
+### People and access
+- Named logins with roles (owner, approver, clerk, accountant) and approval limits.
+- Whoever prepares a payment does not approve it while someone else can. Dual approval counts distinct people.
+- Payout detail changes need a second person with a stated verification method.
 
-Mock mode needs zero credentials and is how the demo replays. The sidebar footer always shows the current modes; the demo does not pretend.
+### Reviews
+- Six independent review rounds on 16 Oct (`docs/CRITIC_REVIEW_02.md`, `docs/critic/`) and three outside audit rounds from 25 to 27 Oct by a security analyst and an AP practitioner (`docs/audits/`). Every finding was fixed with a test.
 
-## Access control
+### Known gaps
+- No inbound email or Zalo intake yet: requests are pasted or uploaded. No notifications, so the cancel window is a delay, not an alert.
+- The webhook signature check is unit-tested, not yet exercised by a real PayPal event.
+- No Stellar anchor leg, PYUSD to USDC path payment, fee bumps or SEP-29 memo checks.
+- The bank file is a generic CSV to map to each bank's template. Xero is a file import.
+- The autopilot heartbeat assumes one server process. SQLite, logins in an environment variable.
+- The agent shares a PayPal app that has Payouts scope. Use a separate read-only app before real money.
 
-Set `CHECKRAIL_USERS="daniel:pw:admin,minh:pw:approver,lan:pw:clerk,thu:pw:accountant"`. Every page and server action then requires one of those HTTP Basic logins, and the role decides what the person sees and may do: the clerk prepares and sends, the approver approves within a limit and verifies vendor changes, the accountant reconciles, exports and closes periods, the owner does everything. Approval limits, cover while away and access are edited in Settings, Team. Whoever prepares a payment does not approve it while someone else can; in a one-person business self-approval is allowed and recorded. With no logins configured the app opens only in development (or with `CHECKRAIL_INSECURE_DEMO=1`, never with live rails); anything else answers 503. `CHECKRAIL_DEMO_PERSONAS=1` gives an owner login an "act as" switch to play each role, and is ignored whenever real money can move. Exempt from login, by exact path: the PayPal webhook (it verifies PayPal's signature) and the vendor pages reached by a single-use link (`/onboard/<token>`, `/evidence/<token>`, `/remit/<token>`); internal server actions refuse any request posted from those pages.
+## Switching to live mode
 
-## Quick start
+Everything runs with zero credentials on simulated rails. To move a rail or the agent to live, copy `.env.example` to `.env`, set the variables below and restart. In live mode a rail with missing or invalid credentials refuses to start instead of falling back to a mock, and the app refuses to open without logins.
 
-    npm run setup      # npm install + seed the demo database
-    npm run dev        # http://localhost:3000
-    # open http://localhost:3000/demo for the presenter page
+**Logins (required in live mode)**
 
-Requires Node 20 or later. SQLite is bundled through `better-sqlite3`; no external database.
+    CHECKRAIL_USERS=owner:<pw>:admin,minh:<pw>:approver,lan:<pw>:clerk,thu:<pw>:accountant
 
-## Terminal proof
+**PayPal sandbox.** Create an app at developer.paypal.com, enable Payouts, and tick Transaction search and Invoicing so Claude's checks and Read from PayPal work. For webhooks, set `PAYPAL_WEBHOOK_ID` and point the webhook at `/api/webhooks/paypal`.
 
-Output of `npm run demo:replay` in mock mode on 2026-10-16:
+    RAIL_MODE=live
+    PAYPAL_CLIENT_ID=...
+    PAYPAL_CLIENT_SECRET=...
+    PAYPAL_ENV=sandbox
+    DEMO_PAYPAL_RECIPIENT=<sandbox personal account email>
+    DEMO_PAYPAL_RECIPIENT_ROSA=<a second sandbox personal account>
+    STELLAR_RAIL=mock          # keep Stellar simulated while testing PayPal alone
 
-```
-Rails: paypal=mock stellar=mock
+**Stellar testnet.** `npx tsx scripts/stellar-setup.ts` creates a treasury and a demo recipient with PYUSD trustlines. Fund the treasury with test PYUSD from the Google Cloud Web3 faucet or the Paxos faucet. Never paste the secret into chat.
 
-1. ven_phuong INV-2026-0152: BLOCKED
-   Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00 (+USD 160.00)
-2. JOB-HG4D-0914: BLOCKED
-   Reference JOB-HG4D-0914 was already used by obligation obl_8fd76a3273d64347 (settled)
-3. JOB-HG4D-0921 USD 180.00: approved -> paypal (Effectively equal cost: PHP 59.54 per USD spent on PayPal against 59.58 on Stellar (0.07% apart). PayPal wins the tie because its whole path runs end to end today; Stellar is faster.)
-   execute: submitted; state now: settled; rail attempt: confirmed / SUCCESS (id FAD2451DF454E)
-   (simulated) fee USD 3.60; recipient gets PHP 10,931.31
-4. JOB-PAL3D-0927 USD 750.00: awaiting_approval -> stellar (Stellar is Ana Reyes's stated preference.)
-   execute: confirmed; state now: settled; rail attempt: confirmed / success (id 46f0b9c466b96d63...)
-   (simulated) fee USD 13.25; recipient gets PHP 45,664.99
+    STELLAR_NETWORK=testnet
+    STELLAR_TREASURY_SECRET=S...
+    STELLAR_PYUSD_ISSUER=GBT2KJDKUZYZTQPCSR57VZT5NJHI4H7FOB5LT5FPRWSR7I5B4FS3UU7G
+    DEMO_STELLAR_RECIPIENT=G...
 
-Result: 2 of 2 settled, 2 errors prevented, 2 accounting records exported, 525 audit entries.
-```
+**Claude**
 
-With `RAIL_MODE=live` the same script sends obligations 3 and 4 through the PayPal sandbox; on 12 Oct that produced batch RGS5PUZPH4CNY (settled) and W55KNGQK57JC4 (UNCLAIMED, held for a person).
+    AI_MODE=live
+    ANTHROPIC_API_KEY=sk-ant-...
+    ANTHROPIC_MODEL=claude-sonnet-5-5
 
-The batch id and transaction hash above are generated by the mock adapters, which deliberately emit no explorer link. They are not real PayPal or Stellar records. See "Honesty" below.
+**Local bank payouts and books**
 
-## Live mode setup
+    WISE_API_TOKEN=...
+    WISE_PROFILE_ID=...
+    WISE_ENV=sandbox
+    BANK_FILE_SOURCE_ACCOUNT=VCB 0071000... Ridgeline Vietnam
+    CHECKRAIL_DATA_KEY=<32 bytes, base64>   # encrypts full bank account numbers; required wherever real money can move
 
-1. Copy `.env.example` to `.env`.
-2. **PayPal sandbox.** Create an app at developer.paypal.com, enable Payouts for the sandbox app, and set `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV=sandbox`. The agent's PayPal tools also use these credentials. For webhooks, set `PAYPAL_WEBHOOK_ID` and point the webhook at `/api/webhooks/paypal`.
-3. **Stellar testnet.** Create a treasury keypair, fund it with friendbot, add a PYUSD trustline, and fund it with test PYUSD from the Google Cloud Web3 faucet or the Paxos faucet. Set `STELLAR_TREASURY_SECRET` and `STELLAR_PYUSD_ISSUER` (testnet issuer per the PayPal Developer PYUSD on Stellar post; see `docs/CORRIDOR_BENCHMARK.md` section 2). The demo recipient Ana Reyes needs a funded testnet account with a PYUSD trustline; replace her `stellarAccount` in `src/lib/demo/seed.ts`.
-4. **Anthropic.** Set `ANTHROPIC_API_KEY` and `AI_MODE=live`.
-5. Run `RAIL_MODE=live npm run demo:replay`. Obligations 3 and 4 will hit the sandbox and testnet.
+Then run `npm run demo:replay` to send the clean requests through the sandbox. `.env.example` documents every other variable, including the autopilot heartbeat (`AUTOPILOT_HEARTBEAT=off` plus `POST /api/autopilot/tick` for more than one server process).
 
-PayPal sandbox and Claude have both been run live this way (see Honest status). Stellar testnet has not: it needs a funded treasury, which is step H4 in `HUMAN_ACTION_QUEUE.md`.
+## Hosting
+
+`render.yaml` is a Render Blueprint for the hosted judging demo: simulated rails, the rule-based reader, logins from `CHECKRAIL_USERS`, and a reset to the four opening requests after 30 minutes without use. It is one shared database, so two judges in the same half hour see each other's changes. Reset demo on `/demo` restores it at any time.
 
 ## Tests
 
-    npm test          # vitest: policy rules, extractor, the four-obligation story
+    npm test
     npm run typecheck
     npm run lint
     npm run build
 
-301 tests in 37 files pass as of this commit, including the autonomy tests (`autopilot.test.ts`) and the Daily close tests (`dailyClose.test.ts`). The story test (`src/lib/engine/story.test.ts`) runs the full demo through the orchestrator in mock mode and asserts each outcome.
+307 tests in 38 files. `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 
-    src/lib/domain/       types, policy (pure), routing (static rule), state machine, ids
-    src/lib/engine/       orchestrator: ingest -> interpret -> policy -> quote -> route -> execute -> settle -> accounting; autopilot runner; daily close;
-                          users and roles, vendor master, payment runs, bills, rate cards, bank files, books (reconciliation, aged payables, period lock), vendor links, taxes
-    src/lib/ai/           Claude agent, read-only PayPal tools, rule-based fallback extractor
-    src/lib/rails/        PaymentRail interface, mock adapters, PayPal Payouts, Stellar, Wise (beta) and bank-file adapters, fee models, corridors
-    src/lib/accounting/   accounting record builder, CSV export, Xero mapping
-    src/lib/db/           Drizzle schema and SQLite connection
-    src/lib/demo/         Ridgeline Expeditions seed data and the four-obligation story
-    src/app/              Next.js App Router pages: overview, inbox, obligation detail, vendors, ledger, exceptions, daily close, accounting, audit, settings, demo
-    src/app/api/          accounting CSV export, PayPal webhook receiver, autopilot tick
-    src/components/       the check line, route comparison, rule checklist, action bar, shell
-    scripts/              seed.ts, replay.ts
-    docs/                 corridor benchmark, UI notes, Devpost text, video script, SCF application, Xero pitch, screenshots
+    src/lib/domain/       types, policy (pure), routing, state machine
+    src/lib/engine/       orchestrator, autopilot, daily close, users, vendors, runs, bills, rate cards, books, taxes
+    src/lib/ai/           Claude agent, read-only PayPal tools, rule-based reader
+    src/lib/rails/        PayPal Payouts, Stellar, Wise (beta), bank file, mock adapters, fee model
+    src/lib/accounting/   accounting records, CSV export, Xero mapping and bills file
+    src/app/              Next.js pages and API routes (export, PayPal webhook, autopilot tick)
+    scripts/              seed, replay, Stellar setup, screenshots
+    docs/                 Devpost text, video script, SCF application, business notes, benchmark, audits
 
-## Honesty
-
-**What is mock.** Both rail adapters in `RAIL_MODE=mock`. The PayPal batch ids and Stellar hashes in the replay are generated locally. Fee and FX figures come from a published-fee model (`src/lib/rails/quoteModel.ts`, sourced in `docs/CORRIDOR_BENCHMARK.md`), not from live quotes. The AI in `AI_MODE=mock` is a rule-based extractor, not Claude. The Xero adapter maps records but does not push; OAuth is not wired. The Stellar anchor leg (SEP-31 to PeraHub) is modelled, not integrated; on testnet the Stellar adapter pays PYUSD to the vendor's wallet directly.
-
-**What is proven.** The policy engine, state machine, routing rule, orchestrator, document reader (PDF text layer) and accounting export, by tests and by the deterministic replay. The PayPal adapter has created and settled a real sandbox payout (batch RGS5PUZPH4CNY) and handled an UNCLAIMED one (W55KNGQK57JC4) without a second payment. The Claude agent loop with read-only PayPal tools has run live (with the Agent Toolkit; the tools are now direct read-only REST calls, re-verified against the sandbox on 24 Oct). The webhook receiver's signature check is type-checked and unit-tested, not yet exercised by a real PayPal event. The Stellar adapter builds, signs and submits a PYUSD payment with a memo-based idempotency check (type-checked, not yet run against testnet).
-
-**Safety review.** The money path (orchestrator, both rail adapters, webhook, policy) went through a line-by-line audit before any live credential was allowed near it. It found real problems, among them a retry that could mint a fresh idempotency key after an ambiguous failure, an unvalidated amend patch, and a silent fall-back to mock rails in live mode. All are fixed and covered by tests (`src/lib/engine/safety.test.ts` and the rail tests): ambiguous outcomes now stay "unknown" and block a second payment until reconciled, state changes are compare-and-swap inside a transaction, approvers are counted by distinct person, payout destinations are pinned at approval, and live mode fails closed. An independent review on 16 Oct (an agent given the repo and the judging criteria, see `docs/CRITIC_REVIEW_02.md`) found five more, all fixed and tested: a PayPal "batch already exists" answer to a replay was classified as a failure, which would have allowed a second key (now looked up by `sender_batch_id` and recorded as the original); the reconcile path had no button and the failed-payment retry was broken (both wired); an autopilot pass read its rows once, so a Cancel or Pause during the pass could be missed (now a conditional claim per payment); a payment a person approved over a cap could be swept into autopilot (autopilot now never sends a human-approved payment); and a payment whose evidence carried no amount passed the amount check by default (now a warning). Three more rounds the same day, each by a fresh reviewer on a clean copy (reports and responses in `docs/CRITIC_REVIEW_02.md` and `docs/critic/`), found and closed the rest, each with tests. Payee binding: a matching reference, a single shared word ("Transport", "Homestay") or a place name ("Tam Son", "Red Dao") could clear a payment to the wrong vendor; now only the full name binds, anything less is a warning, and a record naming two vendors asks whose amount it is. Evidence: editing an uploaded document's excerpt, or uploading a typed .txt, kept "document" status; both are now the operator's claim, and one upload backs one payment. Approvals: an approval silently covered warnings that appeared later; each approval now records the exact warnings on screen, and a new one sends the payment back for a fresh look. Stuck payments: a person can resolve one from the provider dashboard, and the id they enter must be unused and must carry the attempt's key at PayPal. Also: HTML and SVG uploads refused, the CSV download is read-only with spreadsheet formulas neutralised, and the hosted demo restores itself after 30 minutes without use. A fifth round found nothing that moved money wrongly and closed out the loop; its last items (a file name could name the payee, an approval could cover a warning the page had not shown, a request that names no payee) are fixed too: file names never reach the label, approving re-checks against what the page showed, and policy warns when the request itself does not name the payee. Known gaps: binding checks that the full name appears on the record, not in what role (a guesthouse invoice that names the guide as group lead still names the guide); the autopilot heartbeat assumes one server process; a PDF the operator wrote themselves still counts as a document (policy compares its text, not who made it); rolling 24-hour caps are measured from each payment's last update rather than its send time; no fee-bump handling, no SEP-29 memo or trustline pre-check, the anchor leg is not built, the live Wise adapter is written to Wise's documentation but has not run against a Wise account, the bank file is a generic CSV to map onto each bank's template, Xero is a file import rather than OAuth, and the agent shares a PayPal app with Payouts scope (use a separate read-only app).
-
-**Outside audits, 25 to 27 Oct.** After the build of the AP roadmap, two independent auditors (a security analyst and an AP practitioner for SE Asia tour operators) reviewed the product three times on fresh copies, each round on a built server with every role. Reports and the team's responses are in `docs/audits/`. Round three found two security problems worth naming: the login-attribution fix from round two did not take effect in the running app (it set the login with AsyncLocalStorage.enterWith inside an awaited helper, which never reaches the caller; every action now runs inside `runAs`, checked over HTTP), and PayPal reversals could refund a payment matched only by amount and email (now bound to our own payout by PayPal's Reference Txn ID and applied only by someone who reconciles). The practitioner's round-three ratings: clerk 7, owner 8, completeness 7, pilot readiness 5, hackathon 8. Known gaps from the audits: no inbound email or Zalo intake, no notifications, no bank or Wise statement import, bank-file references are typed rather than matched, tax forms are a field rather than a stored document, and the platform is SQLite with logins in an environment variable.
-
-**What is next.** Fund the Stellar testnet treasury and run the Stellar leg live. Then: a PYUSD to USDC path payment before the anchor leg, since anchors accept USDC not PYUSD; a sending-anchor agreement with PeraHub; Xero OAuth; a second corridor (Mexico via Bitso).
-
-**On the Stellar cost argument.** Per the benchmark, on published fees Stellar via PeraHub beats PayPal to the Philippines only above roughly USD 500, and Wise is cheaper than both. Vietnam has no licensed VND off-ramp. Checkrail Pay's value is automation, control and reconciliation first; routing cost second. The routing rule is honest about this: at USD 180 it picks PayPal.
+A Soroban spend-policy contract (caps, payee allow-list, cancel window and pause enforced on chain) lives in `contracts/spend-policy`; see its README.
 
 ## Licence
 

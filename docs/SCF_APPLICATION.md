@@ -1,141 +1,134 @@
 # Stellar Community Fund #46: Build Award application
 
-Deadline: Nov 8 2026. The interest form must be submitted before the application. Build Award up to USD 150,000 in XLM, paid in tranches tied to MVP, testnet and mainnet milestones. Applicant: Daniel Fillion, solo founder.
-
-Track: Integration (existing Stellar building blocks: PYUSD and SEP-31 anchors). Confirm the track, the number of award milestones for #46 (the awards page lists three, SCF v7 material describes four) and the team eligibility rules in the SCF handbook before submitting; none of these could be verified from the live pages when this draft was written.
-
-Round and award details should be checked against https://communityfund.stellar.org/awards before submitting; the structure below follows the Build Award format as published.
+> **Go or no-go, for the founder, decide by 1 Nov 2026**
+>
+> - **Go for #46 only if both happen before 6 Nov:** (1) one real testnet payment released through the spend-policy contract from the app, with an explorer link pasted into "What is built"; (2) the interest form submitted.
+> - **Otherwise apply to #47** with the testnet release, Loop Tours running in Review mode and three pilot letters. A weak #46 application spends the first impression with the same panel.
+> - Before submitting either round, check in the SCF handbook: the tranche structure for the round, the team minimum, the track, and any jurisdiction restriction (such as testnet-only) for an applicant based in Vietnam.
+>
+> Deadline for #46: 8 Nov 2026. The interest form must be in before the application.
 
 ## Interest form
 
-**Project name.** Checkrail Pay
+**Project name.** Checkrail spend policy (first user: Checkrail Pay)
 
-**One-line description.** Verified supplier payments, routed and reconciled automatically: an AI payables operations layer for SMEs that settles cross-border supplier payments over PayPal or Stellar PYUSD and lands them in the books.
+**One-line description.** A Soroban spending-policy account that an AI payables agent can use but cannot abuse: per-payment cap, rolling 24-hour cap, payee allow-list, a time-locked cancel window and an owner pause key.
 
-**Summary (one paragraph).** Checkrail Pay sits between a small business's messy payment requests (invoices, job sheets, chat) and its payment rails. An AI agent reads each request and flags anomalies; a deterministic policy engine decides; a routing rule compares PayPal Payouts with Stellar PYUSD via a local anchor and picks by vendor preference and then effective cost per dollar the sender actually spends; execution runs with idempotency on every attempt; every settlement exports to accounting software. The first corridor is US to Philippines through PeraHub (SEP-31). Stellar gets real SME payables volume from businesses that will never hold a wallet or think about crypto; once the anchor leg is built the recipient sees a peso bank deposit and the operator sees "paid, reconciled".
+**Summary (one paragraph).** AI agents are starting to pay suppliers. Today their limits live in the same server as their keys, so a compromised server or a confused model can overspend. The Checkrail spend policy moves those limits onto Stellar. The business funds a Soroban contract with its own PYUSD or USDC and stays its owner. The agent key can only propose a payment. Nothing moves until a cancel window has passed, and at release the contract checks every rule again: the per-payment cap, the rolling 24-hour cap (scheduled payments count), the payee allow-list that only the owner can change, and a pause that either side can pull but only the owner can lift. Checkrail Pay, an AI payables app for small service businesses, is its first user. The contract is a reusable primitive for any team building agent payments on Stellar.
 
-**Category.** Payments and financial access (B2B cross-border payables).
+**Category.** Payments (agent payments, B2B supplier payouts).
 
-**Stage.** Working MVP in mock mode with 142 tests and a deterministic demo. Live PayPal sandbox and Stellar testnet adapters are written against the real SDKs and have had a line-by-line safety review, but had not made a live call when this draft was written. [Before submitting: run one real Stellar testnet PYUSD payment from the dashboard and link its explorer transaction here. SEP-31 and the PYUSD to USDC path payment are the funded work.]
+**Stage.** Contract written and unit-tested (11 tests); not yet deployed. The app it serves is a working MVP with a proven PayPal sandbox payout and a live Claude reader. Details below.
 
-**Team.** Solo founder with an operations background running a tour business in Northern Vietnam. [Add a second named contributor with Stellar anchor experience here if one is secured; see the human action queue.] Prior SCF-funded engineering experience through a separate team (Logistech Global) is relevant background, not this project's team.
+**Team.** Daniel Fillion, solo founder. Runs a tour operations business in Northern Vietnam that pays exactly this kind of supplier roster.
 
-**Links.** GitHub: github.com/<you>/checkrail-pay (public after H3 in the human action queue). Demo video: YouTube link after recording.
+**Links.** Repository link added at submission. Demo video: on the project's PayPal AI Hackathon Devpost page.
 
 ## Full application
 
 ### Project summary
 
-Checkrail Pay is an AI payables operations layer for small and medium businesses that pay a distributed roster of contractors and suppliers, often across borders. It reads payment requests in whatever form they arrive, works out who is owed what, refuses requests that do not match the evidence or duplicate a prior payment, picks the rail with the better effective cost to the recipient, counting fees the same way for both rails, pays, and produces accounting-ready records. Stellar PYUSD is one of two rails, side by side with PayPal Payouts, and wins the route when it is cheaper per dollar spent or when the vendor prefers it.
+The Checkrail spend policy is a Soroban contract that holds a business's stablecoin float and lets an AI payables agent spend it only inside rules the chain enforces. The agent can propose. The chain decides whether the payment may ever leave, and the owner can stop it at any point before it does.
+
+Checkrail Pay is the first user. It already enforces the same autopilot limits in its own database: a per-payment cap (default USD 500), a rolling 24-hour cap (default USD 2,000), a cancel window (default 10 minutes) and a pause. Those limits protect against a model mistake. They do not protect against a compromised server, because the server holds the key. Putting the limits in the contract closes that gap, and it gives Stellar a role in the product that PayPal and Wise cannot copy.
 
 ### Problem
 
-Small businesses in travel, logistics, agencies and field services pay dozens of small cross-border obligations a month: a guide in Palawan, a driver in Ha Giang, a homestay, a freelance videographer. The requests arrive as photos, spreadsheets and chat messages. Someone checks them against a contract by eye, pays from a PayPal or bank tab, and retypes the result into the books. The failure modes are well known to anyone who has done it: an amount that drifted from the agreement, a job sheet paid twice, a payout to changed bank details nobody verified, and a ledger that is always a week behind.
+Agent payments need limits the agent cannot edit.
 
-Existing tools solve pieces. Bill-pay products handle domestic suppliers with proper invoices. Remittance apps move money but know nothing about the obligation behind it. Accounting software records what happened after the fact. Nothing checks, decides, pays and reconciles as one flow for the kind of recipient that is paid by email address or local bank account in Southeast Asia.
+Small service businesses pay dozens of freelance suppliers a month from chat messages and job sheets. AI can now read those requests and pay the clean ones. The safety model every serious team ships is the same: the AI proposes, deterministic rules decide, money moves through an API, a person can stop it. But on every rail today, the rules and the key sit on the same server. One leaked key or one bad deploy and the caps are gone.
 
-### Solution
+### Solution: the spend-policy contract
 
-Five stations on one line: read, verified, routed, paid, reconciled.
+The agent key can only propose; release is permissionless after the window and re-checks every rule.
 
-- **Read.** An agent parses the request and the attached evidence, resolves the vendor against the roster, and produces a structured interpretation with a confidence score and plain-language flags. It is Claude when an API key is configured and a rule-based extractor otherwise (the dashboard shows which one read each obligation). With Claude it also has read-only tools into PayPal's transaction and invoice history. It has no spending authority.
-- **Verified.** A deterministic policy engine (a pure function) applies eight rules: known vendor, amount present, evidence attached, amount within tolerance of evidence, no duplicate reference, recipient details verified, corridor allow-listed, AI confidence above threshold. Outcome: block, hold, require approval or auto-execute.
-- **Routed.** Both rails are quoted and shown side by side with the delivered amount in the recipient's currency and what the sender pays in total. PayPal charges its fee on top and the anchor path takes its fee out of the amount, so the rule compares delivered amount per dollar the sender actually spends. A static rule picks the default: vendor preference, then effective cost, with gaps under 0.5% counted as ties that go to PayPal because its whole path is executed end to end today.
-- **Paid.** Execution re-runs policy, then pays through PayPal Payouts or a signed Stellar PYUSD payment with an idempotency key on every attempt.
-- **Reconciled.** Settlement confirmed by polling; one audit log; CSV export with a Xero bill, payment and fee mapping.
+| Rule | Who can change it | Enforced at |
+|---|---|---|
+| Per-payment cap | owner | propose and release |
+| Rolling 24-hour cap, counting scheduled payments | owner | propose and release |
+| Payee allow-list | owner only | propose and release |
+| Cancel window before money moves | owner | release |
+| Cancel a scheduled payment | owner | until release |
+| Pause | owner or agent (the safe direction) | propose and release |
+| Resume | owner only | |
+| One payment per id (idempotency) | nobody | propose |
+| Withdraw the balance | owner, any time | |
+
+What this buys:
+- A compromised Checkrail server can propose payments, but only to payees the owner allowed, only under the caps, and only after a window in which the owner can cancel or pause.
+- A changed payout address needs the owner's signature on the allow-list, which is the classic invoice-fraud path closed on chain.
+- The business funds the contract and can withdraw at any time. Checkrail never holds funds.
+- Lowered limits apply at release, so tightening a cap stops payments already scheduled.
+
+### How Checkrail Pay uses it
+
+Checkrail Pay reads each supplier request (Claude, or a rule-based reader), checks it against 25 deterministic policy rules, and pays the clean ones inside the owner's autonomy setting. Today its Stellar rail signs a PYUSD payment directly from a treasury key (written to the Stellar SDK, simulated, never run on testnet). With this grant, the Stellar rail proposes through the contract instead, the app's cancel and pause buttons call the contract, and a release watcher calls `release` after the window. The app's own policy still runs first; the contract is the second, independent wall.
 
 ### Why Stellar
 
-1. **Real settlement demand without crypto-native users.** Checkrail Pay's users are business owners and bookkeepers. They never see a wallet, a seed phrase or an asset code. Once the anchor leg is built (funded work) the recipient sees a peso deposit; today the testnet demo pays PYUSD to a recipient wallet and labels the PHP figure as modelled. Stellar gets SME payables volume that would otherwise go through PayPal or a bank, selected by a routing rule on merit.
-2. **PYUSD is the natural treasury asset for a PayPal-adjacent product.** PYUSD on Stellar (live since Sept 2025) lets a business hold one dollar stablecoin that connects to both of its rails. Checkrail Pay's treasury holds PYUSD; the anchor leg converts to USDC via a path payment where needed.
-3. **Anchors are the bridge to local bank accounts.** SEP-31 with PeraHub gives US to Philippines bank and wallet payout with KYC handled by the anchor. Mexico via Bitso is the next corridor. Each anchor added is a corridor Checkrail Pay can route.
-4. **Accounting and payment integrations are the adoption bridge.** Businesses adopt what their accountant will sign off on. Checkrail Pay exports every Stellar settlement as a bill, payment and fee line that reconciles in Xero. That is what makes a stablecoin payment acceptable to a bookkeeper.
-5. **Honest about where Stellar wins.** Our benchmark (docs/CORRIDOR_BENCHMARK.md) shows that on published fees Stellar via PeraHub beats PayPal to the Philippines only above about USD 500 and does not beat Wise on cost. It wins clearly on speed (minutes versus days), programmability and predictability. Checkrail Pay routes on effective cost, so Stellar earns volume where it is better and the product stays credible where it is not. As anchor fees fall, the crossover moves down.
+1. **Programmability where it matters.** Soroban lets the limits live with the money. PayPal and Wise have no equivalent a payer can set and the payer's own software cannot override.
+2. **Speed.** Stellar ledgers close in about 5 seconds. Our benchmark estimates 1 to 30 minutes end to end to a Philippine bank through an anchor, against 1 to 5 days for a standard PayPal withdrawal to a bank there.
+3. **PYUSD on Stellar** (live since 18 Sep 2025, pitched for SMB working capital and supplier payments) is the natural float for a product that also pays over PayPal.
+4. **A reusable primitive.** Any agent-payments team on Stellar can deploy the same contract. It grows network asset value held in business float, one treasury at a time.
 
-### Technical architecture
+**Honest about cost.** Stellar is not the cheaper rail in our benchmark (`docs/CORRIDOR_BENCHMARK.md`). On published fees, PYUSD to a Philippine bank via PeraHub beats PayPal only above about USD 500, and Wise is cheaper than both at every size tested. PeraHub caps a transfer at 1,000 USDC with a 5 USDC fixed fee, and anchors take USDC, not PYUSD, so a path payment is needed. Vietnam has no licensed off-ramp, so there is no Stellar route for Vietnamese suppliers. Stellar wins on speed and programmability, and this application is built on those two, not on price.
 
-TypeScript, Next.js 15, React 19, Drizzle ORM, SQLite. Domain layer: typed state machine with whitelisted transitions, pure policy function, static routing rule, `PaymentRail` interface (quote, execute, get status). Orchestrator wires ingest, interpret, policy, quote, route, approve, execute, settle, accounting in a fixed order with an audit entry at every step.
+### What is built
 
-Stellar rail (`src/lib/rails/stellar.ts`): Stellar SDK, Horizon, treasury keypair held server-side in the business's own deployment (the business controls the key; Checkrail Pay the company never holds client funds; a move to multisig with the business as a signer is planned), PYUSD asset, payment operation with the idempotency key in the memo, a pre-submit check of treasury payment history for that memo so a retry cannot pay twice, explorer link on settlement. On testnet the destination is the vendor's Stellar account. In production the destination resolves to the anchor's SEP-31 receiving account with the anchor-issued transaction id as memo; that resolution is isolated from the signing code.
+As of 29 Oct 2026:
 
-PayPal rail: Payouts REST with `sender_batch_id` and `PayPal-Request-Id` idempotency, webhook signature verification, webhooks trigger a status re-check only.
+- **Spend-policy contract:** written in Rust on soroban-sdk 29.0.1. 11 unit tests pass with `cargo test` (caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation). Not deployed to testnet. Not called by the app yet.
+- **Checkrail Pay app:** 307 tests in 38 files, 25 named policy rules, a typed state machine with whitelisted transitions, idempotency on every rail attempt, autonomy levels with caps and a cancel window, a Daily close with audited sign-off, a Xero bills import file and CSV export.
+- **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
+- **Claude (`claude-sonnet-5-5`): has read the full demo live,** with three read-only PayPal REST calls (Transaction Search and Invoicing).
+- **Stellar PYUSD rail: simulated.** The adapter is written to the Stellar SDK with memo-based idempotency and has never run on testnet.
+- **Reviews:** six independent review rounds and three outside audit rounds (security and AP practice) on the app's money path, every finding fixed with a test.
 
-AI: Claude via the Anthropic SDK with a small tool set including the PayPal Agent Toolkit's read-only tools, filtered at load time. Rule-based fallback when the model is unavailable.
+### Tranches and ask
 
-Every external dependency has a mock mode; the demo replays deterministically offline.
+**Ask: USD 60,000.** Split below follows the SCF v7 structure (10% on award, 20% at MVP, 30% at testnet, 40% at mainnet with UX readiness); we will map it to whatever structure the #46 handbook specifies.
 
-### What is built (MVP state)
+| Tranche | Share | USD | Deliverable | Target |
+|---|---|---|---|---|
+| Award | 10% | 6,000 | Selection | On award |
+| MVP | 20% | 12,000 | Contract and unit tests (done before award), plus: events indexed by the app, a TypeScript client for propose, cancel, pause and release, and a written threat model | 3 weeks from award |
+| Testnet | 30% | 18,000 | Contract deployed to testnet. The app's Stellar rail proposes through it, the app's cancel and pause call it, and a release watcher releases after the window. A real testnet release with an explorer link, from the running app. PYUSD to USDC path payment on testnet. | 8 weeks from award |
+| Mainnet | 40% | 24,000 | Independent security review of the contract, fixes applied. Mainnet deployment. Three pilot businesses funding their own contract and paying real suppliers through it. Owner screens for limits, allow-list and pause. Published docs so another team can deploy it. | 6 months from award |
 
-Done and tested (142 tests, deterministic replay in README):
-- Full obligation lifecycle, policy engine, routing rule, state machine, audit log.
-- Four-obligation demo: amount mismatch blocked, duplicate blocked, PayPal auto-pay, Stellar approve-then-pay with explorer link.
-- Operator dashboard: overview, inbox, obligation detail with rule checklist and route comparison, vendors, ledger, exceptions, accounting export, audit, settings, presenter page.
-- Corridor benchmark with sourced fee model for US to PH.
-- Accounting CSV export and Xero mapping.
+### Budget (itemised)
 
-Implemented, not yet exercised (build environment had no network path to the sandboxes):
-- Live PayPal sandbox Payouts and webhook verification.
-- Live Stellar testnet PYUSD payment.
-- Live Claude agent with PayPal tools.
-
-Not built:
-- SEP-31 anchor integration (modelled in the quote, stubbed in destination resolution).
-- PYUSD to USDC path payment.
-- Xero OAuth.
-
-### Tranche milestones
-
-**Tranche 1: MVP (delivered before award, shown for transparency).** Everything in "Done and tested" above, public repository, demo video. Map this to whichever milestone structure the #46 handbook specifies; we do not assume payment for work already finished beyond the selection tranche.
-
-**Tranche 2: Testnet.** Stellar testnet PYUSD flow exercised end to end from the dashboard with real explorer links. PYUSD to USDC path payment on testnet. SEP-10 auth, SEP-12 KYC and SEP-31 transaction flow against an anchor sandbox (PeraHub if access is granted, otherwise the SDF anchor reference implementation). PayPal sandbox exercised end to end. Live Claude agent. Target: 8 weeks from award.
-
-**Tranche 3: Mainnet.** PeraHub US to PH corridor live with a sending-anchor agreement. Xero integration live via OAuth. First 10 businesses connected and paying real suppliers through Checkrail Pay, with at least a quarter of cross-border volume routed over Stellar by the routing rule on merit. Second corridor (Mexico via Bitso) in sandbox. Target: 6 months from award.
+| Line | USD | Purpose |
+|---|---|---|
+| Contract engineering | 12,000 | Client library, events, threat model, edge cases (fee bumps, expired entries, token with clawback) |
+| App integration | 14,000 | Stellar rail through the contract, cancel and pause wiring, release watcher, reconciliation of contract events |
+| Security review | 15,000 | Independent review of the contract before mainnet, and fixes |
+| Testnet and mainnet operations | 4,000 | Deployment, monitoring, test float, explorer-linked evidence for each milestone |
+| Pilot onboarding | 7,000 | Onboarding three businesses, owner-key setup, support |
+| Legal | 5,000 | Payments-law opinion on initiating payouts from a customer's own account; terms for business users |
+| Docs and reuse | 3,000 | Public deployment guide and example for other agent-payments teams |
+| **Total** | **60,000** | |
 
 ### Success metrics
 
-- Integration Track on-chain metric (proposal, to be confirmed by the applicant): at least USD 30,000 of PYUSD or USDC settled on Stellar through Checkrail Pay, and at least 10 funded business treasury accounts, over the 90 days after mainnet launch. Internal or founder volume is not counted; the founder's own Vietnam payments cannot use Stellar.
-- Obligations processed through Checkrail Pay (read to reconciled).
-- Errors prevented: blocked obligations and the amount they represent.
-- PYUSD volume settled on Stellar, and the share of cross-border volume the routing rule sent to Stellar.
-- Anchors integrated and corridors live.
-- Businesses connected; businesses with accounting sync active.
-- Median time from request to reconciled record.
+- Contract deployed on mainnet and called by the running app for every Stellar payment.
+- Three businesses with funded spend-policy contracts, and the PYUSD or USDC held in them.
+- Payments released through the contract, and payments the contract refused (caps, allow-list, pause), both from on-chain events.
+- At least one outside team deploying the contract.
+- No payment ever released outside the rules, verified from contract events.
 
-### Team
+### Context: the PYUSD rail
 
-Daniel Fillion, solo founder. Runs a tour operations business in Northern Vietnam that pays exactly the kind of roster Checkrail Pay is built for: guides, drivers, homestays and creators. The Philippines is the first corridor because that is where Stellar anchor coverage exists; the demo uses a fictional US operator paying a Philippine and Vietnamese roster, and Vietnam itself cannot use the Stellar rail today. Hands-on builder; the MVP was built with AI-assisted engineering under a two-lane model (an AI builder lane and a human gate lane with hand review on every money-path change, see CONTRIBUTING.md). Prior exposure to SCF-funded Stellar work through a separate team (Logistech Global) is relevant experience with the ecosystem and its process; that team is not part of this project.
-
-Hiring plan on award: one part-time backend engineer with anchor and SEP experience for tranche 2, and an accountant-channel partner for tranche 3 go-to-market.
-
-### Budget outline
-
-Indicative, for the full award, to be adjusted to the tranche schedule:
-
-| Line | Share | Purpose |
-|---|---|---|
-| Engineering | 55% | Anchor integration, path payments, Xero OAuth, second corridor, hardening, security review of the money path |
-| Compliance and legal | 15% | Sending-anchor agreement, terms for business users, review of money transmission posture per corridor |
-| Pilot operations | 15% | Onboarding the first 10 businesses, treasury float for pilots, support |
-| Go-to-market | 10% | Accountant channel, Xero marketplace listing, content |
-| Infrastructure and tooling | 5% | Hosting, monitoring, model usage |
+Checkrail Pay routes between PayPal Payouts, Stellar PYUSD, Wise and a Vietnamese bank file, with vendor preference first and then effective cost. The first Stellar corridor is US to the Philippines through PeraHub (SEP-31), which requires a sending-anchor agreement not yet in place. That corridor work is context for this grant, not its deliverable: this application funds the contract and its first real use.
 
 ### Risks and mitigations
 
-- **Stellar does not win on cost at small amounts.** True today on published fees (crossover about USD 500 to PH; Wise cheaper throughout). Mitigation: the routing rule picks on merit, so the product is credible regardless; Stellar wins on speed and predictability now, and on cost as anchor fees fall. We do not pitch Stellar as always cheaper.
-- **Anchors accept USDC, not PYUSD.** Mitigation: PYUSD to USDC path payment on Stellar before the anchor leg, or hold USDC in treasury for anchor corridors. Liquidity is unproven: our benchmark found no deep PYUSD/USDC pool and could not read order-book depth, so slippage will be measured on testnet and mainnet before any figure is quoted. PeraHub also caps a transfer at 1,000 USDC with a USD 5 fixed fee, which makes small payments poor candidates for this rail.
-- **Anchor access.** PeraHub's SEP-31 requires a sending-anchor agreement; its KYC endpoint rejects unregistered callers. Mitigation: enquiry opened in parallel (human action queue H8); fall back to the SDF reference anchor for testnet; Bitso as second counterparty.
-- **Vietnam has no licensed VND off-ramp.** Mitigation: Vietnam vendors route via PayPal; the demo shows this honestly. Revisit when the Resolution 05/2025 pilot produces a licensed venue.
-- **Regulatory posture.** Checkrail Pay initiates payments on behalf of a business from the business's own funds. Mitigation: the business holds its own PayPal account and controls its own Stellar treasury key (multisig with the business as a signer is planned); Checkrail Pay is a client of a licensed sending anchor and does not act as one; legal review in tranche 2 per corridor.
-- **AI error.** Mitigation: the model has no spending authority; policy is deterministic; the model's output can only add warnings. This is the core design, not an afterthought.
-- **Solo founder.** Mitigation: hire on award (above); two-lane build process already documented.
+- **No testnet transaction yet.** The build environment had no network path to Stellar. Mitigation: the go or no-go box above makes a real testnet release a condition of applying.
+- **Anchors accept USDC, not PYUSD.** Mitigation: fund contracts in USDC where an anchor leg is needed, or path-pay PYUSD to USDC first. Liquidity is unproven: our benchmark found no PYUSD/USDC pool with reserves, so slippage will be measured on testnet first.
+- **Solo founder.** Mitigation: the security review is budgeted as outside work; hire a part-time Soroban engineer from the testnet tranche.
+- **No traction yet.** Mitigation: the founder's own tour company is customer zero, and pilot letters are being sought from operators that share its suppliers.
+- **Regulatory posture.** The business owns the contract and its funds; Checkrail sends instructions and never holds money. A legal opinion is budgeted.
+- **AI error.** The model has no spending authority in the app, and with this contract a compromised app cannot overspend either.
 
-### Go-to-market
+### Team
 
-Accountants first. Small businesses adopt payment tooling their bookkeeper recommends. Checkrail Pay exports reconciled bills, payments and fee lines, which is what the bookkeeper wants, so the accountant becomes the channel.
-
-1. Xero app marketplace listing once OAuth is live, positioned in the bills and payments category for businesses with overseas contractors.
-2. A practice channel: five accounting firms serving travel, agency and field-service clients in the US, Australia and Singapore, each with a handful of clients paying into the Philippines.
-3. Direct: tour operators and DMCs paying suppliers in the Philippines, the only Stellar corridor in scope, starting from the founder's own network. Their Vietnamese suppliers stay on PayPal until Vietnam licenses a crypto off-ramp.
-4. Content: the corridor benchmark published and kept current, because honest numbers are rare and travel well.
-
-Pricing hypothesis: flat monthly fee per business plus a small per-obligation fee, no spread on FX, so the routing rule has no incentive to misroute.
+Daniel Fillion, solo founder. Runs a tour operations business in Northern Vietnam that pays guides, drivers and homestays from chat requests every week. Hands-on builder; the app was built with AI-assisted engineering under a two-lane model (an AI builder lane and a human gate on every money-path change, see CONTRIBUTING.md). Prior exposure to SCF-funded Stellar work through a separate team (Logistech Global) is relevant experience with the ecosystem and its process; that team is not part of this project.
