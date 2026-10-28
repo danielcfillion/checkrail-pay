@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createRunAction } from "@/app/actions";
-import { formatMoney } from "@/lib/format";
+import { formatDate, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
 
 export type Candidate = { id: string; vendorName: string | null; sourceRef: string | null; amountMinor: number; currency: string; dueDate: string | null; state: string; rail: string | null; scheduled: boolean };
@@ -69,11 +69,11 @@ export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[
                     {r.vendorName ?? "Unknown vendor"}
                   </Link>
                 </td>
-                <td className="num hidden text-ink-soft sm:table-cell">{r.sourceRef ?? "none"}</td>
-                <td className={`num hidden md:table-cell ${r.dueDate && r.dueDate < today ? "text-attention" : "text-ink-soft"}`}>{r.dueDate ?? "none"}</td>
+                <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.sourceRef ?? "none"}</td>
+                <td className={`num hidden whitespace-nowrap md:table-cell ${r.dueDate && r.dueDate < today ? "text-attention" : "text-ink-soft"}`}>{r.dueDate ? formatDate(r.dueDate) : "none"}</td>
                 <td className="text-ink-soft">{r.state === "approved" ? (r.scheduled ? "approved, autopilot scheduled" : "approved") : "waiting for approval"}</td>
-                <td className="hidden text-ink-soft sm:table-cell">{r.rail ?? "none"}</td>
-                <td className="r num">{formatMoney(r.amountMinor, r.currency)}</td>
+                <td className="hidden text-ink-soft sm:table-cell">{r.rail ? railLabel(r.rail) : "none"}</td>
+                <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
               </tr>
             ))}
           </tbody>

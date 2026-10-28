@@ -77,7 +77,11 @@ export function middleware(req: NextRequest) {
 
   // Only an owner login may act as someone else: a clerk switching to the owner would be a privilege escalation.
   const personasOn = role === "admin" && personasAllowed(process.env, users.length > 0);
-  const persona = personasOn ? DEMO_PERSONAS.find((p) => p.username === req.cookies.get(PERSONA_COOKIE)?.value) : undefined;
+  // With no persona chosen, an owner login plays the demo's owner (Daniel), so every page and the audit log name the
+  // same person. The real login is still recorded on every row.
+  const chosen = req.cookies.get(PERSONA_COOKIE)?.value ?? DEMO_PERSONAS.find((p) => p.role === "admin")?.username;
+  const found = personasOn ? DEMO_PERSONAS.find((p) => p.username === chosen) : undefined;
+  const persona = found && found.username !== actor ? found : undefined;
   if (persona) {
     headers.set(PERSONA_HEADER, actor);
     actor = persona.username;

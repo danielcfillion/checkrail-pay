@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/books";
-import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString, stateLabel } from "@/lib/format";
 import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileFromPayPal, ReconcileUpload } from "@/components/BooksControls";
@@ -58,11 +58,11 @@ export default async function BooksPage() {
                           {r.vendorName}
                         </Link>
                       </td>
-                      <td className="num text-ink-soft">{r.reference}</td>
-                      <td className="num hidden text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
+                      <td className="num whitespace-nowrap text-ink-soft">{r.reference}</td>
+                      <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
                       <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
-                      <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : r.state.replace(/_/g, " ")}</td>
-                      <td className="r num">{formatMoney(r.amountMinor, r.currency)}</td>
+                      <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : stateLabel(r.state).toLowerCase()}</td>
+                      <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -93,7 +93,7 @@ export default async function BooksPage() {
                   <ul className="mt-1 space-y-0.5">
                     {last.result.statementOnly.map((l) => (
                       <li key={l.transactionId} className="num text-xs">
-                        {l.date} {formatMoney(l.amountMinor, l.currency)} to {l.name || l.toEmail} ({l.transactionId})
+                        {formatDate(l.date)} {formatMoney(l.amountMinor, l.currency)} to {l.name || l.toEmail} ({l.transactionId})
                       </li>
                     ))}
                   </ul>
@@ -108,7 +108,7 @@ export default async function BooksPage() {
                         <Link href={`/obligations/${l.obligationId}`} className="link">
                           {l.vendorName}
                         </Link>{" "}
-                        {formatMoney(l.amountMinor, l.currency)} on {l.date} ({l.type || "returned"}).{" "}
+                        {formatMoney(l.amountMinor, l.currency)} on {formatDate(l.date)} ({l.type || "returned"}).{" "}
                         {l.applied === false ? "Not applied: someone who reconciles (the accountant, an approver or the owner) uploads this statement to mark it." : "Marked refunded; check their details, then pay it again (from the payment page, or the vendor\u2019s page when it was part of a bill)."}
                       </li>
                     ))}
@@ -121,7 +121,7 @@ export default async function BooksPage() {
                   <ul className="mt-1 space-y-0.5">
                     {last.result.returnedUnmatched.map((l) => (
                       <li key={l.transactionId} className="num text-xs">
-                        {l.date} {formatMoney(l.amountMinor, l.currency)} from {l.name || "unknown"} ({l.transactionId}{l.referenceTxnId ? `, reverses ${l.referenceTxnId}` : ""}): {l.why}
+                        {formatDate(l.date)} {formatMoney(l.amountMinor, l.currency)} from {l.name || "unknown"} ({l.transactionId}{l.referenceTxnId ? `, reverses ${l.referenceTxnId}` : ""}): {l.why}
                       </li>
                     ))}
                   </ul>
@@ -196,7 +196,7 @@ export default async function BooksPage() {
           )}
         </Panel>
 
-        <Panel title="Closed periods" aside={biz.lockedThrough ? `closed through ${biz.lockedThrough}` : "all open"}>
+        <Panel title="Closed periods" aside={biz.lockedThrough ? `closed through ${formatDate(biz.lockedThrough)}` : "all open"}>
           <p className="mb-3 text-ink-soft">Once a month is reported, close it. Nothing dated in a closed period can be amended, credited, voided or cancelled after its bill went to the books. Only the owner reopens.</p>
           <PeriodLock current={biz.lockedThrough ?? null} canLock={!viewer || viewer.can("lock_period")} canReopen={!viewer || viewer.actor.role === "admin"} />
         </Panel>

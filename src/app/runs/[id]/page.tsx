@@ -5,7 +5,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { viewRun } from "@/lib/engine/runs";
-import { formatDateTime, formatMoney, railLabel, stateLabel } from "@/lib/format";
+import { formatDate, formatMoney, humaniseActor, railLabel, stateLabel } from "@/lib/format";
 import { PageHeader, Panel, RailTag } from "@/components/ui";
 import { CancelRun, ReleaseRun, RemoveItem } from "@/components/RunActions";
 import { RunRemittances } from "@/components/RunRemittances";
@@ -51,11 +51,11 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         title={run.name}
         lede={
           draft
-            ? `Built by ${run.createdBy.replace(/^user:/, "")} on ${formatDateTime(run.createdAt)}. ${items.length} payment${items.length === 1 ? "" : "s"}${waiting ? `, ${waiting} still waiting for approval` : ""}.`
+            ? `Built by ${humaniseActor(run.createdBy)} on ${formatDate(run.createdAt)}. ${items.length} payment${items.length === 1 ? "" : "s"}${waiting ? `, ${waiting} still waiting for approval` : ""}.`
             : run.status === "released"
-              ? `Released by ${run.releasedBy?.replace(/^user:/, "")} on ${formatDateTime(run.releasedAt)}.`
+              ? `Released by ${humaniseActor(run.releasedBy)} on ${formatDate(run.releasedAt)}.`
               : run.status === "releasing"
-                ? `Release started by ${run.releasedBy?.replace(/^user:/, "")} and did not finish. Items still queued were not paid.`
+                ? `Release started by ${humaniseActor(run.releasedBy)} and did not finish. Items still queued were not paid.`
                 : "Cancelled. Nothing in it was paid."
         }
         actions={
@@ -100,13 +100,13 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                         {i.vendorName ?? "Unknown vendor"}
                       </Link>
                     </td>
-                    <td className="num hidden text-ink-soft sm:table-cell">{i.sourceRef ?? "none"}</td>
+                    <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{i.sourceRef ?? "none"}</td>
                     <td className={draft ? (i.changed || i.approvalNote ? "text-attention" : "text-ink-soft") : ITEM_TONE[i.status]}>
                       {draft ? (i.changed ? "amount changed since added; will be skipped" : i.approvalNote ? i.approvalNote : stateLabel(i.state ?? "")) : ITEM_LABEL[i.status] ?? i.status}
                       {!draft && i.message ? <span className="block text-xs text-ink-soft">{i.message}</span> : null}
                     </td>
                     <td className="hidden sm:table-cell">{i.rail ? <RailTag rail={i.rail} /> : <span className="text-ink-soft">none</span>}</td>
-                    <td className="r num">{formatMoney(i.amountMinor, i.currency)}</td>
+                    <td className="r num whitespace-nowrap">{formatMoney(i.amountMinor, i.currency)}</td>
                     {draft && canBuild ? (
                       <td className="r">
                         <RemoveItem runId={run.id} itemId={i.id} />

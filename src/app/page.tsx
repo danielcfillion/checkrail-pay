@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getViewer } from "@/lib/viewer";
-import { getOverview, listObligations, listPaymentPoints } from "@/lib/queries";
-import { formatMoneySymbol, humaniseAction, humaniseActor, pluralise } from "@/lib/format";
+import { findObligationsBySourceRef, getOverview, listAudit, listObligations, listPaymentPoints } from "@/lib/queries";
+import { formatMoneySymbol, pluralise } from "@/lib/format";
+import { activityFeed } from "@/lib/activity";
+import { DemoBanner } from "@/components/DemoBanner";
 import { BookLine } from "@/components/BookLine";
 import { NeedsYouList } from "@/components/ObligationList";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
@@ -20,6 +22,11 @@ export default async function OverviewPage() {
   const all = listObligations({ limit: 1000 });
   const base = o.business?.baseCurrency ?? "USD";
   const points = listPaymentPoints(120);
+  const canReset = !viewer || viewer.can("reset_demo");
+  const demo = Boolean(viewer?.personas);
+  // The opening request of the demo story, for the banner's first button.
+  const phuong = demo ? findObligationsBySourceRef(["INV-2026-0152"]).find((r) => r.vendorId === "ven_phuong") : undefined;
+  const activity = activityFeed(listAudit(400), 10);
 
   return (
     <>
@@ -27,14 +34,17 @@ export default async function OverviewPage() {
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Checkrail Pay"}</h1>
-          <p className="mt-1 text-ink-soft">
-            {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "obligation")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+          <p className="mt-0.5 text-ink-soft">Checks every supplier payment before money moves.</p>
+          <p className="mt-2">
+            {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "request")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
             {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}
             {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
           </p>
         </div>
-        {!viewer || viewer.can("reset_demo") ? <ResetDemoButton /> : null}
+        {!demo && canReset ? <ResetDemoButton /> : null}
       </header>
+
+      {demo ? <DemoBanner startHref={phuong ? `/obligations/${phuong.id}` : "/demo"} canReset={canReset} /> : null}
 
       {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} can={viewer ? { stop: viewer.can("stop"), settings: viewer.can("settings") } : undefined} /> : null}
 
@@ -43,7 +53,7 @@ export default async function OverviewPage() {
       <dl className="mt-6 grid grid-cols-2 gap-y-4 border-y hairline py-4 sm:grid-cols-4 sm:divide-x sm:divide-[color:var(--rule)]">
         <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
         <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
-        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open obligation")}, ${o.counts.blocked} blocked held back`} />
+        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open request")}, ${o.counts.blocked} blocked held back`} />
         <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpaid parts and duplicates, since day one</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
       </dl>
 
@@ -58,27 +68,23 @@ export default async function OverviewPage() {
 
         <div className="space-y-6">
           <Panel title="Live activity" aside={<Link href="/audit" className="link">Full audit log</Link>} padded={false}>
-            {o.recent.length ? (
+            {activity.length ? (
               <ul className="divide-y hairline">
-                {o.recent.map((a) => (
-                  <li key={a.id} className="flex items-baseline justify-between gap-3 px-4 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate">
-                        <span className="text-ink-soft">{humaniseActor(a.actor)}</span> <span>{humaniseAction(a.action).toLowerCase()}</span>
-                      </p>
-                      {a.obligationId ? (
-                        <Link href={`/obligations/${a.obligationId}`} className="num text-xs text-ink-soft hover:text-ink">
-                          {a.vendorName ?? "Unknown vendor"}
-                          {a.sourceRef ? `, ${a.sourceRef}` : ""}
-                        </Link>
-                      ) : null}
-                    </div>
-                    <RelativeTime iso={a.createdAt} className="shrink-0 text-xs text-ink-soft" />
+                {activity.map((a) => (
+                  <li key={a.id} className="flex items-baseline gap-3 px-4 py-2.5">
+                    <span aria-hidden className="mt-1.5 inline-block h-2 w-2 shrink-0 self-start rounded-full" style={{ background: a.tone === "blocked" ? "var(--blocked)" : a.tone === "attention" ? "var(--attention)" : a.tone === "settled" ? "var(--settled)" : "var(--ink-soft)" }} />
+                    <p className="min-w-0 flex-1">
+                      <Link href={`/obligations/${a.obligationId}`} className="font-medium hover:underline">
+                        {a.vendorName ?? "Unknown vendor"}
+                      </Link>
+                      {a.sourceRef ? <span className="num whitespace-nowrap text-ink-soft"> {a.sourceRef}</span> : null} <span className={a.tone === "blocked" ? "text-blocked" : a.tone === "attention" ? "text-attention" : ""}>{a.text}</span>
+                    </p>
+                    <RelativeTime iso={a.at} className="shrink-0 text-xs text-ink-soft" />
                   </li>
                 ))}
               </ul>
             ) : (
-              <div className="px-4 py-6 text-center text-ink-soft">No activity yet.</div>
+              <div className="px-4 py-6 text-center text-ink-soft">Nothing has happened yet. Blocks, approvals and payments appear here.</div>
             )}
           </Panel>
         </div>

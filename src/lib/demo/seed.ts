@@ -189,6 +189,9 @@ function seedRatesAndDepartures(db: Db): void {
   rate("ven_maria", "day", 4_500, "USD", "Lead guide day rate 2026");
   rate("ven_linh", "guest_night", 1_800, "USD", "Homestay, dinner and breakfast included");
   rate("ven_linh", "guest_night", 45_000_000, "VND", "Homestay, dinner and breakfast included (VND)");
+  // Rosa's day rate and the Cebu departure she guided: the business's own records, so the trip completion sheet a
+  // presenter uploads from /demo (USD 190 for CEB-2D-1024) is confirmed by the rate card and Autopilot may send it.
+  rate("ven_rosa", "day", 9_500, "USD", "Day-trip guide rate 2026, Cebu and Bohol");
   const dep = (code: string, start: string, end: string, guests: number, services: Array<[string, string, number]>) => {
     const id = newId("dep");
     db.insert(departures).values({ id, businessId: DEMO_BUSINESS_ID, code, startDate: start, endDate: end, guests, source: "csv", createdBy: "user:lan", createdAt: ts }).run();
@@ -196,6 +199,7 @@ function seedRatesAndDepartures(db: Db): void {
   };
   dep("HG-4D-0927", "2026-09-27", "2026-09-30", 9, [["ven_phuong", "vehicle_day", 4]]);
   dep("HG-4D-1004", "2026-10-04", "2026-10-07", 12, [["ven_linh", "guest_night", 24]]);
+  dep("CEB-2D-1024", "2026-10-24", "2026-10-25", 6, [["ven_rosa", "day", 2]]);
 }
 
 /** A deposit: the lodge wants half now and half on arrival. The agent asks for USD 425, not 850, and files the invoice as a bill. */

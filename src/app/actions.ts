@@ -321,7 +321,7 @@ export async function resetDemoAction(): Promise<ActionResult> {
     await act("reset_demo", "reset the demo");
     await seedDemo(getDb(), { history: true });
     done();
-    return { ok: true, message: "Demo reset. Four obligations are waiting: two will be blocked, one pays over PayPal, one needs approval." };
+    return { ok: true, message: "Demo reset. Four requests are waiting: two are blocked, one is ready to pay over PayPal, one needs approval." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

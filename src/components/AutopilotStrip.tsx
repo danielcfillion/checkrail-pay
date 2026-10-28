@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { autopilotStatus } from "@/lib/engine/autopilot";
-import { formatMoney, formatMoneySymbol } from "@/lib/format";
+import { formatMoney, formatMoneyShort } from "@/lib/format";
 import { ScheduledReleases } from "./ScheduledReleases";
 import { PauseButton } from "./PauseButton";
 
@@ -14,10 +14,11 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
     ap.level === "autopilot"
       ? ap.paused
         ? "Nothing is sent without a person until you resume."
-        : `The agent sends clean payments up to ${formatMoneySymbol(ap.perPaymentCapMinor, currency)} each. ${formatMoneySymbol(ap.committed24hMinor, currency)} of ${formatMoneySymbol(ap.dailyCapMinor, currency)} used in the last 24 hours.`
+        : // The daily cap counts every payment sent or scheduled in the last 24 hours, people's as well as the agent's (policy, autopilot daily cap).
+          `The agent sends clean payments up to ${formatMoneyShort(ap.perPaymentCapMinor, currency)} each. ${formatMoneyShort(ap.committed24hMinor, currency)} of ${formatMoneyShort(ap.dailyCapMinor, currency)} daily cap used (all payments, last 24 hours).`
       : ap.level === "review"
         ? "A person approves and sends every payment."
-        : "Clean small payments are approved for you. A person sends them.";
+        : "Clean small requests are approved for you. A person sends them.";
   return (
     <section className="panel mb-6" aria-label="Autonomy">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">

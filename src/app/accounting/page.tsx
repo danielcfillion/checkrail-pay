@@ -19,6 +19,10 @@ export default function AccountingPage() {
   const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
   const pending = rows.filter((r) => r.status === "pending");
   const system = getSystemModes();
+  // One currency across every record: say it once in the column headers, not in every cell.
+  const currencies = [...new Set(rows.map((r) => r.payload.grossCurrency ?? "USD"))];
+  const single = currencies.length === 1 ? currencies[0] : null;
+  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? String(v) : `${cur} ${v}`);
   // Bills changed here after they went to Xero: the accountant makes the same change there.
   const changed = getDb()
     .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
@@ -56,7 +60,7 @@ export default function AccountingPage() {
                   <Link href={`/obligations/${c.obligationId}`} className="link">
                     {c.ref ?? c.obligationId}
                   </Link>{" "}
-                  on {formatDateTime(c.at)}: invoice date {d.invoiceDate ?? "none"}, due {d.dueDate ?? "none"}
+                  on {formatDateTime(c.at)}: invoice date {d.invoiceDate ? formatDate(d.invoiceDate) : "none"}, due {d.dueDate ? formatDate(d.dueDate) : "none"}
                 </li>
               );
             })}
@@ -79,14 +83,14 @@ export default function AccountingPage() {
                 <th scope="col" className="hidden sm:table-cell">
                   Rail
                 </th>
-                <th scope="col" className="r">
-                  Gross
+                <th scope="col" className="r whitespace-nowrap">
+                  Gross{single ? ` (${single})` : ""}
                 </th>
-                <th scope="col" className="r hidden md:table-cell">
-                  Fee
+                <th scope="col" className="r hidden whitespace-nowrap md:table-cell">
+                  Fee{single ? ` (${single})` : ""}
                 </th>
-                <th scope="col" className="r">
-                  Net
+                <th scope="col" className="r whitespace-nowrap">
+                  Net{single ? ` (${single})` : ""}
                 </th>
                 <th scope="col" className="hidden lg:table-cell">
                   Account code
@@ -106,9 +110,9 @@ export default function AccountingPage() {
                 return (
                   <tr key={r.id}>
                     <td>
-                      <span className={`dense ${r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled"}`}>{r.status}</span>
+                      <span className={`dense whitespace-nowrap ${r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled"}`}>{r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status}</span>
                     </td>
-                    <td className="num">
+                    <td className="num whitespace-nowrap">
                       <Link href={`/obligations/${r.obligationId}`} className="hover:underline">
                         {p.reference ?? r.obligation.sourceRef ?? "none"}
                       </Link>
@@ -117,21 +121,18 @@ export default function AccountingPage() {
                     <td className="hidden sm:table-cell">
                       <RailTag rail={p.rail} />
                     </td>
-                    <td className="r num">
-                      {cur} {p.grossAmount ?? ""}
+                    <td className="r num whitespace-nowrap">{amount(p.grossAmount, cur)}</td>
+                    <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
+                    <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
+                    <td className="hidden text-ink-soft lg:table-cell">
+                      <span className="block max-w-[12rem] truncate" title={p.accountCode ?? undefined}>
+                        {p.accountCode ?? ""}
+                      </span>
                     </td>
-                    <td className="r num hidden text-ink-soft md:table-cell">
-                      {cur} {p.feeAmount ?? ""}
+                    <td className="hidden whitespace-nowrap text-ink-soft md:table-cell" title={r.externalRef ?? undefined}>
+                      {destinationLabel(r.destination, r.externalRef)}
                     </td>
-                    <td className="r num">
-                      {cur} {p.netPaid ?? ""}
-                    </td>
-                    <td className="hidden text-ink-soft lg:table-cell">{p.accountCode ?? ""}</td>
-                    <td className="hidden text-ink-soft md:table-cell">
-                      {r.destination}
-                      {r.externalRef ? <span className="num text-xs"> ({r.externalRef})</span> : null}
-                    </td>
-                    <td className="num hidden text-ink-soft xl:table-cell" title={formatDateTime(r.createdAt)}>
+                    <td className="num hidden whitespace-nowrap text-ink-soft xl:table-cell" title={formatDateTime(r.createdAt)}>
                       {formatDate(r.createdAt)}
                     </td>
                   </tr>
@@ -143,4 +144,16 @@ export default function AccountingPage() {
       )}
     </>
   );
+}
+
+/** "CSV, 21 Oct" for an exported CSV record, "Xero" with its id in the title, "CSV, not yet" while it waits. */
+function destinationLabel(destination: string, externalRef: string | null): string {
+  const name = destination === "xero" ? "Xero" : destination === "csv" ? "CSV" : destination;
+  const m = externalRef?.match(/^csv:(\d{4}-\d{2}-\d{2})$/);
+  if (m) {
+    const d = new Date(`${m[1]}T00:00:00Z`);
+    return `${name}, ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`;
+  }
+  if (!externalRef) return `${name}, not yet`;
+  return name;
 }
