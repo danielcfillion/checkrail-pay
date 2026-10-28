@@ -129,7 +129,7 @@ const RETURN_TYPE = /reversal|returned|unclaimed|refund/i;
  * Match outgoing payout lines to PayPal settlements: same recipient email, same amount and currency, within three
  * days, each line and each settlement used once. A matched settlement is marked reconciled with the line's id.
  */
-export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: StatementLine[], fileName?: string): { id: string; result: ReconResult } {
+export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: StatementLine[], fileName?: string, source: "paypal_csv" | "paypal_api" = "paypal_csv"): { id: string; result: ReconResult } {
   if (!actorCan(by, "reconcile")) requirePermission(by, "pay", "reconcile statements");
   const out = lines.filter((l) => l.grossMinor < 0 && PAYOUT_TYPE.test(l.type) && !/denied|reversed|refunded/i.test(l.status));
   const dates = lines.map((l) => l.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
@@ -207,8 +207,8 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     if (o.billId) reopenBill(db, o.billId);
   }
   const id = newId("rec");
-  db.insert(reconciliations).values({ id, businessId, source: "paypal_csv", fileName: fileName?.slice(0, 120) ?? null, periodFrom, periodTo, summaryJson: JSON.stringify(result), createdBy: by.id, createdAt: ts }).run();
-  audit(db, { obligationId: null, actor: by.id, action: "books.reconciled", detail: { reconciliationId: id, matched: result.matched.length, statementOnly: result.statementOnly.length, appOnly: result.appOnly.length, returned: result.returned!.length, feeDiffs: result.feeDiffs!.length } });
+  db.insert(reconciliations).values({ id, businessId, source, fileName: fileName?.slice(0, 120) ?? null, periodFrom, periodTo, summaryJson: JSON.stringify(result), createdBy: by.id, createdAt: ts }).run();
+  audit(db, { obligationId: null, actor: by.id, action: "books.reconciled", detail: { reconciliationId: id, source, matched: result.matched.length, statementOnly: result.statementOnly.length, appOnly: result.appOnly.length, returned: result.returned!.length, feeDiffs: result.feeDiffs!.length } });
   return { id, result };
 }
 

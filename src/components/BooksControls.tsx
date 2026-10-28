@@ -2,15 +2,15 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { reconcilePayPalAction, setPeriodLockAction } from "@/app/actions";
+import { reconcilePayPalAction, reconcilePayPalLiveAction, setPeriodLockAction } from "@/app/actions";
 import { useToast } from "./Toast";
 
-export function ReconcileUpload() {
+export function ReconcileUpload({ primary = true }: { primary?: boolean }) {
   const [pending, start] = useTransition();
   const router = useRouter();
   const { toast } = useToast();
   return (
-    <label className="btn btn-primary inline-flex cursor-pointer">
+    <label className={`btn inline-flex cursor-pointer ${primary ? "btn-primary" : ""}`}>
       {pending ? "Reconciling" : "Upload PayPal activity CSV"}
       <input
         type="file"
@@ -30,6 +30,45 @@ export function ReconcileUpload() {
         }}
       />
     </label>
+  );
+}
+
+/** Read the statement straight from PayPal Transaction Search. Live rails only; the button explains itself otherwise. */
+export function ReconcileFromPayPal({ live, defaultFrom, defaultTo }: { live: boolean; defaultFrom: string; defaultTo: string }) {
+  const [from, setFrom] = useState(defaultFrom);
+  const [to, setTo] = useState(defaultTo);
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  const { toast } = useToast();
+  return (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        start(async () => {
+          const r = await reconcilePayPalLiveAction(from, to);
+          toast(r.message, r.ok ? "ok" : "error");
+          router.refresh();
+        });
+      }}
+    >
+      <div>
+        <label className="lbl" htmlFor="recon-from">
+          From
+        </label>
+        <input id="recon-from" type="date" className="field" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!live} />
+      </div>
+      <div>
+        <label className="lbl" htmlFor="recon-to">
+          To
+        </label>
+        <input id="recon-to" type="date" className="field" value={to} onChange={(e) => setTo(e.target.value)} disabled={!live} />
+      </div>
+      <button type="submit" className="btn btn-primary" disabled={!live || pending || !from || !to}>
+        {pending ? "Reading PayPal" : "Read from PayPal"}
+      </button>
+      {!live ? <p className="w-full text-xs text-ink-soft">Needs live PayPal keys. On simulated rails, upload the activity CSV below.</p> : null}
+    </form>
   );
 }
 

@@ -6,7 +6,8 @@ import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/boo
 import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
 import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
-import { PeriodLock, ReconcileUpload } from "@/components/BooksControls";
+import { PeriodLock, ReconcileFromPayPal, ReconcileUpload } from "@/components/BooksControls";
+import { isLiveRails } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Books" };
@@ -58,7 +59,7 @@ export default async function BooksPage() {
                         </Link>
                       </td>
                       <td className="num text-ink-soft">{r.reference}</td>
-                      <td className="num hidden text-ink-soft sm:table-cell">{r.dueDate}</td>
+                      <td className="num hidden text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
                       <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
                       <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : r.state.replace(/_/g, " ")}</td>
                       <td className="r num">{formatMoney(r.amountMinor, r.currency)}</td>
@@ -73,8 +74,13 @@ export default async function BooksPage() {
         </Panel>
 
         <Panel title="PayPal statement" aside={last ? `last ${formatDateTime(last.createdAt)}` : "not reconciled yet"}>
-          <p className="mb-3 text-ink-soft">Download the activity CSV from PayPal (Activity, Statements, Activity download) and upload it here. Each payout line is matched to a payment by recipient, amount and date.</p>
-          {canRecon ? <ReconcileUpload /> : null}
+          <p className="mb-3 text-ink-soft">Read the statement straight from PayPal, or upload the activity CSV (Activity, Statements, Activity download). Each payout is matched to a payment by recipient, amount and date; money that came back is tied to its payout by the transaction it reverses.</p>
+          {canRecon ? (
+            <div className="space-y-3">
+              <ReconcileFromPayPal live={isLiveRails()} defaultFrom={localDateString(new Date(Date.now() - 30 * 86_400_000))} defaultTo={localDateString()} />
+              <ReconcileUpload primary={!isLiveRails()} />
+            </div>
+          ) : null}
           {last ? (
             <div className="mt-4 space-y-3 border-t pt-3 text-sm hairline">
               <p>

@@ -12,7 +12,8 @@ import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUs
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
 import { resolveActor, requirePermission, updateTeamMember, type Actor, type TeamChange } from "@/lib/engine/users";
-import { isLiveRails } from "@/lib/config";
+import { config, isLiveRails } from "@/lib/config";
+import { fetchPayPalStatement, livePayPalGetJson } from "@/lib/rails/paypalStatement";
 import { runAs } from "@/lib/engine/requestContext";
 import { exportPendingCsv } from "@/lib/accounting/record";
 import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
@@ -782,6 +783,28 @@ export async function reconcilePayPalAction(fileName: string, csv: string): Prom
     const { id, result } = reconcilePayPal(db, biz.id, await currentActor(), parsePayPalCsv(csv), typeof fileName === "string" ? fileName : undefined);
     done(["/books", "/ledger"]);
     return { ok: true, message: `${result.matched.length} matched, ${result.statementOnly.length} on the statement only, ${result.appOnly.length} recorded here but not on the statement.`, id };
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+  });
+}
+
+/** Pull the statement straight from PayPal Transaction Search (live rails only) and reconcile it. */
+export async function reconcilePayPalLiveAction(from: string, to: string): Promise<ActionResult & { id?: string }> {
+  return inRequest(async () => {
+  try {
+    if (!isLiveRails()) return { ok: false, message: "Reading the statement from PayPal needs live rails (RAIL_MODE=live with PayPal keys). Here, upload the activity CSV instead." };
+    const { clientId, clientSecret, env } = config.rails.paypal;
+    if (!clientId || !clientSecret) return { ok: false, message: "PayPal keys are not set." };
+    const db = getDb();
+    const biz = await db.query.businesses.findFirst();
+    if (!biz) return { ok: false, message: "No business configured." };
+    const actor = await currentActor();
+    const lines = await fetchPayPalStatement(await livePayPalGetJson(clientId, clientSecret, env), String(from), String(to));
+    const { id, result } = reconcilePayPal(db, biz.id, actor, lines, `PayPal Transaction Search ${from} to ${to}`, "paypal_api");
+    done(["/books", "/ledger"]);
+    const back = result.returned?.length ? `, ${result.returned.length} came back` : "";
+    return { ok: true, message: `Read ${lines.length} PayPal transactions: ${result.matched.length} matched${back}, ${result.statementOnly.length} on PayPal only, ${result.appOnly.length} recorded here but not on PayPal.`, id };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
