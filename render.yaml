@@ -1,0 +1,62 @@
+# Render Blueprint for the hosted judging demo (rules: judges must be able to test until Dec 15, 2026).
+# Create it from the Render dashboard: New, Blueprint, pick the GitHub repo. Secrets marked sync: false
+# are typed into the Render dashboard, never committed.
+services:
+  - type: web
+    name: checkrail-pay
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci && npm run build
+    # The free plan has no persistent disk: every restart reseeds the demo story, which is what a judge wants.
+    startCommand: npm run db:seed && npm run start -- -p $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_PATH
+        value: ./data/checkrail-pay.sqlite
+      # One shared demo database. Basic auth keeps the open internet out (put the credential in the Devpost
+      # testing instructions). It does not separate judges from each other: that is what the idle reset is for.
+      # Logins with roles, e.g. judge:<pw>:admin. With personas on, one login can act as each of the demo team.
+      - key: CHECKRAIL_USERS
+        sync: false
+      - key: CHECKRAIL_DEMO_PERSONAS
+        value: "1"
+      - key: NEXT_PUBLIC_CHECKRAIL_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      # Encrypts the demo vendors' full bank account numbers. Render generates a random value once.
+      - key: CHECKRAIL_DATA_KEY
+        generateValue: true
+      # A Vietnamese source account so the judge can see a VND bank file being built (demo account, mock rails).
+      - key: BANK_FILE_SOURCE_ACCOUNT
+        value: VCB 0071000000000 Ridgeline Vietnam (demo)
+      # After 30 minutes with no one clicking, the heartbeat restores the four opening requests, so a judge who
+      # arrives later starts clean. Two judges in the same half hour still share state; Reset demo puts it back.
+      - key: DEMO_AUTO_RESET_MINUTES
+        value: "30"
+      # mock = runs with zero credentials; live = real PayPal sandbox (set the keys below).
+      - key: RAIL_MODE
+        value: mock
+      - key: STELLAR_RAIL
+        value: mock
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: DEMO_PAYPAL_RECIPIENT
+        sync: false
+      - key: DEMO_PAYPAL_RECIPIENT_ROSA
+        sync: false
+      # mock = rule-based reader; live = Claude (set the key below; cap spend in the Anthropic console).
+      - key: AI_MODE
+        value: mock
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5-5
+      # Autopilot heartbeat runs inside the single web process.
+      - key: AUTOPILOT_HEARTBEAT_SECONDS
+        value: "15"

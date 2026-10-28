@@ -1,0 +1,23 @@
+import { describe, expect, it } from "vitest";
+import { toXeroBill, toXeroFeeTransaction, toXeroPayment } from "./xero";
+import type { AccountingPayload } from "./record";
+
+const payload = (over: Partial<AccountingPayload>): AccountingPayload => ({
+  reference: "JOB-1", vendorName: "V", vendorCountry: "PH", description: "d", billDate: "2026-10-01", paymentDate: "2026-10-02",
+  grossAmount: "180.00", grossCurrency: "USD", feeAmount: "3.60", feeCurrency: "USD", netPaid: "183.60", recipientReceived: null, recipientCurrency: null,
+  fxRate: null, rail: "paypal", externalTransactionId: "X", explorerUrl: null, accountCode: "310 x", obligationId: "o", ...over,
+});
+
+describe("Xero mapping reconciles to the cent", () => {
+  it("PayPal: bill + payment of the gross, plus a separate fee spend; cash out equals netPaid", () => {
+    const r = payload({});
+    const out = Number(toXeroPayment(r, "090").Amount) + Number(toXeroFeeTransaction(r, "090")!.LineItems[0].UnitAmount);
+    expect(out).toBeCloseTo(Number(r.netPaid), 2);
+    expect(toXeroBill(r).LineItems[0].UnitAmount).toBe(180);
+  });
+  it("Stellar: the fee is inside the amount sent, so no second spend is booked; cash out equals the gross", () => {
+    const r = payload({ rail: "stellar", grossAmount: "750.00", feeAmount: "13.25", netPaid: "750.00" });
+    expect(toXeroFeeTransaction(r, "091")).toBeNull();
+    expect(Number(toXeroPayment(r, "091").Amount)).toBeCloseTo(Number(r.netPaid), 2);
+  });
+});

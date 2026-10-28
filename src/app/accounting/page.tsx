@@ -1,0 +1,145 @@
+import Link from "next/link";
+import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
+import { formatDate, formatDateTime, pluralise } from "@/lib/format";
+import { EmptyState, PageHeader, RailTag } from "@/components/ui";
+import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { ExportXeroBills } from "@/components/ExportXeroBills";
+import { xeroBillRows } from "@/lib/accounting/xeroBills";
+import { getDb } from "@/lib/db";
+import { getBusiness } from "@/lib/queries";
+import { auditEntries, obligations } from "@/lib/db/schema";
+import { desc, eq } from "drizzle-orm";
+
+export const dynamic = "force-dynamic";
+
+export default function AccountingPage() {
+  const rows = listAccountingSyncs();
+  const biz = getBusiness();
+  const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
+  const pending = rows.filter((r) => r.status === "pending");
+  const system = getSystemModes();
+  // Bills changed here after they went to Xero: the accountant makes the same change there.
+  const changed = getDb()
+    .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
+    .from(auditEntries)
+    .innerJoin(obligations, eq(obligations.id, auditEntries.obligationId))
+    .where(eq(auditEntries.action, "accounting.changed_after_export"))
+    .orderBy(desc(auditEntries.seq))
+    .limit(20)
+    .all();
+
+  return (
+    <>
+      <PageHeader
+        title="Accounting"
+        lede={
+          <>
+            One record per settled payment: gross, fee, net and the account code. {pending.length ? `${pluralise(pending.length, "record")} waiting to be exported.` : "Everything exported."} Destination today is {system.accounting === "xero" ? "Xero" : "CSV"}.
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <ExportXeroBills count={newBills} />
+            <ExportCsvButton pendingCount={pending.length} />
+          </div>
+        }
+      />
+      {changed.length ? (
+        <div className="panel mb-5 border-attention px-4 py-3 text-sm">
+          <p className="font-medium text-attention">Changed here after it went to Xero: make the same change in Xero.</p>
+          <ul className="mt-1 space-y-0.5">
+            {changed.map((c) => {
+              const d = JSON.parse(c.detail ?? "{}") as { invoiceDate?: string | null; dueDate?: string | null };
+              return (
+                <li key={`${c.obligationId}-${c.at}`} className="num text-xs">
+                  <Link href={`/obligations/${c.obligationId}`} className="link">
+                    {c.ref ?? c.obligationId}
+                  </Link>{" "}
+                  on {formatDateTime(c.at)}: invoice date {d.invoiceDate ?? "none"}, due {d.dueDate ?? "none"}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+      <p className="mb-3 max-w-3xl text-ink-soft">Bills go to Xero when they are approved, not when they are paid, so aged payables are right while payments wait: the bills file follows Xero&apos;s import template with the account code, tax type and a Departure tracking category. A deposit and its balance are one bill. Payments then match from the bank feed or the settlement records below.</p>
+      <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>
+
+      {rows.length === 0 ? (
+        <EmptyState title="No accounting records yet" body="A record is queued the moment a payment settles." action={<Link href="/ledger" className="btn">Open ledger</Link>} />
+      ) : (
+        <div className="panel overflow-x-auto">
+          <table className="ledger">
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                <th scope="col">Reference</th>
+                <th scope="col">Vendor</th>
+                <th scope="col" className="hidden sm:table-cell">
+                  Rail
+                </th>
+                <th scope="col" className="r">
+                  Gross
+                </th>
+                <th scope="col" className="r hidden md:table-cell">
+                  Fee
+                </th>
+                <th scope="col" className="r">
+                  Net
+                </th>
+                <th scope="col" className="hidden lg:table-cell">
+                  Account code
+                </th>
+                <th scope="col" className="hidden md:table-cell">
+                  Destination
+                </th>
+                <th scope="col" className="hidden xl:table-cell">
+                  Queued
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const p = r.payload;
+                const cur = p.grossCurrency ?? "USD";
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <span className={`dense ${r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled"}`}>{r.status}</span>
+                    </td>
+                    <td className="num">
+                      <Link href={`/obligations/${r.obligationId}`} className="hover:underline">
+                        {p.reference ?? r.obligation.sourceRef ?? "none"}
+                      </Link>
+                    </td>
+                    <td className="font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
+                    <td className="hidden sm:table-cell">
+                      <RailTag rail={p.rail} />
+                    </td>
+                    <td className="r num">
+                      {cur} {p.grossAmount ?? ""}
+                    </td>
+                    <td className="r num hidden text-ink-soft md:table-cell">
+                      {cur} {p.feeAmount ?? ""}
+                    </td>
+                    <td className="r num">
+                      {cur} {p.netPaid ?? ""}
+                    </td>
+                    <td className="hidden text-ink-soft lg:table-cell">{p.accountCode ?? ""}</td>
+                    <td className="hidden text-ink-soft md:table-cell">
+                      {r.destination}
+                      {r.externalRef ? <span className="num text-xs"> ({r.externalRef})</span> : null}
+                    </td>
+                    <td className="num hidden text-ink-soft xl:table-cell" title={formatDateTime(r.createdAt)}>
+                      {formatDate(r.createdAt)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
