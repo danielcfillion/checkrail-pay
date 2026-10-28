@@ -10,25 +10,65 @@ export function Money({ minor, currency, symbol = false, className = "" }: { min
   return <span className={`num ${className}`}>{symbol ? formatMoneySymbol(minor, currency) : formatMoney(minor, currency)}</span>;
 }
 
-const STATE_TONE: Record<string, string> = {
-  drafted: "text-ink-soft",
-  needs_evidence: "text-attention",
-  verified: "text-ink",
-  awaiting_approval: "text-attention",
-  approved: "text-ink",
-  blocked: "text-blocked",
-  execution_pending: "text-ink",
-  sent: "text-ink",
-  settled: "text-settled",
-  failed: "text-blocked",
-  refunded: "text-ink-soft",
-  disputed: "text-attention",
-  cancelled: "text-ink-soft",
+type Tone = "neutral" | "muted" | "attention" | "blocked" | "settled";
+
+const STATE_TONE: Record<string, Tone> = {
+  drafted: "muted",
+  needs_evidence: "attention",
+  verified: "neutral",
+  awaiting_approval: "attention",
+  approved: "neutral",
+  blocked: "blocked",
+  execution_pending: "neutral",
+  sent: "neutral",
+  settled: "settled",
+  failed: "blocked",
+  refunded: "muted",
+  disputed: "attention",
+  cancelled: "muted",
+};
+
+const TONE_CLASS: Record<Tone, string> = {
+  neutral: "bg-neutral-soft text-ink",
+  muted: "bg-neutral-soft text-ink-soft",
+  attention: "bg-attention-soft text-attention",
+  blocked: "bg-blocked-soft text-blocked",
+  settled: "bg-settled-soft text-settled",
+};
+
+/* 12px glyphs drawn in currentColor so the pill keeps one colour per state in both themes. */
+const STATE_ICON: Record<string, string> = {
+  blocked: "M4 4l4 4M8 4l-4 4",
+  failed: "M4 4l4 4M8 4l-4 4",
+  settled: "M3.25 6.25l1.9 1.9L8.9 4.2",
+  sent: "M2.5 6h6M6.5 3.5 9 6l-2.5 2.5",
+  execution_pending: "M2.5 6h6M6.5 3.5 9 6l-2.5 2.5",
+  approved: "M3.25 6.25l1.9 1.9L8.9 4.2",
+  verified: "M3.25 6.25l1.9 1.9L8.9 4.2",
+  awaiting_approval: "M6 3.5V6l1.6 1.2",
+  needs_evidence: "M6 3.5V6l1.6 1.2",
+  disputed: "M6 3.4v3.2M6 8.4v.1",
+  refunded: "M9 6H3.5M5.5 3.5 3 6l2.5 2.5",
+  cancelled: "M3.5 6h5",
+  drafted: "M3.5 6h5",
 };
 
 export function StatePill({ state, className = "" }: { state: string | null | undefined; className?: string }) {
-  const tone = STATE_TONE[state ?? ""] ?? "text-ink";
-  return <span className={`dense inline-flex items-center whitespace-nowrap ${tone} ${className}`}>{stateLabel(state)}</span>;
+  const key = state ?? "";
+  const tone = STATE_TONE[key] ?? "neutral";
+  const icon = STATE_ICON[key];
+  const ring = tone === "attention" || key === "awaiting_approval" || key === "needs_evidence";
+  return (
+    <span className={`inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 text-xs font-medium leading-4 ${TONE_CLASS[tone]} ${className}`}>
+      {icon ? (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false" className="shrink-0">
+          {ring ? <circle cx="6" cy="6" r="4.4" strokeWidth="1.3" /> : null}
+          <path d={icon} />
+        </svg>
+      ) : null}
+      {stateLabel(state)}
+    </span>
+  );
 }
 
 export function StationLabel({ station, active = false }: { station: Station; active?: boolean }) {
@@ -37,8 +77,9 @@ export function StationLabel({ station, active = false }: { station: Station; ac
 
 export function RailTag({ rail, className = "" }: { rail: string | null | undefined; className?: string }) {
   if (!rail) return <span className={`dense text-ink-soft ${className}`}>no rail</span>;
-  const tone = rail === "paypal" ? "text-paypal bg-paypal-soft" : rail === "stellar" ? "text-stellar bg-stellar-soft" : rail === "wise" ? "text-wise bg-wise-soft" : rail === "bank_file" ? "text-ink bg-paper" : "text-ink-soft";
-  return <span className={`dense inline-flex h-5 items-center rounded-sm px-1.5 ${tone} ${className}`}>{railLabel(rail)}</span>;
+  // Text uses the -text tokens (4.5:1 on the tint); the brand fills stay for swatches and borders.
+  const tone = rail === "paypal" ? "text-paypal-text bg-paypal-soft" : rail === "stellar" ? "text-stellar-text bg-stellar-soft" : rail === "wise" ? "text-wise bg-wise-soft" : rail === "bank_file" ? "text-ink bg-rail-bank-soft" : "text-ink-soft";
+  return <span className={`dense inline-flex h-5 items-center whitespace-nowrap rounded-sm px-1.5 ${tone} ${className}`}>{railLabel(rail)}</span>;
 }
 
 export function RelativeTime({ iso, className = "" }: { iso: string | null | undefined; className?: string }) {

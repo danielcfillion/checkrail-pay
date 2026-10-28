@@ -1,0 +1,1 @@
+Checkrail Pay: a payment line broken at Verified because the request asked USD 960 and the trip sheet says USD 800

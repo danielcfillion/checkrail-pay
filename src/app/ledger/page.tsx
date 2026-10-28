@@ -6,6 +6,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { EmptyState, Money, PageHeader, RailTag } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Ledger" };
 
 export default function LedgerPage() {
   const rows = listSettlements();

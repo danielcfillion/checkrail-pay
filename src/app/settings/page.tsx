@@ -17,6 +17,7 @@ import { usingDevKey } from "@/lib/crypto/dataKey";
 import { dualControlGap } from "@/lib/engine/orchestrator";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
   const viewer = await getViewer();

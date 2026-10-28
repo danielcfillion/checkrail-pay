@@ -42,9 +42,10 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
       </p>
       {personas ? (
         <label className="mt-2 block">
-          <span className="dense text-ink-soft">Demo: act as</span>
+          <span className="dense text-attention">Demo only: switch role</span>
           <select
             className="field mt-0.5 w-full text-sm"
+            style={{ borderColor: "var(--attention)" }}
             value={username}
             disabled={pending}
             onChange={(e) =>

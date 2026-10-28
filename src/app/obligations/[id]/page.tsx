@@ -24,6 +24,13 @@ import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Linkified, Money, Panel, RailTag, StatePill } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+/** Tab title: "Phuong Transport, INV-2026-0152". */
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const d = getObligationDetail((await params).id);
+  if (!d) return { title: "Payment request not found" };
+  const o = d.obligation;
+  return { title: [o.vendorName ?? "Unknown vendor", o.sourceRef].filter(Boolean).join(", ") };
+}
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 

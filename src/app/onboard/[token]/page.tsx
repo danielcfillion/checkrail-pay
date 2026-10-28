@@ -2,6 +2,7 @@ import { formatDate } from "@/lib/format";
 import { getDb } from "@/lib/db";
 import { lookupInvite } from "@/lib/engine/vendors";
 import { VendorForm } from "@/components/VendorForm";
+import { VendorHeader } from "@/components/VendorHeader";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Your payment details", robots: { index: false, follow: false } };
@@ -23,13 +24,15 @@ export default async function OnboardPage({ params, searchParams }: { params: Pr
   const t = T[lang];
   return (
     <>
-      <p className="dense flex justify-between text-ink-soft">
-        <span>Checkrail Pay</span>
-        <a className="link" href={`?lang=${lang === "vi" ? "en" : "vi"}`}>
-          {t.other}
-        </a>
-      </p>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight">{view.ok ? t.title(biz?.name ?? "") : "Link not available"}</h1>
+      <VendorHeader
+        payer={biz?.name}
+        aside={
+          <a className="link text-sm" href={`?lang=${lang === "vi" ? "en" : "vi"}`} lang={lang === "vi" ? "en" : "vi"}>
+            {t.other}
+          </a>
+        }
+      />
+      <h1 className="text-2xl font-semibold tracking-tight">{view.ok ? t.title(biz?.name ?? "") : "Link not available"}</h1>
       {view.ok ? (
         <>
           <p className="mt-2 text-ink-soft">

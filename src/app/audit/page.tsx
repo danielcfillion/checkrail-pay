@@ -4,6 +4,7 @@ import { formatDateTime, humaniseAction, humaniseActor, stateLabel } from "@/lib
 import { EmptyState, PageHeader, RelativeTime } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Audit log" };
 
 const PAGE = 100;
 

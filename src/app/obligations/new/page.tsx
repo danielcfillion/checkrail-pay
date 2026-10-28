@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/ui";
 import { NewObligationForm } from "./NewObligationForm";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "New payment request" };
 
 export default function NewObligationPage() {
   return (

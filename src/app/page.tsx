@@ -11,6 +11,8 @@ import { MoneyOut } from "@/components/MoneyOut";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
+// The root segment does not get the layout's title template, so spell it out.
+export const metadata = { title: { absolute: "Overview, Checkrail Pay" } };
 
 export default async function OverviewPage() {
   const viewer = await getViewer();

@@ -24,9 +24,25 @@ const archivo = localFont({
   declarations: [{ prop: "font-stretch", value: "62% 125%" }],
 });
 
+const DESCRIPTION = "Checks every supplier payment before money moves.";
+
+/* icon.svg, apple-icon.png and opengraph-image.png in this folder are picked up by Next's file conventions;
+   scripts/brand-assets.py generates them. */
 export const metadata: Metadata = {
+  // Render sets RENDER_EXTERNAL_URL on every service, so the hosted demo's social card resolves without extra setup.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:3000"),
   title: { default: "Checkrail Pay", template: "%s, Checkrail Pay" },
-  description: "Verified supplier payments, routed and reconciled automatically.",
+  description: DESCRIPTION,
+  applicationName: "Checkrail Pay",
+  icons: { icon: [{ url: "/icon.svg", type: "image/svg+xml" }], apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }] },
+  openGraph: {
+    type: "website",
+    siteName: "Checkrail Pay",
+    title: "Checkrail Pay",
+    description: DESCRIPTION,
+    // The image itself comes from opengraph-image.png (alt text in opengraph-image.alt.txt).
+  },
+  twitter: { card: "summary_large_image", title: "Checkrail Pay", description: DESCRIPTION, images: ["/opengraph-image.png"] },
 };
 
 export const dynamic = "force-dynamic";
@@ -37,8 +53,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     return (
       <html lang="en" className={archivo.variable}>
         <body>
+          <a href="#main" className="skip-link">
+            Skip to content
+          </a>
           <ToastProvider>
-            <main className="mx-auto w-full max-w-xl px-4 py-10">{children}</main>
+            <main id="main" tabIndex={-1} className="print-page mx-auto w-full max-w-xl px-4 py-10 focus:outline-none">{children}</main>
           </ToastProvider>
         </body>
       </html>
@@ -67,6 +86,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="en" className={archivo.variable}>
       <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
         <ToastProvider>
           <Shell
             businessName={businessName}
