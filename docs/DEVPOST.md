@@ -81,7 +81,7 @@ The agent is Claude (`claude-sonnet-5-5`) through the Anthropic SDK, with a smal
 
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 307 tests in 38 files. Six independent review rounds and three outside audit rounds, every finding fixed with a test.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 354 tests in 47 files. Six independent review rounds and three outside audit rounds, every finding fixed with a test.
 
 ## Challenges we ran into
 

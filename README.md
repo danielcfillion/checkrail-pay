@@ -19,7 +19,7 @@ Run it locally in two commands (Node 22 or later; SQLite is bundled, no external
     npm run setup
     npm run dev
 
-Then open http://localhost:3000/demo, the presenter page that walks the story in order. In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
+Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 6 and 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
 
 A hosted demo for judges is linked from the Devpost page, with its login in the testing instructions.
 
@@ -50,7 +50,7 @@ As of 29 Oct 2026:
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader.
-- **Tests:** 307 in 38 files. **Policy:** 25 named rules in `src/lib/domain/policy.ts`.
+- **Tests:** 354 in 47 files. **Policy:** 25 named rules in `src/lib/domain/policy.ts`.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -155,9 +155,9 @@ Everything runs with zero credentials on simulated rails. To move a rail or the 
     WISE_PROFILE_ID=...
     WISE_ENV=sandbox
     BANK_FILE_SOURCE_ACCOUNT=VCB 0071000... Ridgeline Vietnam
-    CHECKRAIL_DATA_KEY=<32 bytes, base64>   # encrypts full bank account numbers; required wherever real money can move
+    CHECKRAIL_DATA_KEY=<32 bytes, base64>   # encrypts full bank account numbers; required with any live rail (sandbox too) and on any production server that is not the simulated demo. Generate: openssl rand -base64 32
 
-Then run `npm run demo:replay` to send the clean requests through the sandbox. `.env.example` documents every other variable, including the autopilot heartbeat (`AUTOPILOT_HEARTBEAT=off` plus `POST /api/autopilot/tick` for more than one server process).
+Then run `npm run demo:replay` to send the clean requests through the sandbox. `.env.example` documents every other variable, including the autopilot heartbeat (`AUTOPILOT_HEARTBEAT=off` plus `POST /api/autopilot/tick` for more than one server process; an outside scheduler calls it with `Authorization: Bearer $CHECKRAIL_TICK_TOKEN`, which live rails require).
 
 ## Hosting
 
@@ -170,7 +170,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-307 tests in 38 files. `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+354 tests in 47 files. `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 
