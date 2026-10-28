@@ -127,6 +127,13 @@
       "when": 1792600000000,
       "tag": "0017_bank_ref_retainer",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1793300000000,
+      "tag": "0018_paypal_history",
+      "breakpoints": true
     }
   ]
 }

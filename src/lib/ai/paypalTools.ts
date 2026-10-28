@@ -84,6 +84,41 @@ export async function loadPayPalTools(): Promise<AgentTool[]> {
   ];
 }
 
+/**
+ * The last 31 days of this business's PayPal transactions as PayPal returned them, untruncated, for the deterministic
+ * duplicate check (not for the model). Read-only: the same GET the agent's paypal_list_transactions makes, with a
+ * larger page. Returns { ok: false } with the reason when PayPal cannot be read; it never throws.
+ */
+export async function listPayPalTransactionsRaw(simulated?: () => string): Promise<{ ok: boolean; body: string; error?: string }> {
+  const { clientId, clientSecret, env } = config.rails.paypal;
+  if (config.rails.mode !== "live" || !clientId || !clientSecret) return { ok: true, body: simulated ? simulated() : mockTransactionsBody() };
+  const base = env === "live" ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
+  const { start, end } = dateRange({});
+  try {
+    const { token } = await fetchPayPalAccessToken(clientId, clientSecret, env);
+    const res = await fetch(`${base}/v1/reporting/transactions?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}&fields=transaction_info,payer_info&page_size=500`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+    const text = await res.text();
+    return res.ok ? { ok: true, body: text } : { ok: false, body: "", error: `HTTP ${res.status}` };
+  } catch (e) {
+    return { ok: false, body: "", error: (e as Error).message.slice(0, 120) };
+  }
+}
+
+/**
+ * The simulated PayPal history: the two payouts the demo's own history made (Maria's JOB-HG4D-0914 17 days ago and
+ * Phuong's INV-2026-0138 12 days ago), dated relative to today so they agree with the seeded payments.
+ */
+function mockTransactionsBody(): string {
+  const ago = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString().replace(/\.\d+Z$/, "Z");
+  return JSON.stringify({
+    transaction_details: [
+      { transaction_info: { transaction_id: "7XJ48201MC3184019", transaction_event_code: "T0001", transaction_amount: { currency_code: "USD", value: "-180.00" }, transaction_note: "JOB-HG4D-0914 guide fee", transaction_initiation_date: ago(17), transaction_status: "S" }, payer_info: { email_address: "maria.santos@example.com" } },
+      { transaction_info: { transaction_id: "5RD93117KK9023702", transaction_event_code: "T0001", transaction_amount: { currency_code: "USD", value: "-600.00" }, transaction_note: "INV-2026-0138 van rental", transaction_initiation_date: ago(12), transaction_status: "S" }, payer_info: { email_address: "phuong.transport@example.com" } },
+    ],
+    total_items: 2,
+  });
+}
+
 /** Deterministic stand-ins with the same names, so prompts and tests do not change between modes. */
 export function mockPayPalTools(): AgentTool[] {
   return [
@@ -93,14 +128,7 @@ export function mockPayPalTools(): AgentTool[] {
         description: "List PayPal transactions for this business in a date range (mock: returns seeded history).",
         input_schema: { type: "object", properties: { start_date: { type: "string" }, end_date: { type: "string" }, search_months: { type: "number" } } },
       },
-      run: async () =>
-        JSON.stringify({
-          transaction_details: [
-            { transaction_info: { transaction_id: "7XJ48201MC3184019", transaction_amount: { currency_code: "USD", value: "-180.00" }, transaction_note: "JOB-HG4D-0914 guide fee", transaction_initiation_date: "2026-09-16T03:12:44Z", transaction_status: "S" }, payer_info: { email_address: "maria.santos@example.com" } },
-            { transaction_info: { transaction_id: "5RD93117KK9023702", transaction_amount: { currency_code: "USD", value: "-240.00" }, transaction_note: "INV-2026-0138 van rental", transaction_initiation_date: "2026-09-22T09:40:10Z", transaction_status: "S" }, payer_info: { email_address: "phuong.transport@example.com" } },
-          ],
-          total_items: 2,
-        }),
+      run: async () => mockTransactionsBody(),
     },
     {
       definition: {

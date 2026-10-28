@@ -18,6 +18,8 @@ import { audit, transition } from "../domain/stateMachine";
 import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
+import { listPayPalTransactionsRaw } from "../ai/paypalTools";
+import { matchPayPalHistory, type PayPalHistoryCheck } from "../domain/paypalHistory";
 import { addDays, extractInvoiceDates } from "../ai/extractor";
 import { localDateString, stateLabel } from "../format";
 import { getRails } from "../rails";
@@ -226,7 +228,8 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   // 1b. A deposit or a balance belongs to a bill: the invoice total, with every part paid against it.
   linkToBill(db, obligationId, ai, ev);
 
-  // 2. Policy
+  // 2. Policy, after checking PayPal's own history for this job
+  await refreshPayPalHistory(db, obligationId);
   const outcome = runPolicy(db, obligationId);
 
   // 3. Quotes and route (only when the obligation is well-formed and has a vendor)
@@ -315,6 +318,7 @@ export async function recheckObligation(db: Db, obligationId: string, actor: str
   if (!["blocked", "needs_evidence", "awaiting_approval"].includes(ob.state)) throw new Error(`Nothing to check again in state ${ob.state}`);
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.recheck", { reason: "checked again" });
   else audit(db, { obligationId, actor, action: "review.recheck", detail: {} });
+  await refreshPayPalHistory(db, obligationId);
   const outcome = runPolicy(db, obligationId);
   const fresh = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, fresh.businessId)).get()!;
@@ -399,6 +403,69 @@ function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
     .map((o) => o.name);
 }
 
+/** The job identifiers this request names: its reference, its text, its evidence and its documents. */
+function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
+  const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
+  return jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000)));
+}
+
+/**
+ * Read PayPal's own transaction history and record whether it already paid this job to this payee. Deterministic and
+ * model-independent: it runs before every policy decision that can lead to money moving (reading the request,
+ * checking again, and the moment of payment), whatever the reader did. Read-only. A failure to read PayPal is
+ * recorded as such and does not block: the local history check still runs.
+ */
+export async function refreshPayPalHistory(db: Db, obligationId: string): Promise<PayPalHistoryCheck | null> {
+  const ob = mustGet(db, obligationId);
+  const vendorRow = ob.vendorId ? db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get() : null;
+  if (!vendorRow?.paypalEmail) {
+    if (ob.paypalHistoryJson) db.update(obligations).set({ paypalHistoryJson: null }).where(eq(obligations.id, obligationId)).run();
+    return null;
+  }
+  const keys = ownJobKeys(db, ob);
+  if (ob.sourceRef) keys.push(ob.sourceRef.toLowerCase());
+  // PayPal transactions this business has recorded as come back (refunded here) are not "already paid".
+  const cameBack = db
+    .select({ ref: settlements.statementRef })
+    .from(settlements)
+    .innerJoin(obligations, eq(obligations.id, settlements.obligationId))
+    .where(and(eq(obligations.vendorId, vendorRow.id), eq(obligations.state, "refunded")))
+    .all()
+    .map((r) => r.ref)
+    .filter((r): r is string => Boolean(r));
+  const raw = await listPayPalTransactionsRaw(() => simulatedPayPalHistory(db, ob.businessId));
+  const check: PayPalHistoryCheck = raw.ok
+    ? { checkedAt: now(), ok: true, ...matchPayPalHistory(raw.body, keys, vendorRow.paypalEmail, cameBack) }
+    : { checkedAt: now(), ok: false, error: raw.error, lines: 0, matches: [] };
+  db.update(obligations).set({ paypalHistoryJson: JSON.stringify(check) }).where(eq(obligations.id, obligationId)).run();
+  audit(db, { obligationId, actor: "paypal:history", action: "paypal.history_checked", detail: { ok: check.ok, error: check.error, lines: check.lines, matches: check.matches.map((m) => m.transactionId) } });
+  return check;
+}
+
+/**
+ * On simulated rails, the PayPal history is what the simulated PayPal rail actually did: one money-out line per PayPal
+ * payout this business settled in the last 31 days, and a reversal line for each one that came back. So the check
+ * behaves as it would against a real account, and a payment the demo made earlier is "already paid" on PayPal too.
+ */
+function simulatedPayPalHistory(db: Db, businessId: string): string {
+  const since = new Date(Date.now() - 31 * 86_400_000).toISOString();
+  const rows = db
+    .select({ s: settlements, ref: obligations.sourceRef, state: obligations.state, email: vendors.paypalEmail })
+    .from(settlements)
+    .innerJoin(obligations, eq(obligations.id, settlements.obligationId))
+    .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
+    .where(and(eq(obligations.businessId, businessId), eq(settlements.rail, "paypal")))
+    .all()
+    .filter((r) => r.s.settledAt >= since);
+  const details = rows.flatMap((r) => {
+    const id = r.s.statementRef ?? r.s.externalId ?? r.s.id;
+    const out = { transaction_info: { transaction_id: id, transaction_event_code: "T0001", transaction_amount: { currency_code: r.s.grossCurrency, value: (-r.s.grossMinor / 100).toFixed(2) }, transaction_note: r.ref ?? "", transaction_initiation_date: r.s.settledAt, transaction_status: "S" }, payer_info: { email_address: r.email ?? "" } };
+    if (r.state !== "refunded") return [out];
+    return [out, { transaction_info: { transaction_id: `${id}-R`, paypal_reference_id: id, transaction_event_code: "T1106", transaction_amount: { currency_code: r.s.grossCurrency, value: (r.s.grossMinor / 100).toFixed(2) }, transaction_note: "returned", transaction_initiation_date: r.s.settledAt, transaction_status: "S" }, payer_info: { email_address: r.email ?? "" } }];
+  });
+  return JSON.stringify({ transaction_details: details, total_items: details.length });
+}
+
 export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const ob = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
@@ -432,8 +499,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
         .filter((o) => o.state !== "cancelled" && o.state !== "failed" && o.sourceRef && myRefs.has(o.sourceRef.toUpperCase()))
         .map((o) => ({ obligationId: o.obligationId, vendorName: o.vendorName, reference: o.sourceRef!, state: o.state }))
     : [];
-  const myDocTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
-  const myJobKeys = jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...myEvidence.flatMap((e) => [e.reference, e.label, e.excerpt]), ...myDocTexts.map((d) => d.text?.slice(0, 4000)));
+  const myJobKeys = ownJobKeys(db, ob, myEvidence);
   // Distinct people, not rows: one person approving twice is still one approval.
   const approvedRows = db.select({ actor: approvals.actor, ack: approvals.acknowledgedJson, login: approvals.login }).from(approvals).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).all();
   // Distinct people: a demo persona approving is its owner's login, not a second person.
@@ -472,6 +538,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     invoiceDate: ob.invoiceDate,
     today: localDateString(),
     // A payout to these same details came back since they were last verified: likely a dead address.
+    paypalHistory: ob.paypalHistoryJson ? (JSON.parse(ob.paypalHistoryJson) as PayPalHistoryCheck) : null,
     returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? null) : null,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
     withholding,
@@ -761,6 +828,8 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
   let ob = mustGet(db, obligationId);
   if (ob.state !== "approved") throw new Error(`The request must be approved before it is paid (it is ${stateWord(ob.state)})`);
 
+  // PayPal's own history is read again at the moment of payment: a payout made outside Checkrail since approval counts.
+  await refreshPayPalHistory(db, obligationId);
   const outcome = runPolicy(db, obligationId);
   if (outcome.decision !== "auto_execute") {
     const target = targetState(outcome, "approved");

@@ -241,6 +241,21 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       }
     }
   }
+  // R5d: PayPal's own records. Read by the orchestrator before this run, never by the model, so a reader that skipped
+  // its tools cannot hide a payout PayPal already made for this job to this payee.
+  if (input.paypalHistory) {
+    const h = input.paypalHistory;
+    // A bill paid in parts (a deposit, then the balance) shows its earlier parts on PayPal: those are expected, as long
+    // as everything PayPal shows plus this payment stays within the bill's total.
+    const partsOfBill = bill && h.matches.length > 0 && h.matches.every((m) => m.currency === bill.currency) && obligation.currency === bill.currency;
+    const shownMinor = h.matches.reduce((sum, m) => sum + m.amountMinor, 0);
+    if (partsOfBill && shownMinor + (obligation.amountMinor ?? 0) <= bill!.totalMinor) {
+      rules.push(pass("paypal_history", `PayPal shows ${fmt(shownMinor, bill!.currency)} already paid on ${bill!.reference}; with this payment that stays within its total of ${fmt(bill!.totalMinor, bill!.currency)}`));
+    } else if (h.matches.length) {
+      for (const m of h.matches.slice(0, 3)) rules.push(block("paypal_history", `PayPal transaction ${m.transactionId} on ${m.date} already paid ${fmt(m.amountMinor, m.currency)} for ${m.matched} to ${m.email}`));
+    } else if (h.ok) rules.push(pass("paypal_history", `PayPal's transactions for the last 31 days show no payment for this job to ${vendor?.paypalEmail ?? "this payee"} (${h.lines} read)`));
+    else rules.push(pass("paypal_history", `PayPal's transaction history could not be read (${h.error ?? "no answer"}); this app's own payment history was checked`));
+  }
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
   else if (hasConfusables(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} contains look-alike letters from another script or hidden characters; it was compared as ${foldConfusables(obligation.sourceRef)}`));
 

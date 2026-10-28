@@ -144,6 +144,7 @@ export const obligations = sqliteTable(
     blockedReason: text("blocked_reason"),
     // hash of the vendor's payout details at the moment the obligation was approved; execution refuses if they changed since
     payoutHash: text("payout_hash"),
+    paypalHistoryJson: text("paypal_history_json"), // what PayPal Transaction Search said about this job, last read before policy (PayPalHistoryCheck)
     // Autopilot: when the agent will release this payment (end of the cancel window), and when a person cancelled that release.
     releaseAt: text("release_at"),
     autopilotCancelledAt: text("autopilot_cancelled_at"),
