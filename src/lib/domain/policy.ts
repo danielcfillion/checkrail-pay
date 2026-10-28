@@ -1,5 +1,6 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { localDateString } from "../format";
+import { foldConfusables, hasConfusables } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -152,7 +153,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
         } else rules.push(pass("amount_matches_evidence", `Amount matches ${bound.label}`));
       } else {
         // Compare against the most relevant record: same reference first, else the closest amount.
-        const byRef = obligation.sourceRef ? sameCurrency.find((e) => e.reference && e.reference.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
+        const byRef = obligation.sourceRef ? sameCurrency.find((e) => e.reference && refKey(e.reference) === refKey(obligation.sourceRef!)) : undefined;
         const ref = byRef ?? [...sameCurrency].sort((a, b) => Math.abs(a.amountMinor! - obligation.amountMinor!) - Math.abs(b.amountMinor! - obligation.amountMinor!))[0];
         const diff = obligation.amountMinor! - ref.amountMinor!;
         // Short pay to contract: the invoice asks for more than the rate card, and the payment is the rate-card
@@ -210,8 +211,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     // Earlier payments on the same bill are its other parts; the bill check above stops them adding up to too much.
     const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && p.state !== "refunded" && !(bill && p.billId === bill.id));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
-    if (obligation.sourceRef) myKeys.add(obligation.sourceRef.toLowerCase());
-    const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && p.sourceRef.toLowerCase() === obligation.sourceRef!.toLowerCase()) : undefined;
+    if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
+    const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;
     const byKey = byRef ? undefined : live.find((p) => (p.keys ?? []).some((k) => myKeys.has(k) && !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (byRef) {
       rules.push(block("no_duplicate", `Reference ${obligation.sourceRef} was already used by obligation ${byRef.obligationId} (${byRef.state})`));
@@ -221,7 +222,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else {
       // Only when this obligation carries no job identifier beyond its own reference. A guide paid the same
       // day rate for a different, named trip is routine; an invoice number alone with a familiar amount is not.
-      const ownRef = obligation.sourceRef?.toLowerCase();
+      const ownRef = obligation.sourceRef ? refKey(obligation.sourceRef) : undefined;
       const independentKeys = [...myKeys].filter((k) => k !== ownRef && !k.startsWith("~") && k !== ownRef?.replace(/^(inv|job|bk|po|ref|trip|tour)-/, ""));
       const coreOfRef = ownRef ? `~${ownRef.replace(/^(inv|job|bk|po|ref|trip|tour)-/, "").replace(/-/g, "")}` : null;
       const hasOwnJobId = independentKeys.length > 0 || [...myKeys].some((k) => k.startsWith("~") && k !== coreOfRef);
@@ -241,6 +242,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     }
   }
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
+  else if (hasConfusables(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} contains look-alike letters from another script or hidden characters; it was compared as ${foldConfusables(obligation.sourceRef)}`));
 
   // R6: recipient details changed since verification
   if (policy.blockOnRecipientChange && vendor) {
@@ -401,4 +403,9 @@ export function fmt(minor: number, currency: string): string {
   // Currencies without a minor unit in everyday use (VND) show whole units; the stored hundredths are kept exact.
   if (ZERO_DECIMAL_CURRENCIES.has(currency) && abs % 100 === 0) return `${sign}${currency} ${major.toLocaleString("en-US")}`;
   return `${sign}${currency} ${major.toLocaleString("en-US")}.${cents}`;
+}
+
+/** A reference as compared for duplicates: look-alike letters folded, case ignored. */
+function refKey(ref: string): string {
+  return foldConfusables(ref).toLowerCase();
 }
