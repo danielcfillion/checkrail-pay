@@ -2,52 +2,204 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
-type Item = { readonly href: string; readonly label: string; readonly icon: string };
+import { DEMO_GUIDE, groupItems, PHONE_PRIMARY, type Item } from "./nav-model";
 
-export function NavLinks({ items, mobile = false }: { items: readonly Item[]; mobile?: boolean }) {
+function useActive() {
   const path = usePathname();
-  const isActive = (href: string) => (href === "/" ? path === "/" : path === href || path.startsWith(href + "/"));
+  return { path, isActive: (href: string) => (href === "/" ? path === "/" : path === href || path.startsWith(href + "/")) };
+}
 
-  if (mobile) {
-    const shown = items.filter((i) => ["/", "/obligations", "/close", "/exceptions", "/settings"].includes(i.href));
+export function NavLinks({ items, mobile = false, demoGuide = false }: { items: readonly Item[]; mobile?: boolean; demoGuide?: boolean }) {
+  const { isActive } = useActive();
+  if (mobile) return <PhoneBar items={items} demoGuide={demoGuide} />;
+
+  const row = (it: Item) => {
+    const active = isActive(it.href);
     return (
+      <li key={it.href}>
+        <Link
+          href={it.href}
+          aria-current={active ? "page" : undefined}
+          title={it.label}
+          className={`flex h-8 items-center gap-2.5 rounded px-2 max-lg:justify-center lg:px-2 ${active ? "bg-sheet font-medium text-ink" : "text-ink-soft hover:text-ink"}`}
+          style={active ? { boxShadow: "inset 2px 0 0 var(--ink)" } : undefined}
+        >
+          <Icon name={it.icon} />
+          <span className="hidden lg:inline">{it.label}</span>
+        </Link>
+      </li>
+    );
+  };
+
+  return (
+    <div className="space-y-3">
+      {demoGuide ? <ul>{row(DEMO_GUIDE)}</ul> : null}
+      {groupItems(items).map((g, gi) => {
+        const id = `nav-group-${g.label.toLowerCase()}`;
+        return (
+          <div key={g.label} className={gi > 0 || demoGuide ? "max-lg:border-t max-lg:pt-3 hairline" : ""}>
+            <p id={id} className="dense mb-1 hidden px-2 text-[11px] text-ink-soft lg:block">
+              {g.label}
+            </p>
+            <ul className="space-y-0.5" aria-labelledby={id}>
+              {g.items.map(row)}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Under 640px: four primary sections and More, which opens a bottom sheet with every other section. */
+function PhoneBar({ items, demoGuide }: { items: readonly Item[]; demoGuide: boolean }) {
+  const { path, isActive } = useActive();
+  const [open, setOpen] = useState(false);
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  const primary = PHONE_PRIMARY.map((h) => items.find((i) => i.href === h)).filter((i): i is Item => !!i);
+  const restGroups = groupItems(items.filter((i) => !(PHONE_PRIMARY as readonly string[]).includes(i.href)));
+  if (demoGuide) restGroups.unshift({ label: "Demo", items: [DEMO_GUIDE] });
+  const moreActive = restGroups.some((g) => g.items.some((i) => isActive(i.href)));
+
+  const close = useCallback((returnFocus: boolean) => {
+    setOpen(false);
+    if (returnFocus) requestAnimationFrame(() => moreBtn.current?.focus());
+  }, []);
+
+  // Leaving the page closes the sheet.
+  const lastPath = useRef(path);
+  useEffect(() => {
+    if (lastPath.current !== path) {
+      lastPath.current = path;
+      setOpen(false);
+    }
+  }, [path]);
+
+  const cell = "flex min-h-14 w-full flex-col items-center justify-center gap-0.5 py-1.5 text-2xs";
+  return (
+    <>
       <ul className="grid grid-cols-5">
-        {shown.map((it) => {
+        {primary.map((it) => {
           const active = isActive(it.href);
           return (
             <li key={it.href}>
-              <Link href={it.href} aria-current={active ? "page" : undefined} className={`flex flex-col items-center gap-0.5 py-2 text-2xs ${active ? "text-ink" : "text-ink-soft"}`}>
+              <Link href={it.href} aria-current={active ? "page" : undefined} className={`${cell} ${active ? "font-medium text-ink" : "text-ink-soft"}`}>
                 <Icon name={it.icon} />
                 <span>{it.label}</span>
               </Link>
             </li>
           );
         })}
+        <li>
+          <button
+            ref={moreBtn}
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-controls="nav-more-sheet"
+            onClick={() => setOpen((o) => !o)}
+            className={`${cell} ${moreActive || open ? "font-medium text-ink" : "text-ink-soft"}`}
+          >
+            <Icon name="more" />
+            <span>More</span>
+          </button>
+        </li>
       </ul>
-    );
-  }
+      {open ? <MoreSheet groups={restGroups} isActive={isActive} onClose={close} /> : null}
+    </>
+  );
+}
+
+function MoreSheet({ groups, isActive, onClose }: { groups: Array<{ label: string; items: Item[] }>; isActive: (href: string) => boolean; onClose: (returnFocus: boolean) => void }) {
+  const sheet = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const el = sheet.current;
+    if (!el) return;
+    const focusables = () => Array.from(el.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+    (focusables().find((f) => f.getAttribute("aria-current") === "page") ?? focusables()[0])?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose(true);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const f = focusables();
+      if (!f.length) return;
+      const first = f[0];
+      const last = f[f.length - 1];
+      const inside = el.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
 
   return (
-    <ul className="space-y-0.5">
-      {items.map((it) => {
-        const active = isActive(it.href);
-        return (
-          <li key={it.href}>
-            <Link
-              href={it.href}
-              aria-current={active ? "page" : undefined}
-              title={it.label}
-              className={`flex h-8 items-center gap-2.5 rounded px-2 lg:px-2 ${active ? "bg-sheet font-medium text-ink" : "text-ink-soft hover:text-ink"}`}
-              style={active ? { boxShadow: "inset 2px 0 0 var(--ink)" } : undefined}
-            >
-              <Icon name={it.icon} />
-              <span className="hidden lg:inline">{it.label}</span>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="fixed inset-0 z-50 md:hidden">
+      <div className="absolute inset-0" style={{ background: "rgb(16 35 58 / 0.4)" }} onClick={() => onClose(false)} aria-hidden />
+      <div
+        ref={sheet}
+        id="nav-more-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-lg border-t bg-sheet hairline"
+        style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="flex items-center justify-between border-b px-4 py-1 hairline">
+          <h2 id={titleId} className="font-semibold">
+            More sections
+          </h2>
+          <button type="button" onClick={() => onClose(true)} className="-mr-2 flex h-11 min-w-11 items-center justify-center rounded px-2 text-ink-soft hover:text-ink" aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+        {groups.map((g) => (
+          <div key={g.label} className="px-2 pt-2">
+            <p className="dense px-2 pb-1 pt-1 text-[11px] text-ink-soft">{g.label}</p>
+            <ul>
+              {g.items.map((it) => {
+                const active = isActive(it.href);
+                return (
+                  <li key={it.href}>
+                    <Link
+                      href={it.href}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => onClose(false)}
+                      className={`flex min-h-11 items-center gap-3 rounded px-2 ${active ? "bg-paper font-medium text-ink" : "text-ink"}`}
+                      style={active ? { boxShadow: "inset 2px 0 0 var(--ink)" } : undefined}
+                    >
+                      <span className="text-ink-soft">
+                        <Icon name={it.icon} />
+                      </span>
+                      <span>{it.label}</span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -134,6 +286,21 @@ function Icon({ name }: { name: string }) {
           <path d="M3 5h10M3 11h10" />
           <circle cx="6" cy="5" r="1.5" fill="var(--sheet)" />
           <circle cx="10" cy="11" r="1.5" fill="var(--sheet)" />
+        </svg>
+      );
+    case "demo":
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M6.75 5.75v4.5L10.25 8z" />
+        </svg>
+      );
+    case "more":
+      return (
+        <svg {...common}>
+          <circle cx="3.5" cy="8" r="0.75" fill="currentColor" />
+          <circle cx="8" cy="8" r="0.75" fill="currentColor" />
+          <circle cx="12.5" cy="8" r="0.75" fill="currentColor" />
         </svg>
       );
     default:

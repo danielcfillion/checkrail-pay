@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { positionFor, stationOffset, STATIONS, STATION_LABELS, type StationIndex } from "./checkline-model";
+import { anchorTransform, describeLine, positionFor, stationOffset, STATIONS, STATION_LABELS, type StationIndex } from "./checkline-model";
 import { stateLabel } from "@/lib/format";
 
 type Props = {
@@ -80,8 +80,15 @@ export function CheckLine({ state, variant = "compact", hasAccounting, blockedAt
     );
   }
 
+  const currentAt: StationIndex = brokenAt !== null ? brokenAt : shown;
+  const shownCaption = caption ?? pos.caption;
+  const fullLabel = describeLine(stateLabel(state), shown, brokenAt, shownCaption);
+
+  // Full variant. From 640px every station is labelled and the caption sits beside the current one. Below 640px
+  // only the current station is labelled, the other stations are bare ticks (named in the accessible label), and
+  // the caption gets a line of its own under the track, so nothing collides at 360px.
   return (
-    <div className={`relative ${className}`} role="img" aria-label={label}>
+    <div className={`relative ${className}`} role="img" aria-label={fullLabel}>
       <div className="relative h-8">
         {/* base track */}
         <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2" style={{ background: pos.inactive ? "var(--rule)" : "var(--rule-strong)" }} />
@@ -113,22 +120,27 @@ export function CheckLine({ state, variant = "compact", hasAccounting, blockedAt
           />
         )}
       </div>
-      <div className="relative mt-1 h-5">
+      <div className="relative mt-1 h-5" aria-hidden>
         {STATIONS.map((s, i) => {
-          const active = brokenAt !== null ? i === brokenAt : i === shown;
+          const active = i === currentAt;
           const colour = active ? fill : i < shown && brokenAt === null && !pos.inactive ? "var(--ink)" : "var(--ink-soft)";
           return (
             <span
               key={s}
-              className="dense absolute top-0 whitespace-nowrap"
-              style={{ left: `${stationOffset(i)}%`, transform: i === 0 ? "none" : i === STATIONS.length - 1 ? "translateX(-100%)" : "translateX(-50%)", color: colour, fontWeight: active ? 600 : 500 }}
+              className={`dense absolute top-0 whitespace-nowrap ${active ? "" : "max-sm:hidden"}`}
+              style={{ left: `${stationOffset(i)}%`, transform: anchorTransform(i), color: colour, fontWeight: active ? 600 : 500 }}
             >
               {STATION_LABELS[s]}
-              {active && (caption ?? pos.caption) ? <span className="font-normal" style={{ color: fill }}>{`, ${caption ?? pos.caption}`}</span> : null}
+              {active && shownCaption ? <span className="font-normal max-sm:hidden" style={{ color: fill }}>{`, ${shownCaption}`}</span> : null}
             </span>
           );
         })}
       </div>
+      {shownCaption ? (
+        <p className="dense mt-1 sm:hidden" style={{ color: fill }} aria-hidden>
+          {shownCaption.charAt(0).toUpperCase() + shownCaption.slice(1)}
+        </p>
+      ) : null}
     </div>
   );
 }
