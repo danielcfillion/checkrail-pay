@@ -1,4 +1,6 @@
-import { entryParts, formatDateTime, formatTime, formatDate, stateLabel } from "@/lib/format";
+import { SUMMARY } from "./RequestPanels";
+import { formatDateTime, formatTime, formatDate } from "@/lib/format";
+import { timelineRow } from "./timeline-model";
 
 export type AuditRow = {
   id: string;
@@ -21,27 +23,24 @@ export function Timeline({ entries }: { entries: AuditRow[] }) {
         const showDay = day !== lastDay;
         lastDay = day;
         const tone = toneFor(e.action);
+        const r = timelineRow(e);
         return (
           <li key={e.id} className="relative pb-4 pl-4 last:pb-0">
             <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full" style={{ background: tone, border: "1.5px solid var(--sheet)", boxSizing: "content-box" }} aria-hidden />
             {showDay ? <p className="dense mb-0.5 text-ink-soft">{day}</p> : null}
             <div className="flex items-baseline justify-between gap-2">
               <p className="min-w-0">
-                <span className="text-ink-soft">{entryParts(e.actor, e.action).who}</span>{" "}
-                <span className="font-medium">{entryParts(e.actor, e.action).what}</span>
+                {r.who ? <span className="text-ink-soft">{r.who} </span> : null}
+                <span className="font-medium">{r.what}</span>
               </p>
               <time dateTime={e.createdAt} title={formatDateTime(e.createdAt)} className="num shrink-0 text-xs text-ink-soft">
                 {formatTime(e.createdAt)}
               </time>
             </div>
-            {e.fromState || e.toState ? (
-              <p className="text-xs text-ink-soft">
-                {e.fromState ? `${stateLabel(e.fromState)} to ${stateLabel(e.toState)}` : `Now ${stateLabel(e.toState).toLowerCase()}`}
-              </p>
-            ) : null}
+            {r.change ? <p className="text-xs text-ink-soft">{r.change}</p> : null}
             {e.detailJson && e.detailJson !== "{}" ? (
               <details className="mt-1">
-                <summary className="dense inline-block text-ink-soft hover:text-ink">Detail</summary>
+                <summary className={SUMMARY}>Detail</summary>
                 <pre className="num mt-1 max-h-64 overflow-auto rounded bg-paper p-2 text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit", fontStretch: "92%" }}>
                   {pretty(e.detailJson)}
                 </pre>

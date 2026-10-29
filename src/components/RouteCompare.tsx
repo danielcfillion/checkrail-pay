@@ -1,6 +1,6 @@
 import { senderOutlayMinor } from "@/lib/domain/routing";
 import type { Rail } from "@/lib/domain/types";
-import { lowerFirst, routerNote } from "./route-note";
+import { lowerFirst, routeLine } from "./route-note";
 import { formatFxRate, formatMoney, formatMoneySymbol, humaniseEta, railLabel } from "@/lib/format";
 
 export type Quote = {
@@ -19,7 +19,8 @@ export type Quote = {
 };
 
 /** The rails side by side. The delivered amount is the largest figure; "Sender pays" puts them on the same footing (most fees are on top, Stellar's comes out of the amount). */
-export function RouteCompare({ quotes, selectedRail, routeReason }: { quotes: Quote[]; selectedRail: string | null; routeReason: string | null }) {
+export function RouteCompare({ quotes, selectedRail, routeReason, ready = false }: { quotes: Quote[]; selectedRail: string | null; routeReason: string | null; ready?: boolean }) {
+  const line = routeLine(routeReason, selectedRail, ready, railLabel);
   const order = ["paypal", "stellar", "wise", "bank_file"];
   // Cards for every rail that can pay this, and for PayPal and Stellar either way (their reasons are worth seeing);
   // bank rails that cannot serve it are one line underneath.
@@ -71,15 +72,10 @@ export function RouteCompare({ quotes, selectedRail, routeReason }: { quotes: Qu
           );
         })}
       </div>
-      {quiet.length || routeReason ? (
+      {quiet.length || line ? (
         <div className="mt-3 border-t pt-2 text-xs hairline">
-          {routeReason ? (
-            <p>
-              <span className="text-ink-soft">Router: </span>
-              {routerNote(routeReason)}
-            </p>
-          ) : null}
-          {quiet.length ? <p className={`text-ink-soft ${routeReason ? "mt-1" : ""}`}>{quiet.map((q) => `${railLabel(q.rail)} cannot pay this: ${lowerFirst(q.unavailableReason ?? "unavailable")}`).join(". ")}.</p> : null}
+          {line ? <p className={ready ? "font-medium" : undefined}>{line}</p> : null}
+          {quiet.length ? <p className={`text-ink-soft ${line ? "mt-1" : ""}`}>{quiet.map((q) => `${railLabel(q.rail)} cannot pay this: ${lowerFirst(q.unavailableReason ?? "unavailable")}`).join(". ")}.</p> : null}
         </div>
       ) : null}
     </div>

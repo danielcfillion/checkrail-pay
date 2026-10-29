@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decide, recordNoun, tidyDates, type DecisionInput } from "./decision-model";
+import { checkLineCaption, decide, decidingLine, isDuplicateReason, recordNoun, tidyDates, type DecisionInput } from "./decision-model";
 
 const base: DecisionInput = { state: "blocked", amountMinor: 96000, currency: "USD", blockedReason: null, policyReasons: [], rules: [], selectedRail: "paypal", quote: null, availableRails: ["paypal"], hasAccounting: false };
 const pass = (ruleId: string, message: string) => ({ ruleId, passed: true, severity: "info", message });
@@ -66,5 +66,64 @@ describe("helpers", () => {
   });
   it("shows ISO dates the way the rest of the page does", () => {
     expect(tidyDates("Payout details verified 2026-08-14")).toBe("Payout details verified 14 Aug 2026");
+  });
+});
+
+describe("PayPal's own records", () => {
+  const paypal = "PayPal transaction 9QX11122AB3344556 on 2026-10-20 already paid USD 240.00 for JOB-KAL3D-1019 to rosa@example.com";
+
+  it("titles the paypal_history block by the job, with the transaction id and date as evidence", () => {
+    const d = decide({ ...base, amountMinor: 24000, blockedReason: paypal, rules: [{ ruleId: "paypal_history", passed: false, severity: "block", message: paypal }] });
+    expect(d.title).toBe("Blocked: PayPal already paid JOB-KAL3D-1019");
+    expect(d.evidence).toBe("PayPal transaction 9QX11122AB3344556, 20 Oct 2026: USD 240.00 to rosa@example.com.");
+    expect(d.action).toMatchObject({ kind: "reject", label: "Cancel request" });
+  });
+
+  it("adds PayPal's agreement to a duplicate the app found first, and does not count it again", () => {
+    const ref = "Reference JOB-HG4D-0914 was already used by obligation obl_abc123 (settled)";
+    const pp = "PayPal transaction A12EE6CBFE3F3 on 2026-10-11 already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com";
+    const d = decide({ ...base, amountMinor: 18000, blockedReason: ref, rules: [{ ruleId: "no_duplicate", passed: false, severity: "block", message: ref }, { ruleId: "paypal_history", passed: false, severity: "block", message: pp }] });
+    expect(d.title).toBe("Blocked: USD 180 already requested for JOB-HG4D-0914");
+    expect(d.note).toBe("PayPal's own records agree: transaction A12EE6CBFE3F3.");
+    expect(d.alsoStated).toEqual([pp]);
+  });
+
+  it("treats every form of duplicate alike, for the action panel", () => {
+    expect(isDuplicateReason(paypal)).toBe(true);
+    expect(isDuplicateReason("Same job as obligation obl_4fbc (settled): both name INV-TAM-0834")).toBe(true);
+    expect(isDuplicateReason("Reference X was already used by obligation obl_1 (settled)")).toBe(true);
+    expect(isDuplicateReason("Requested USD 960.00 but Trip sheet says USD 800.00")).toBe(false);
+  });
+});
+
+describe("checkLineCaption", () => {
+  const tam = "Same job as obligation obl_4fbc2b0094b54704 (settled): both name INV-TAM-0834, this one under a new reference INV-TAM-0834-B";
+
+  it("names the original's reference for a duplicate by job, never its id", () => {
+    expect(checkLineCaption(tam)).toBe("same job as INV-TAM-0834");
+    const earlier = new Map([["obl_4fbc2b0094b54704", { id: "obl_4fbc2b0094b54704", vendorName: "Tam Motorbike Rental", sourceRef: "INV-TAM-0834", amountMinor: 36000, currency: "USD", state: "settled", settledAt: null }]]);
+    expect(checkLineCaption(tam, earlier)).toBe("same job as INV-TAM-0834");
+  });
+
+  it("never lets obl_ through, whatever the reason", () => {
+    const reasons = [tam, "Reference JOB-1 was already used by obligation obl_abc (settled)", "Same job as obligation obl_x (approved)", "Something about payment request obl_zz9 (sent) that is long enough to be cut off at the end", "Odd: obl_123 here", "PayPal transaction 9QX on 2026-10-20 already paid USD 1.00 for JOB-1 to a@b.c"];
+    for (const r of reasons) expect(checkLineCaption(r)).not.toMatch(/obl_|obligation/i);
+  });
+
+  it("keeps the short forms", () => {
+    expect(checkLineCaption("Reference JOB-1 was already used by obligation obl_abc (settled)")).toBe("duplicate reference");
+    expect(checkLineCaption("Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00 (+USD 160.00)")).toBe("evidence says USD 800.00");
+  });
+});
+
+describe("decidingLine", () => {
+  it("states ask, evidence and destination in one line, leaving a rate out of the evidence total", () => {
+    const line = decidingLine({ askMinor: 96000, currency: "USD", evidence: [{ kind: "contract", amountMinor: 20000, currency: "USD" }, { kind: "job_sheet", amountMinor: 80000, currency: "USD" }], vendorName: "Phuong Transport", rail: "paypal", verified: true });
+    expect(line).toBe("Asked USD 960.00. Evidence USD 800.00. Goes to Phuong Transport by PayPal.");
+  });
+
+  it("counts what Policy also found, and flags unverified payout details", () => {
+    const line = decidingLine({ askMinor: 80000, currency: "USD", evidence: [], vendorName: "Phuong Transport", rail: null, verified: false, alsoFound: { blocks: 1, warnings: 2 } });
+    expect(line).toBe("Asked USD 800.00. No evidence states an amount. Goes to Phuong Transport. Payout details never verified. Policy also found 1 more block and 2 warnings, listed first under Policy.");
   });
 });

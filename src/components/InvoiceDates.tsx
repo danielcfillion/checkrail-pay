@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { setDatesAction } from "@/app/actions";
 import { formatDate } from "@/lib/format";
 import { useToast } from "./Toast";
+import { TOUCH_INLINE, TOUCH_SM } from "./RequestPanels";
 
 /** The invoice and due dates, read from the documents; a person can correct them without touching the approval. */
 export function InvoiceDates({ id, invoiceDate, dueDate, editable }: { id: string; invoiceDate: string | null; dueDate: string | null; editable: boolean }) {
@@ -22,7 +23,7 @@ export function InvoiceDates({ id, invoiceDate, dueDate, editable }: { id: strin
       <dd className="flex flex-wrap items-center gap-2">
         {dueDate ? formatDate(dueDate) : <span className="text-ink-soft">no due date</span>}
         {editable && !open ? (
-          <button type="button" className="link text-xs" onClick={() => setOpen(true)}>
+          <button type="button" className={`link text-xs ${TOUCH_INLINE}`} onClick={() => setOpen(true)}>
             Change dates
           </button>
         ) : null}
@@ -51,10 +52,10 @@ export function InvoiceDates({ id, invoiceDate, dueDate, editable }: { id: strin
               <span className="lbl">Due</span>
               <input type="date" className="field num" value={due} onChange={(e) => setDue(e.target.value)} />
             </label>
-            <button type="submit" className="btn btn-sm btn-primary" disabled={pending}>
+            <button type="submit" className={`btn btn-sm btn-primary ${TOUCH_SM}`} disabled={pending}>
               {pending ? "Saving" : "Save dates"}
             </button>
-            <button type="button" className="btn btn-sm" onClick={() => setOpen(false)}>
+            <button type="button" className={`btn btn-sm ${TOUCH_SM}`} onClick={() => setOpen(false)}>
               Cancel
             </button>
           </form>

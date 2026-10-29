@@ -32,16 +32,22 @@ export function ReferencePanel({ title, aside, children, className = "" }: { tit
   );
 }
 
-/** A disclosure that reads as a control: chevron that turns when open, small ghost button style. */
+/*
+ * Touch targets (DS2-12): 44px tall on coarse pointers, unchanged with a mouse. The button classes live outside any
+ * CSS layer, so their height needs the important flag to be overridden; the summary style is in the components layer.
+ */
+/** For a disclosure summary. The chevron comes from the global summary style, so there is exactly one. */
+export const SUMMARY = "pointer-coarse:min-h-11";
+/** For a small button (btn-sm). */
+export const TOUCH_SM = "pointer-coarse:h-11!";
+/** For an inline text control (a link-styled button or an icon): a taller hit area without moving the text. */
+export const TOUCH_INLINE = "pointer-coarse:inline-block pointer-coarse:min-h-11 pointer-coarse:-my-3.5 pointer-coarse:py-3.5";
+
+/** A disclosure that reads as a control: the global summary style draws the chevron that turns when open. */
 export function Disclosure({ summary, children, className = "" }: { summary: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <details className={`group ${className}`}>
-      <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink">
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none">
-          <path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        {summary}
-      </summary>
+    <details className={className}>
+      <summary className={SUMMARY}>{summary}</summary>
       <div className="mt-2">{children}</div>
     </details>
   );

@@ -8,7 +8,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
   return (
     <button
       type="button"
-      className="dense inline-flex h-5 items-center rounded px-1 text-ink-soft hover:text-ink"
+      className="dense inline-flex h-5 items-center rounded px-1 text-ink-soft hover:text-ink pointer-coarse:-my-3 pointer-coarse:h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center"
       aria-label={label}
       title={label}
       onClick={async () => {

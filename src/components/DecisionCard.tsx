@@ -7,7 +7,7 @@ import { amendAction, approveAction, confirmAction, executeAction, reconcileActi
 import type { Rail } from "@/lib/domain/types";
 import { useToast } from "./Toast";
 import { useStage } from "./ObligationStage";
-import type { Decision, DecisionTone, PrimaryAction } from "./decision-model";
+import { allowedAction, type Decision, type DecisionTone, type PrimaryAction } from "./decision-model";
 
 type Perms = { approve: boolean; pay: boolean; amend: boolean };
 
@@ -30,29 +30,12 @@ function ToneIcon({ icon }: { icon: (typeof TONE)[DecisionTone]["icon"] }) {
   );
 }
 
-/** Whether this viewer may take the card's action. The server checks again. */
-function allowed(a: PrimaryAction, perms: Perms, approveRefusal: string | null | undefined): boolean {
-  switch (a.kind) {
-    case "amend_amount":
-    case "reject":
-      return perms.amend;
-    case "approve":
-      return perms.approve && !approveRefusal;
-    case "pay":
-    case "retry":
-    case "reconcile":
-      return perms.pay;
-    case "confirm":
-      return true;
-  }
-}
-
 function usePrimary(id: string, action: PrimaryAction | null, shownWarnings: string[]) {
   const [pending, start] = useTransition();
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
-  const { travel } = useStage();
+  const { travel, note } = useStage();
   const fire = () => {
     if (!action) return;
     setBusy(true);
@@ -63,7 +46,7 @@ function usePrimary(id: string, action: PrimaryAction | null, shownWarnings: str
           r = await amendAction(id, { amountMinor: action.amountMinor }, action.note);
           break;
         case "approve":
-          r = await approveAction(id, undefined, shownWarnings);
+          r = await approveAction(id, note.trim() || undefined, shownWarnings);
           break;
         case "pay":
           r = await executeAction(id, action.rail as Rail);
@@ -125,20 +108,22 @@ const buttonClass = (a: PrimaryAction) => (a.kind === "reject" ? "btn btn-danger
  * evidence and offers the one action that moves the request on. On phones a sticky bar above the bottom nav
  * carries the same action once the card has scrolled away.
  */
-export function DecisionCard({ id, decision, perms, approveRefusal, shownWarnings = [] }: { id: string; decision: Decision; perms: Perms; approveRefusal?: string | null; shownWarnings?: string[] }) {
+export function DecisionCard({ id, decision, perms, approveRefusal, shownWarnings = [], deciding }: { id: string; decision: Decision; perms: Perms; approveRefusal?: string | null; shownWarnings?: string[]; deciding?: string | null }) {
   const tone = TONE[decision.tone];
-  const action = decision.action && allowed(decision.action, perms, approveRefusal) ? decision.action : null;
+  const action = decision.action && allowedAction(decision.action, perms, approveRefusal) ? decision.action : null;
   const { fire, pending, busy } = usePrimary(id, action, shownWarnings);
-  const ref = useRef<HTMLElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   const [cardVisible, setCardVisible] = useState(true);
 
+  // The phone bar takes over exactly when the card's own button leaves the screen (above the bottom nav), so the
+  // primary action is on screen once, never twice.
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.2 });
+    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.5, rootMargin: "0px 0px -51px 0px" });
     io.observe(el);
     return () => io.disconnect();
-  }, []);
+  }, [action]);
 
   const waiting = decision.action && !action ? (decision.action.kind === "approve" && approveRefusal ? approveRefusal : "Someone with the right role takes this step.") : null;
   const evidenceLink = decision.evidenceLink;
@@ -146,7 +131,6 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
   return (
     <>
       <section
-        ref={ref}
         aria-label="Decision"
         className="mt-4 flex flex-col gap-4 rounded-md bg-sheet py-4 pl-5 pr-5 sm:flex-row sm:items-center sm:justify-between sm:pl-6"
         style={{ boxShadow: `inset 4px 0 0 ${tone.rule}`, background: `linear-gradient(${tone.soft}, ${tone.soft}), var(--sheet)` }}
@@ -170,11 +154,13 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
               </>
             ) : null}
           </p>
+          {decision.note ? <p className="mt-1 pl-[26px] text-ink">{decision.note}</p> : null}
+          {deciding ? <p className="mt-2 pl-[26px] text-xs leading-4 text-ink-soft">{deciding}</p> : null}
           {waiting ? <p className="mt-1 pl-[26px] text-xs text-ink-soft">{waiting}</p> : null}
         </div>
         {action ? (
-          <div className="shrink-0 pl-[26px] sm:pl-0">
-            <button type="button" className={buttonClass(action)} disabled={pending} onClick={fire}>
+          <div ref={ref} className={`shrink-0 pl-[26px] sm:pl-0 ${cardVisible ? "" : "max-lg:invisible"}`}>
+            <button type="button" className={`${buttonClass(action)} pointer-coarse:h-11!`} disabled={pending} onClick={fire}>
               {busy ? busyLabel(action) : action.label}
             </button>
           </div>
@@ -192,7 +178,7 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
               <p className="min-w-0 truncate text-xs font-medium" style={{ color: tone.text }}>
                 {decision.title}
               </p>
-              <button type="button" className={`${buttonClass(action)} shrink-0`} disabled={pending} onClick={fire} tabIndex={cardVisible ? -1 : 0}>
+              <button type="button" className={`${buttonClass(action)} shrink-0 pointer-coarse:h-11!`} disabled={pending} onClick={fire} tabIndex={cardVisible ? -1 : 0}>
                 {busy ? busyLabel(action) : action.label}
               </button>
             </div>
