@@ -2,13 +2,15 @@ import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
-import { getBusiness } from "@/lib/queries";
+import { getBusiness, getObligationDetail } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { viewRun } from "@/lib/engine/runs";
 import { formatDate, formatMoney, humaniseActor, pluralise, railLabel, stateLabel } from "@/lib/format";
 import { PageHeader, Panel, RailTag } from "@/components/ui";
 import { ApproveItem, CancelRun, ReleaseRun, RemoveItem } from "@/components/RunActions";
 import { RunRemittances } from "@/components/RunRemittances";
+import { runLineStatement } from "@/components/check-statement";
+import { readingFor } from "@/components/reader-view";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Payment run" };
@@ -33,6 +35,19 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const short = totals.some((t) => t.short);
   const waiting = items.filter((i) => i.state === "awaiting_approval").length;
   const canApproveHere = items.some((i) => i.canApprove);
+  // The reader's concern or low confidence, as the request page states it. A release does not read this: it is here so the
+  // person is not asked to release what the request page would have warned them about.
+  const db = getDb();
+  const reading = new Map(
+    draft
+      ? items.flatMap((i) => {
+          const d = getObligationDetail(i.obligationId, db);
+          const line = d ? runLineStatement({ rules: d.policyRules, reader: readingFor(d, db).reader }) : null;
+          return line ? [[i.obligationId, line] as const] : [];
+        })
+      : [],
+  );
+  const readerOnPay = items.filter((i) => i.plan === "pay" && reading.has(i.obligationId)).length;
   // What a release would actually do, in words: what is paid, and what is left for its own page and why.
   const leftWhy = [
     payNow.leftByReason.warning ? `${payNow.leftByReason.warning} carry${payNow.leftByReason.warning === 1 ? "es" : ""} a warning or only the vendor's own support, which a person reads first` : null,
@@ -41,7 +56,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     payNow.leftByReason.changed ? `${payNow.leftByReason.changed} changed amount since being added` : null,
     payNow.leftByReason.state ? `${payNow.leftByReason.state} ${payNow.leftByReason.state === 1 ? "is" : "are"} no longer payable` : null,
   ].filter(Boolean);
-  const confirmText = `${payNow.count ? `Pay ${pluralise(payNow.count, "payment")} now${payNow.approving ? `, approving ${payNow.approving} that ${payNow.approving === 1 ? "is" : "are"} waiting` : ""}.` : "Nothing in this run can be paid now."}${payNow.left ? ` ${payNow.left} will be left for ${payNow.left === 1 ? "its" : "their"} own ${payNow.left === 1 ? "page" : "pages"} and not paid: ${leftWhy.join("; ")}.${canApproveHere ? " Approve them here first to include them." : ""}` : ""} Each payment is checked again just before it goes; anything that changed is skipped, not paid.`;
+  const confirmText = `${payNow.count ? `Pay ${pluralise(payNow.count, "payment")} now${payNow.approving ? `, approving ${payNow.approving} that ${payNow.approving === 1 ? "is" : "are"} waiting` : ""}.` : "Nothing in this run can be paid now."}${payNow.left ? ` ${payNow.left} will be left for ${payNow.left === 1 ? "its" : "their"} own ${payNow.left === 1 ? "page" : "pages"} and not paid: ${leftWhy.join("; ")}.${canApproveHere ? " Approve them here first to include them." : ""}` : ""}${readerOnPay ? ` ${readerOnPay} of the payments going out ${readerOnPay === 1 ? "carries" : "carry"} a reader concern or low confidence that a release does not stop for; read ${readerOnPay === 1 ? "it" : "them"} on the lines first.` : ""} Each payment is checked again just before it goes; anything that changed is skipped, not paid.`;
   const canBuild = !viewer || viewer.can("build_run");
   const byCurrency = new Map<string, number>();
   for (const t of totals) byCurrency.set(t.currency, (byCurrency.get(t.currency) ?? 0) + t.totalMinor + t.feeMinor);
@@ -117,6 +132,16 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                     <td className={draft ? (i.changed || i.approvalNote || i.warnings.length ? "text-attention" : "text-ink-soft") : ITEM_TONE[i.status]}>
                       {draft ? (i.changed ? "amount changed since added; will be skipped" : i.approvalNote ? i.approvalNote : stateLabel(i.state ?? "")) : ITEM_LABEL[i.status] ?? i.status}
                       {draft && !i.changed && !i.approvalNote && i.warnings.length ? <span className="block text-xs text-attention">Has {i.warnings.length === 1 ? "a warning" : `${i.warnings.length} warnings`}; release leaves it for its own page unless it is approved here first: {i.warnings.join("; ")}</span> : null}
+                      {draft && reading.get(i.obligationId) ? (
+                        <span className="block text-xs text-attention">
+                          {reading.get(i.obligationId)!.chips.map((c) => (
+                            <span key={c} className="dense mr-1.5 inline-block whitespace-nowrap rounded-sm px-1.5 align-[1px]" style={{ background: "var(--sheet)", boxShadow: "inset 0 0 0 1px var(--attention)" }}>
+                              {c}
+                            </span>
+                          ))}
+                          {reading.get(i.obligationId)!.note}
+                        </span>
+                      ) : null}
                       {draft && i.leftWhy === "second" ? <span className="block text-xs text-attention">Needs a second approver as well; release leaves it for its own page</span> : null}
                       {!draft && i.message ? <span className="block text-xs text-ink-soft">{i.message}</span> : null}
                     </td>

@@ -15,6 +15,9 @@ import { xeroBillRows } from "../accounting/xeroBills";
 import { paidSummary } from "../queries";
 import { getDailyClose, signOffDailyClose } from "./dailyClose";
 import { markReturnedByHand } from "./books";
+import { getObligationDetail } from "../queries";
+import { readingFor } from "../../components/reader-view";
+import { runLineStatement } from "../../components/check-statement";
 import { resetRails } from "../rails";
 
 /** Practitioner round seven (PR7-n): fixes to what round six left. */
@@ -197,5 +200,20 @@ describe("PR7-6: the Daily close shows one line for one job and one line for one
     // Sign-off records every request a folded line stands for.
     const c = close();
     signOffDailyClose(db, DEMO_BUSINESS_ID, "USD", "user:daniel", c.throughSeq);
+  });
+});
+
+describe("NEW-10: a payment run line carries the reader concern the request page states", () => {
+  it("takes the reading from the same place as the request page, so a recorded concern shows on the run line", () => {
+    const d = getObligationDetail(story.paypal, db)!;
+    const { reader } = readingFor(d, db);
+    expect(reader).toMatchObject({ recorded: true });
+    expect(reader!.concerns.length + reader!.missing.length).toBeGreaterThan(0);
+    const line = runLineStatement({ rules: d.policyRules, reader })!;
+    expect(line.chips[0]).toMatch(/reader concern/);
+    expect(line.note).toMatch(/The rules did not see this run\./);
+    // Ana's request, the one the design review found quiet on the run page, says the same.
+    const ana = getObligationDetail(story.stellar, db)!;
+    expect(runLineStatement({ rules: ana.policyRules, reader: readingFor(ana, db).reader })?.chips.join(" ")).toMatch(/reader concern|Low confidence/);
   });
 });

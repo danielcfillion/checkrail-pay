@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkStatement, firstClause, type ReaderView } from "./check-statement";
+import { checkStatement, firstClause, runLineStatement, type ReaderView } from "./check-statement";
 import { decide, type DecisionInput } from "./decision-model";
 
 const pass = (ruleId: string, message = "ok") => ({ ruleId, passed: true, severity: "info", message });
@@ -116,5 +116,29 @@ describe("the approval band", () => {
   it("says it on the other approval reasons too", () => {
     const d = decide({ ...base, policyReasons: ["First payment to this vendor"], reader: { confidence: 90, concerns: [], missing: ["Invoice"], recorded: false } });
     expect(d.evidence).toMatch(/^Rules passed, but the reader wants 1 missing record: Invoice\./);
+  });
+});
+
+describe("runLineStatement: what a payment run line says about the reader", () => {
+  it("says nothing when the reader has nothing open", () => {
+    expect(runLineStatement({ rules: [pass("a")], reader: clean })).toBeNull();
+    expect(runLineStatement({ rules: [pass("a")], reader: null })).toBeNull();
+  });
+
+  it("gives the request page's own sentence and a concern chip for a recorded run the rules did not see", () => {
+    const reader: ReaderView = { confidence: 25, concerns: [PAYPAL_FLAG], missing: [], recorded: true };
+    const line = runLineStatement({ rules: [pass("a")], reader })!;
+    expect(line.note).toBe(checkStatement({ rules: [pass("a")], reader }).text);
+    expect(line.note).toMatch(/the recorded Claude run raised 1 concern.*The rules did not see this run\.$/);
+    expect(line.chips).toEqual(["1 reader concern", "Low confidence 25%"]);
+  });
+
+  it("names low confidence alone, and keeps the reader chip when a rule also warns", () => {
+    const low = runLineStatement({ rules: [pass("a")], reader: { confidence: 60, concerns: [], missing: [], recorded: false } })!;
+    expect(low.chips).toEqual(["Low confidence 60%"]);
+    expect(low.note).toBe("Rules passed, but the reader's confidence is 60%, below the 75% threshold.");
+    const both = runLineStatement({ rules: [warn("tax_form", "No W-9")], reader: { confidence: 90, concerns: ["Total differs"], missing: [], recorded: false } })!;
+    expect(both.chips).toEqual(["1 reader concern"]);
+    expect(both.note).toBe("Rules passed, with 1 warning, and the reader raised 1 concern: Total differs. Confidence 90%.");
   });
 });
