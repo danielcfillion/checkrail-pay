@@ -33,7 +33,13 @@ export default async function OverviewPage() {
       <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Checkrail Pay"}</h1>
       <p className="mt-0.5 text-ink-soft">Checks every supplier payment before money moves.</p>
       <p className="mt-2">
-        {o.counts.needsAction === 0 ? "Nothing needs you right now." : `${pluralise(o.counts.needsAction, "request")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+        {o.counts.needsAction === 0 ? (
+          "Nothing needs you right now."
+        ) : (
+          <Link href="/obligations?filter=needs_action" className="link">
+            {`${pluralise(o.counts.needsAction, "request")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+          </Link>
+        )}
         {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}
         {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
       </p>
@@ -66,10 +72,6 @@ export default async function OverviewPage() {
         }
       />
 
-      <div className="mt-6">
-        <MoneyOut points={points} currency={base} />
-      </div>
-
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="Needs you" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
           {o.needsAction.length ? <NeedsYouList rows={o.needsAction} /> : <div className="px-4 py-8 text-center text-ink-soft">Nothing waiting. New requests appear here when the agent reads them.</div>}
@@ -97,6 +99,11 @@ export default async function OverviewPage() {
             )}
           </Panel>
         </div>
+      </div>
+
+      {/* The decisions come before the history: Money out is context, Needs you is the job. */}
+      <div className="mt-6">
+        <MoneyOut points={points} currency={base} />
       </div>
 
       {!o.business ? (
