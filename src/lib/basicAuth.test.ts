@@ -93,6 +93,27 @@ describe("middleware", () => {
     warn.mockRestore();
   });
 
+  it("answers a missing login with a static HTML page and the same 401 and challenge (DES-13)", async () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const res = middleware(req());
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("<h1>Checkrail Pay</h1>");
+    expect(body).toContain("Checks every supplier payment before money moves.");
+    expect(body).toContain("Devpost testing instructions");
+    // Nothing from the request is written into it: a hostile path, query and headers give the same bytes.
+    const hostile = middleware(req({ host: "evil.example", referer: "<script>alert(1)</script>", "user-agent": "<img src=x>" }, "/%3Cscript%3Ealert(1)%3C/script%3E?x=<b>"));
+    expect(hostile.status).toBe(401);
+    expect(await hostile.text()).toBe(body);
+    expect(body).not.toMatch(/evil\.example|alert\(1\)|<img/);
+    // A wrong password is still a 401 with the challenge, and still counts against the throttle.
+    const wrong = middleware(req({ authorization: basic("judge", "wrong") }));
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
+  });
+
   it("lets a correct password in over the limit only where the login is published (SEC5-3)", () => {
     env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
     const from = (pw: string) => req({ authorization: basic("judge", pw), "x-forwarded-for": "203.0.113.99" });

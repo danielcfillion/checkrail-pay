@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
+import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
 
 /** Set on public vendor pages so the layout renders them without the app's navigation or business data. */
 export const PUBLIC_HEADER = "x-checkrail-public";
@@ -72,7 +73,7 @@ export function middleware(req: NextRequest) {
       // visitor's address behind the host's proxies, so CHECKRAIL_CLIENT_IP_HEADER can be set from evidence (render.yaml).
       if (process.env.CHECKRAIL_LOG_CLIENT_IP === "1") console.warn("[checkrail] failed login", { key: ip, xForwardedFor: req.headers.get("x-forwarded-for"), cfConnectingIp: req.headers.get("cf-connecting-ip"), trueClientIp: req.headers.get("true-client-ip"), xRealIp: req.headers.get("x-real-ip") });
     }
-    if (!who) return new NextResponse("Authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"' } });
+    if (!who) return new NextResponse(AUTH_REQUIRED_HTML, { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"', "Content-Type": "text/html; charset=utf-8" } });
     actor = who.user;
     role = who.role;
   } else {
