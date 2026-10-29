@@ -13,6 +13,8 @@ import { confirmSettlement, executeObligation } from "./orchestrator";
 import { agedPayables } from "./books";
 import { xeroBillRows } from "../accounting/xeroBills";
 import { paidSummary } from "../queries";
+import { getDailyClose, signOffDailyClose } from "./dailyClose";
+import { markReturnedByHand } from "./books";
 import { resetRails } from "../rails";
 
 /** Practitioner round seven (PR7-n): fixes to what round six left. */
@@ -146,5 +148,54 @@ describe("PR6-6 follow-up: the fee on a returned payout is left out only for Pay
     expect(paidSummary([row("paypal", "refunded")], "USD")).toEqual({ paidMinor: 0, feesMinor: 0, refundedMinor: 42_500 });
     for (const rail of ["bank_file", "wise", "stellar"]) expect(paidSummary([row(rail, "refunded")], "USD")).toEqual({ paidMinor: 0, feesMinor: 850, refundedMinor: 42_500 });
     expect(paidSummary([row("paypal", "settled"), row("bank_file", "refunded")], "USD")).toEqual({ paidMinor: 42_500, feesMinor: 1_700, refundedMinor: 42_500 });
+  });
+});
+
+describe("PR7-6: the Daily close shows one line for one job and one line for one vendor's returns", () => {
+  const close = () => getDailyClose(db, DEMO_BUSINESS_ID, "USD");
+  const rosaSheet = () =>
+    ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "job_completion", rawInput: "Trip closed. Lead guide Rosa Villanueva, USD 190 (JOB-CEB2D-1024). Release payment.", evidence: [{ kind: "job_sheet", label: "Trip sheet JOB-CEB2D-1024", amountMinor: 19_000, currency: "USD", reference: "JOB-CEB2D-1024", excerpt: "Rosa Villanueva, USD 190.00. Completed and signed off." }], actor: "system:booking-webhook" });
+
+  it("folds two blocked copies of one job, and the original, into one line, and still counts both as held back", async () => {
+    const original = await rosaSheet();
+    const copy1 = await rosaSheet();
+    const copy2 = await rosaSheet();
+    expect([ob(original).state, ob(copy1).state, ob(copy2).state]).toEqual(["approved", "blocked", "blocked"]);
+    const before = getDailyClose(db, DEMO_BUSINESS_ID, "USD");
+    const lines = before.attention.filter((a) => a.kind === "blocked" && a.sourceRef === "JOB-CEB2D-1024");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].ids?.sort()).toEqual([copy1, copy2].sort());
+    expect(lines[0].note).toMatch(/^2 requests for this job are blocked\. /);
+    expect(lines[0].amountMinor).toBe(19_000);
+    // The two requests are both money held back: the totals are not folded.
+    const seedBlocked = before.attention.filter((a) => a.kind === "blocked" && a.sourceRef !== "JOB-CEB2D-1024").length;
+    expect(before.totals.stoppedCount).toBe(seedBlocked + 2);
+  });
+
+  it("folds payouts that came back for one vendor into one line, and keeps another vendor's apart", async () => {
+    const lan = as("lan");
+    const bill = createBill(db, DEMO_BUSINESS_ID, lan, "ven_dao", { kind: "invoice", reference: "INV-DML-7001", totalMinor: 85_000, currency: "USD" });
+    const paid: string[] = [];
+    for (const amount of [42_500, 42_500]) {
+      const pay = await payBill(db, DEMO_BUSINESS_ID, lan, bill, amount);
+      approveObligation(db, pay, "user:minh");
+      await executeObligation(db, pay, { actor: "user:minh" });
+      await confirmSettlement(db, pay);
+      paid.push(pay);
+    }
+    await executeObligation(db, story.paypal, { actor: "user:minh" });
+    await confirmSettlement(db, story.paypal);
+    paid.forEach((id, n) => markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), id, `5TXDAO${n}ABCDEF`));
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), story.paypal, "5TXMARIA180ABC");
+    const returned = close().attention.filter((a) => a.kind === "returned");
+    expect(returned).toHaveLength(2);
+    const dao = returned.find((a) => a.vendorName === "Dao Mountain Lodge")!;
+    expect(dao.ids?.sort()).toEqual([...paid].sort());
+    expect(dao.amountMinor).toBe(85_000);
+    expect(dao.note).toMatch(/^2 payments came back to the business/);
+    expect(returned.find((a) => a.vendorName === "Maria Santos")?.ids).toEqual([story.paypal]);
+    // Sign-off records every request a folded line stands for.
+    const c = close();
+    signOffDailyClose(db, DEMO_BUSINESS_ID, "USD", "user:daniel", c.throughSeq);
   });
 });

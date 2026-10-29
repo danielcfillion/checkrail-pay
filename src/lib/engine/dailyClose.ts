@@ -85,6 +85,9 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   const started = new Map<string, { actor: string; at: string }>();
   for (const e of entries) if (e.obligationId && e.toState === "execution_pending") started.set(e.obligationId, { actor: e.actor, at: e.createdAt });
 
+  // What may fold into one line (see foldByReason): payments approved over the same warnings for one vendor, copies of
+  // one job that were blocked, payouts that came back for one vendor.
+  const foldKeys = new Map<string, string>();
   const paidByAgent: CloseItem[] = [];
   const paidByPeople: CloseItem[] = [];
   const inFlight: CloseItem[] = [];
@@ -139,13 +142,24 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   for (const e of entries) {
     if (!e.obligationId) continue;
     const detail = e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : {};
-    if (e.action === "settlement.returned") flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again (from the payment page, or the vendor's page when it was part of a bill).`);
+    if (e.action === "settlement.returned") {
+      flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again (from the payment page, or the vendor's page when it was part of a bill).`);
+      // Payouts that came back for one vendor are one thing to deal with.
+      foldKeys.set(`returned:${e.obligationId}`, `${byId.get(e.obligationId)?.vendorId ?? e.obligationId}`);
+    }
     if (e.action === "autopilot.refused") flag("refused", e.obligationId, e.createdAt, String(detail.reason ?? "Policy refused at the last moment. No money moved."));
     if (e.action === "autopilot.cancelled") flag("cancelled_release", e.obligationId, e.createdAt, `Scheduled release cancelled by ${e.actor.replace(/^user:/, "")}.`);
     if (e.action === "execution.failed" || e.action === "settlement.failed") {
       if (byId.get(e.obligationId)?.state === "failed") flag("failed", e.obligationId, e.createdAt, String(detail.error ?? detail.externalStatus ?? "The provider rejected the payment."));
     }
-    if (e.toState === "blocked" && byId.get(e.obligationId)?.state === "blocked") flag("blocked", e.obligationId, e.createdAt, byId.get(e.obligationId)?.blockedReason ?? null);
+    if (e.toState === "blocked" && byId.get(e.obligationId)?.state === "blocked") {
+      const blocked = byId.get(e.obligationId)!;
+      flag("blocked", e.obligationId, e.createdAt, blocked.blockedReason ?? null);
+      // Copies of one job are one line with the original they copy: the key is the original named in the reason,
+      // else the vendor's reference, else the request itself.
+      const original = byId.get(blocked.blockedReason?.match(/\b(obl_[a-z0-9]+)\b/i)?.[1] ?? "") ?? blocked;
+      foldKeys.set(`blocked:${e.obligationId}`, original.vendorId && original.sourceRef ? `${original.vendorId}|${original.sourceRef.toUpperCase()}` : original.id);
+    }
   }
 
   // Payments that went out but deserve a second look: a first payment to a vendor, an amount far above
@@ -158,8 +172,6 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   // One line per vendor for things that are about the vendor, not the payment: a first payment, a missing tax form.
   const newVendorSeen = new Set<string>();
   const taxWarnedSeen = new Set<string>();
-  // Payments approved over the same warnings for the same vendor are one line, not one per payment.
-  const foldKeys = new Map<string, string>();
   for (const [id, s] of started) {
     const o = byId.get(id);
     if (!o || !o.vendorId || !["sent", "settled"].includes(o.state)) continue;
@@ -219,7 +231,8 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
 
   // Totals in the base currency at reference rates.
   const sum = (xs: CloseItem[]) => xs.reduce((a, x) => a + toBaseOrZero(x.amountMinor ?? 0, x.currency, baseCurrency), 0);
-  const stopped = lines.filter((a) => a.kind === "blocked" || a.kind === "refused");
+  // Every blocked or refused request counts as money held back, however many lines they were folded into.
+  const stopped = attention.filter((a) => a.kind === "blocked" || a.kind === "refused");
 
   return {
     since,
@@ -250,8 +263,9 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
 const OPERATOR_EVIDENCE = /^Evidence supplied by operator/;
 
 /**
- * Merge attention lines that carry the same vendor and the same reason into the newest of them: its reference
- * lists every payment, its amount is their total when they share a currency, and `ids` names them all.
+ * Merge attention lines that share a fold key into the newest of them: its reference lists every request or payment, and
+ * `ids` names them all. Amounts are added up where they are money moved or returned and the currency is the same; copies of
+ * one blocked job keep the one amount, because the money was requested once.
  */
 function foldByReason(items: AttentionItem[], keys: Map<string, string>): AttentionItem[] {
   const out: AttentionItem[] = [];
@@ -270,10 +284,15 @@ function foldByReason(items: AttentionItem[], keys: Map<string, string>): Attent
       continue;
     }
     head.ids!.push(it.id);
-    head.sourceRef = [head.sourceRef, it.sourceRef].filter(Boolean).join(", ") || null;
-    head.amountMinor = head.currency === it.currency && head.amountMinor !== null && it.amountMinor !== null ? head.amountMinor + it.amountMinor : null;
-    if (head.currency !== it.currency) head.currency = null;
-    head.note = head.note?.replace(/^Approved over (\d+ warnings?)( on \d+ payments)?/, `Approved over $1 on ${head.ids!.length} payments`) ?? null;
+    const n = head.ids!.length;
+    if (it.sourceRef && !head.sourceRef?.split(", ").includes(it.sourceRef)) head.sourceRef = [head.sourceRef, it.sourceRef].filter(Boolean).join(", ");
+    if (it.kind !== "blocked") {
+      head.amountMinor = head.currency === it.currency && head.amountMinor !== null && it.amountMinor !== null ? head.amountMinor + it.amountMinor : null;
+      if (head.currency !== it.currency) head.currency = null;
+    }
+    if (it.kind === "approved_over_warning") head.note = head.note?.replace(/^Approved over (\d+ warnings?)( on \d+ payments)?/, `Approved over $1 on ${n} payments`) ?? null;
+    else if (it.kind === "blocked") head.note = `${n} requests for this job are blocked. ${head.note?.replace(/^\d+ requests for this job are blocked\. /, "") ?? ""}`.trim();
+    else if (it.kind === "returned") head.note = `${n} payments came back to the business: the vendor is owed again. Check their details, then pay them again (from each payment page, or the vendor's page when they were part of a bill).`;
   }
   return out;
 }
