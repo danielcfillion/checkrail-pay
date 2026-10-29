@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import { viewRemittance } from "@/lib/engine/vendorLinks";
+import { PublicFrame } from "@/components/PublicFrame";
 import { VendorHeader } from "@/components/VendorHeader";
 import { PrintButton } from "@/components/PrintButton";
 
@@ -16,11 +17,11 @@ export default async function RemitPage({ params }: { params: Promise<{ token: s
   const r = viewRemittance(getDb(), token);
   if (!r) {
     return (
-      <>
+      <PublicFrame>
         <VendorHeader payer={null} />
         <h1 className="text-2xl font-semibold tracking-tight">Link not available</h1>
         <p className="mt-2 text-ink-soft">This link is not valid or has expired.</p>
-      </>
+      </PublicFrame>
     );
   }
   const t = T[r.language];
@@ -36,7 +37,7 @@ export default async function RemitPage({ params }: { params: Promise<{ token: s
     [t.pref, r.providerRef],
   ];
   return (
-    <>
+    <PublicFrame lang={r.language}>
       <VendorHeader payer={r.businessName} aside={<PrintButton label={t.save} />} />
       <article className="print-sheet panel p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -84,6 +85,6 @@ export default async function RemitPage({ params }: { params: Promise<{ token: s
           {t.issued} {r.businessName}, {r.date}.
         </p>
       </article>
-    </>
+    </PublicFrame>
   );
 }

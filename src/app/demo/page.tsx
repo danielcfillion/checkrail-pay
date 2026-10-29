@@ -186,7 +186,7 @@ export default function DemoPage() {
       <AutoRefresh seconds={10} />
       <PageHeader
         title="Demo guide"
-        lede="Ten steps, about ten minutes. Each step says what to do and what happens. Everything runs on simulated rails with the rule-based reader, so no keys are needed."
+        lede="Checkrail Pay checks every supplier payment before money moves. Ten steps, about ten minutes. Each step says what to do and what happens. Everything runs on simulated rails with the rule-based reader, so no keys are needed."
         actions={<ResetDemoButton />}
       >
         <DemoProgressCount />

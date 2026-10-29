@@ -120,7 +120,7 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.5, rootMargin: "0px 0px -51px 0px" });
+    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.5, rootMargin: "0px 0px -57px 0px" });
     io.observe(el);
     return () => io.disconnect();
   }, [action]);
@@ -140,7 +140,14 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
             <span className="mt-[3px]">
               <ToneIcon icon={tone.icon} />
             </span>
-            <span className="min-w-0">{decision.title}</span>
+            <span className="min-w-0">
+              {decision.title}
+              {decision.chip ? (
+                <span className="dense ml-2 inline-block whitespace-nowrap rounded-sm px-1.5 align-[1px]" style={{ background: "var(--sheet)", color: tone.text, boxShadow: `inset 0 0 0 1px ${tone.rule}` }}>
+                  {decision.chip}
+                </span>
+              ) : null}
+            </span>
           </h2>
           <p className="mt-1 pl-[26px] text-ink">
             {decision.evidence}
@@ -159,10 +166,12 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
           {waiting ? <p className="mt-1 pl-[26px] text-xs text-ink-soft">{waiting}</p> : null}
         </div>
         {action ? (
-          <div ref={ref} className={`shrink-0 pl-[26px] sm:pl-0 ${cardVisible ? "" : "max-lg:invisible"}`}>
-            <button type="button" className={`${buttonClass(action)} pointer-coarse:h-11!`} disabled={pending} onClick={fire}>
+          <div ref={ref} className={`shrink-0 pl-[26px] sm:max-w-[320px] sm:pl-0 sm:text-right ${cardVisible ? "" : "max-lg:invisible"}`}>
+            {/* On a phone a long label wraps instead of running off the card. */}
+            <button type="button" className={`${buttonClass(action)} max-sm:h-auto! max-sm:whitespace-normal! max-sm:py-2! max-sm:text-left pointer-coarse:h-11!`} disabled={pending} onClick={fire}>
               {busy ? busyLabel(action) : action.label}
             </button>
+            {decision.actionHint && action.kind === "approve" ? <p className="mt-1.5 text-xs leading-4 text-ink-soft">{decision.actionHint}</p> : null}
           </div>
         ) : null}
       </section>
@@ -170,16 +179,16 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
       {action ? (
         <>
           <div
-            className={`fixed inset-x-0 bottom-[51px] z-30 border-t bg-sheet px-4 py-2.5 transition-transform motion-reduce:transition-none md:bottom-0 md:left-16 lg:hidden ${cardVisible ? "pointer-events-none translate-y-[calc(100%+51px)]" : "translate-y-0"}`}
+            className={`fixed inset-x-0 bottom-[57px] z-30 border-t bg-sheet px-4 py-2.5 transition-transform motion-reduce:transition-none md:bottom-0 md:left-16 lg:hidden ${cardVisible ? "pointer-events-none translate-y-[calc(100%+57px)]" : "translate-y-0"}`}
             style={{ boxShadow: `inset 0 3px 0 ${tone.rule}`, borderColor: "var(--rule)" }}
             aria-hidden={cardVisible}
           >
             <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-3">
               <p className="min-w-0 truncate text-xs font-medium" style={{ color: tone.text }}>
-                {decision.title}
+                {decision.barText ?? decision.title}
               </p>
               <button type="button" className={`${buttonClass(action)} shrink-0 pointer-coarse:h-11!`} disabled={pending} onClick={fire} tabIndex={cardVisible ? -1 : 0}>
-                {busy ? busyLabel(action) : action.label}
+                {busy ? busyLabel(action) : action.kind === "approve" ? "Approve" : action.label}
               </button>
             </div>
           </div>

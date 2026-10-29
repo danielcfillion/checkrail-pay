@@ -6,6 +6,7 @@ import type { ObligationState } from "@/lib/domain/types";
 import { ObligationTable } from "@/components/ObligationList";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { pluralise } from "@/lib/format";
+import { defaultInboxFilter } from "@/components/inbox-filter";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Inbox" };
@@ -19,10 +20,12 @@ const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }>
 ];
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
-  const { filter = "all" } = await searchParams;
+  const { filter: asked } = await searchParams;
   const viewer = await getViewer();
   const mineIds = viewer ? new Set(runAs(viewer.login, () => waitingIdsFor(viewer.actor))) : null;
   const filters = mineIds ? [{ key: "mine", label: "Waiting for you" }, ...FILTERS] : FILTERS;
+  // An approver with requests waiting lands on them; everyone else, and any link that names a tab, gets what it asked for.
+  const filter = defaultInboxFilter(asked, mineIds ? mineIds.size : null);
   const active = filters.find((f) => f.key === filter) ?? FILTERS[0];
   const rows = active.key === "mine" && mineIds ? listObligations({ limit: 1000 }).filter((r) => mineIds.has(r.id)) : listObligations({ states: active.states, limit: 500 });
   const counts: Record<string, number> = Object.fromEntries(FILTERS.map((f) => [f.key, listObligations({ states: f.states, limit: 1000 }).length]));
@@ -47,7 +50,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           return (
             <Link
               key={f.key}
-              href={f.key === "all" ? "/obligations" : `/obligations?filter=${f.key}`}
+              href={`/obligations?filter=${f.key}`}
               aria-current={on ? "page" : undefined}
               className={`-mb-px flex min-h-11 items-center gap-1.5 border-b-2 px-3 py-2 ${on ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink"}`}
             >
@@ -64,7 +67,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           title={active.key === "all" ? "No requests yet" : active.key === "mine" ? "Nothing waiting for you" : `Nothing ${active.label.toLowerCase()}`}
           body={active.key === "all" ? "Paste an invoice, a job sheet or a chat message and the agent will read it." : "Switch filter, or add a new request."}
           action={
-            <Link href={active.key === "mine" ? "/obligations" : "/obligations/new"} className="btn">
+            <Link href={active.key === "mine" ? "/obligations?filter=all" : "/obligations/new"} className="btn">
               {active.key === "mine" ? "See everything" : "New request"}
             </Link>
           }

@@ -50,15 +50,11 @@ export const dynamic = "force-dynamic";
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   // Vendor-facing pages (onboarding, evidence upload) carry a token, not a login: no navigation, no business data.
   if (await isPublicPage()) {
+    // The skip link and <main> come from PublicFrame, which each of these pages renders in its own language.
     return (
-      <html lang="en" className={archivo.variable}>
+      <html lang="en" className={archivo.variable} suppressHydrationWarning>
         <body>
-          <a href="#main" className="skip-link">
-            Skip to content
-          </a>
-          <ToastProvider>
-            <main id="main" tabIndex={-1} className="print-page mx-auto w-full max-w-xl px-4 py-10 focus:outline-none">{children}</main>
-          </ToastProvider>
+          <ToastProvider bare>{children}</ToastProvider>
         </body>
       </html>
     );

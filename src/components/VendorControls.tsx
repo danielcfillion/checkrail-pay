@@ -114,7 +114,11 @@ export function PendingChange({ c, canVerify, mine }: { c: ChangeView; canVerify
           {c.lines.map(([label, proposed, current]) => (
             <tr key={label} className="border-t align-top hairline">
               <td className="py-1 pr-3 text-ink-soft">{label}</td>
-              <td className={`num py-1 pr-3 break-all ${c.kind === "payout" && proposed !== (current ?? "") ? "font-medium text-attention" : ""}`}>{proposed || "none"}</td>
+              <td className={`num py-1 pr-3 break-all ${c.kind === "payout" && proposed !== (current ?? "") ? "font-medium text-attention" : ""}`}>
+                {proposed || "none"}
+                {/* A word as well as amber, so a changed value is not told by colour alone. */}
+                {c.kind === "payout" && proposed !== (current ?? "") ? <span className="dense ml-2 inline-block whitespace-nowrap rounded-sm px-1.5 font-sans" style={{ background: "var(--attention-soft)" }}>Changed</span> : null}
+              </td>
               {c.kind === "payout" ? <td className="num py-1 break-all text-ink-soft">{current || "none"}</td> : null}
             </tr>
           ))}
@@ -141,6 +145,7 @@ export function PendingChange({ c, canVerify, mine }: { c: ChangeView; canVerify
             <button type="button" className="btn btn-primary" disabled={pending || !method} onClick={() => run(() => verifyVendorChangeAction(c.id, method, note || undefined))}>
               {pending ? "Saving" : "Verified, use these details"}
             </button>
+            {!method ? <p className="basis-full text-xs text-ink-soft">Choose how you checked first.</p> : null}
             <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run(() => rejectVendorChangeAction(c.id, note || undefined))}>
               Turn down
             </button>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { entryParts, formatDateRange, humaniseEntry, parseDateInput, timeAgoShort } from "./format";
+import { entryParts, formatDateRange, groupThousands, humaniseEntry, parseDateInput, timeAgoShort } from "./format";
 
 describe("dates as people read them (DS2-17)", () => {
   it("shows a departure as one range", () => {
@@ -32,5 +32,18 @@ describe("engine strings as people read them (DS2-16)", () => {
     expect(humaniseEntry("ai:rules", "ai.interpreted")).toBe("The rule-based reader read the request");
     expect(entryParts("system:booking-webhook", "obligation.created")).toEqual({ who: "", what: "Created from the booking system" });
     expect(entryParts("system:email-ingest", "obligation.created")).toEqual({ who: "", what: "Created from the invoice inbox" });
+  });
+});
+
+describe("groupThousands", () => {
+  it("adds thousands separators to a decimal string and leaves anything else alone", () => {
+    expect(groupThousands("1000.00")).toBe("1,000.00");
+    expect(groupThousands("1020")).toBe("1,020");
+    expect(groupThousands("10800000")).toBe("10,800,000");
+    expect(groupThousands("-1234567.5")).toBe("-1,234,567.5");
+    expect(groupThousands("999.99")).toBe("999.99");
+    expect(groupThousands("n/a")).toBe("n/a");
+    expect(groupThousands(null)).toBe("");
+    expect(groupThousands(1500)).toBe("1,500");
   });
 });

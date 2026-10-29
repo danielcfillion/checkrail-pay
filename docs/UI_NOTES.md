@@ -20,6 +20,21 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 - `eslint.config.mjs` now switches off `no-require-imports` for `src/lib/rails/index.ts` only; that file's lazy `require` of the live SDKs is deliberate and I was not allowed to edit it, and the rule was failing `next build`.
 - The create-next-app SVGs in `public/` were removed.
 
+## Design review round 1 (DES-1 to DES-20)
+
+Declared deviations and decisions from the first design pass. Presentation only: no policy rule, state transition, permission or action changed.
+
+- **The approval band never says "Every check passed" over an open reader concern (DES-1).** `check-statement.ts` builds the band's sentence from the rules and the reading the page shows (the recorded Claude run when there is one, otherwise the live reader): all clear, reader concerns, low confidence, warnings, blocked. A recorded run says the rules did not see it. The Policy panel says "Every rule passed" and points at the reading when one is open. The confidence threshold is read from the rules when they name one and otherwise defaults to 75, the default in `policy.ts`.
+- **Vietnamese onboarding (DES-3, DES-14).** All vendor-facing copy is one typed structure in `src/lib/onboarding-strings.ts`; `onboarding-strings.test.ts` fails if an English key has no Vietnamese one, if a Vietnamese string is empty, English or has an em dash. The action returns an error code for the engine's English message, and the form shows it in the vendor's language, by the field, with a summary that takes focus. **The Vietnamese needs a native speaker's check before the demo video** (tone, "bạn" against "quý khách", the trust sentence, bank terms).
+- **`<html lang>` on vendor pages.** The root layout cannot see a page's search params, so `PublicFrame` puts `lang` on its own wrapper and sets `<html lang>` with a one-line script as the page is parsed (plus `HtmlLang` for client-side navigation). The server-rendered `<html>` still says `en`; a raw-HTML reader sees that. A server-side fix would need the middleware to forward the chosen language, which was out of scope.
+- **Bank country and currency are not prefilled (DES-14).** Prefilling `VN` and `VND` would store a country and currency for a vendor who only gave a PayPal email. The two fields now show "e.g. VN" and "e.g. VND" so they are not read as values; choosing a Vietnamese bank still fills both, as before.
+- **The trust sentence on the onboarding page** ("Only the business sees these details, and a bank account number is stored encrypted") is the owner's to confirm against how the hosted demo is run.
+- **Field edges (DES-10).** `--field-border` is a solid colour: #7a8794 in light (3.67:1 on white, 3.21:1 on paper) and #6b7a8a in dark (3.67:1 on the sheet, 4.04:1 on paper); `scripts/contrast-check.mjs` checks both. Placeholders use full `--ink-soft`.
+- **Status colours are not re-stepped (DES-9).** Getting amber and red 15 L* apart in a colour-blind simulation means leaving the palette in DESIGN.md (amber is already at the edge of 4.5:1 on its own tint), so it is left for a palette decision. What was fixed: toasts carry an icon and "Error", errors are `role="alert"`, a changed payout value is tagged "Changed". Every status pill still carries a word and an icon. The Money out bars are unchanged: the legend and the hover tooltip name each rail in words.
+- **Approve (DES-4).** The button names the payee and amount, a line under it says it does not send money, and the phone bar names the payee and amount. Reject and the note stay in the Actions column; moving them into the band means restructuring `ActionBar`.
+- **Daily close (DES-2, DES-6).** Below 1024 px the two columns dissolve and the panels are ordered (needs a look, waiting on you, about to go out, then what was sent). Sent payments are two-line rows on a phone. Sign off is at the end of the page on a phone and top right on desktop.
+- **Not done:** DES-20 (the overview hero labels at 14 px needs a layout pass on the five stations at 1024 px) and the demo role select that truncates "Minh (operations mana" (the persona names are shared copy).
+
 ## Verification
 
 - `npm run typecheck`: passes.

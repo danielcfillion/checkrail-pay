@@ -423,3 +423,9 @@ export function parseDateInput(text: string): string | null {
   if (m) return ymd(+m[3], +m[2], +m[1]);
   return null;
 }
+
+/** "1000.00" as "1,000.00": thousands separators on a decimal string, for amounts the books already carry as text. */
+export function groupThousands(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === "") return "";
+  return String(v).replace(/^(-?)(\d+)(\.\d+)?$/, (_m, sign: string, whole: string, frac?: string) => `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${frac ?? ""}`);
+}

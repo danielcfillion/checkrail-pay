@@ -23,6 +23,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
 import { DecisionCard } from "@/components/DecisionCard";
+import { DEFAULT_MIN_CONFIDENCE, type ReaderView } from "@/components/check-statement";
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
 import { amountAsRead, correctionLine, RECORDED_LABEL, selectRecordedReading, summaryWithoutCount } from "@/components/agent-reading";
@@ -75,8 +76,18 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
   const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
   const caption = o.state === "blocked" && o.blockedReason ? checkLineCaption(o.blockedReason, earlier) : undefined;
+  // The reading the page shows under "What the agent read" is the one the band has to agree with; it is chosen below.
+  const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
+  const newer = o.vendorId && o.sourceRef ? getDb().select({ id: obligationsTable.id }).from(obligationsTable).where(and(eq(obligationsTable.vendorId, o.vendorId), eq(obligationsTable.sourceRef, o.sourceRef), gt(obligationsTable.createdAt, o.createdAt))).get() : undefined;
+  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  const reader: ReaderView | null = recorded
+    ? { confidence: recorded.confidence, concerns: recorded.flags, missing: recorded.missing, recorded: true }
+    : o.aiConfidence !== null
+      ? { confidence: o.aiConfidence, concerns: d.aiFlags, missing: d.aiMissing, recorded: false }
+      : null;
   const decision: Decision = decide({
     state: o.state,
+    vendorName: o.vendorName,
     amountMinor: o.amountMinor,
     currency: o.currency,
     blockedReason: o.blockedReason,
@@ -89,6 +100,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
     settlement: d.settlement,
     releaseAt: o.releaseAt,
     earlier: firstId ? earlier.get(firstId) ?? null : null,
+    reader,
   });
   // An agent concern that only restates a failing amount check is the same reason twice: Policy keeps the check.
   const amountBlocked = d.policyRules.some((r) => !r.passed && r.severity === "block" && (r.ruleId === "amount_matches_evidence" || r.ruleId === "expected_amount"));
@@ -102,6 +114,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const otherBlocks = otherFailing.filter((r) => r.severity === "block").length;
   const otherWarnings = otherFailing.length - otherBlocks;
   const perm = { approve: perms?.approve ?? true, pay: perms?.pay ?? true, amend: perms?.amend ?? true };
+  const readerOpen = Boolean(reader && (reader.concerns.length + reader.missing.length > 0 || (reader.confidence !== null && reader.confidence < DEFAULT_MIN_CONFIDENCE)));
   const cardCarriesPrimary = Boolean(decision.action && allowedAction(decision.action, perm, approveRefusal));
   // "What you are deciding", as one line on the decision card.
   const deciding = ["awaiting_approval", "blocked", "needs_evidence"].includes(o.state)
@@ -115,10 +128,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
         alsoFound: { blocks: otherBlocks, warnings: otherWarnings },
       })
     : null;
-  // A live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
-  const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
-  const newer = o.vendorId && o.sourceRef ? getDb().select({ id: obligationsTable.id }).from(obligationsTable).where(and(eq(obligationsTable.vendorId, o.vendorId), eq(obligationsTable.sourceRef, o.sourceRef), gt(obligationsTable.createdAt, o.createdAt))).get() : undefined;
-  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  // `recorded` above is a live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
   const corrected = correctionLine(d.audit, o.currency);
   const toolCtx = { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length };
   const concernLine = concernsElsewhere || missingElsewhere ? `${[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. ${d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} listed under Policy.` : null;
@@ -138,7 +148,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">
               {o.vendorId ? (
-                <Link href={`/vendors/${o.vendorId}`} className="hover:underline">
+                <Link href={`/vendors/${o.vendorId}`} className={`hover:underline ${TOUCH_INLINE}`}>
                   {o.vendorName ?? "Unknown vendor"}
                 </Link>
               ) : (
@@ -283,7 +293,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           </WorkingPanel>
 
           <WorkingPanel className={ord("policy")} title="Policy">
-            <RuleChecklist rules={rules} earlier={earlier} />
+            <RuleChecklist rules={rules} earlier={earlier} readerOpen={readerOpen} />
           </WorkingPanel>
 
           <WorkingPanel className={ord("route")} title="Route">
