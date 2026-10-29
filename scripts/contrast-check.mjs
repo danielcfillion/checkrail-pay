@@ -65,6 +65,9 @@ const PAIRS = [
   ["Bank swatch on sheet (graphic)", "rail-bank", "sheet", 3],
   ["Bank swatch on sheet (as text)", "rail-bank", "sheet", 4.5],
   ["Focus ring on sheet (graphic)", "focus", "sheet", 3],
+  // The edge of a text field is the only thing that shows where to type (WCAG 1.4.11): 3:1 on the sheet and on paper.
+  ["Field border on sheet (graphic)", "field-border", "sheet", 3],
+  ["Field border on paper (graphic)", "field-border", "paper", 3],
 ];
 
 let failed = 0;
