@@ -17,6 +17,8 @@
     "@anthropic-ai/sdk": "^0.131.0",
     "@paypal/paypal-server-sdk": "^2.5.0",
     "@stellar/stellar-sdk": "^17.2.1",
+    "ag-grid-community": "36.2.0",
+    "ag-grid-react": "36.2.0",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.3",
     "next": "^15.5.28",

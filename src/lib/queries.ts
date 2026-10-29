@@ -120,14 +120,20 @@ export function listSettlements(db: Db = getDb()) {
 /** grossMinor and feeMinor are in the base currency (for totals and the chart); paid* are what actually went out. */
 export type PaymentPoint = { id: string; vendorName: string | null; sourceRef: string | null; rail: string; grossMinor: number; feeMinor: number; currency: string; paidMinor: number; paidFeeMinor: number; paidCurrency: string; settledAt: string; by: "agent" | "person" | "unknown" };
 
-/** Settled payments in the last `days`, each tagged with who started it. Feeds the overview chart. */
-export function listPaymentPoints(days = 120, db: Db = getDb()): PaymentPoint[] {
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
-  const base = getBusiness(db)?.baseCurrency ?? "USD";
+/** Who started each payment (the actor that moved it to execution_pending, the last time it happened), by obligation id. */
+export function paymentStarters(db: Db = getDb()): Map<string, string> {
   const starters = new Map<string, string>();
   for (const e of db.select({ obligationId: auditEntries.obligationId, actor: auditEntries.actor }).from(auditEntries).where(eq(auditEntries.toState, "execution_pending")).orderBy(auditEntries.seq).all()) {
     if (e.obligationId) starters.set(e.obligationId, e.actor);
   }
+  return starters;
+}
+
+/** Settled payments in the last `days`, each tagged with who started it. Feeds the overview chart. */
+export function listPaymentPoints(days = 120, db: Db = getDb()): PaymentPoint[] {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const base = getBusiness(db)?.baseCurrency ?? "USD";
+  const starters = paymentStarters(db);
   return listSettlements(db)
     .filter((s) => s.settledAt >= since)
     .map((s) => {

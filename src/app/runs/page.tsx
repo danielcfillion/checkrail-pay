@@ -3,16 +3,12 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { listRuns, runCandidates } from "@/lib/engine/runs";
-import { formatDate, formatDateTime, formatMoney, humaniseActor, localDateString } from "@/lib/format";
-import { EmptyState, PageHeader, Panel, TonePill } from "@/components/ui";
-
-const RUN_STATUS: Record<string, { label: string; tone: "neutral" | "muted" | "attention" | "blocked" | "settled" }> = {
-  draft: { label: "Waiting for release", tone: "attention" },
-  releasing: { label: "Releasing", tone: "neutral" },
-  released: { label: "Released", tone: "settled" },
-  cancelled: { label: "Cancelled", tone: "muted" },
-};
+import { formatDate, localDateString } from "@/lib/format";
+import { toBaseOrZero } from "@/lib/fx";
+import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { RunBuilder } from "@/components/RunBuilder";
+import { RunsGrid } from "@/components/grid/RunsGrid";
+import { toPayableRow, toRunRow } from "@/components/grid/model";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Payment runs" };
@@ -25,6 +21,11 @@ export default async function RunsPage() {
   const runs = listRuns(db, biz.id);
   const candidates = runCandidates(db, biz.id);
   const canBuild = !viewer || viewer.can("build_run");
+  // Plain rows for the client grids; amounts are put in the base currency here, where the reference rates live.
+  const toBase = (minor: number, currency: string) => toBaseOrZero(minor, currency, biz.baseCurrency ?? "USD");
+  const today = localDateString();
+  const payable = candidates.map((c) => toPayableRow({ id: c.id, vendorName: c.vendorName, sourceRef: c.sourceRef, amountMinor: c.amountMinor!, currency: c.currency!, dueDate: c.dueDate, state: c.state, rail: c.selectedRail, scheduled: Boolean(c.releaseAt) }, { toBase, today }));
+  const runRows = runs.map((r) => toRunRow(r, { toBase }));
   return (
     <>
       <PageHeader
@@ -40,11 +41,7 @@ export default async function RunsPage() {
         <Panel title="New run" aside={`${candidates.length} payable`} className="mb-6" padded={candidates.length === 0}>
           {candidates.length ? (
             <div className="p-4">
-              <RunBuilder
-                defaultName={`Week of ${formatDate(localDateString())}`}
-                today={localDateString()}
-                rows={candidates.map((c) => ({ id: c.id, vendorName: c.vendorName, sourceRef: c.sourceRef, amountMinor: c.amountMinor!, currency: c.currency!, dueDate: c.dueDate, state: c.state, rail: c.selectedRail, scheduled: Boolean(c.releaseAt) }))}
-              />
+              <RunBuilder defaultName={`Week of ${formatDate(today)}`} rows={payable} />
             </div>
           ) : (
             <p className="text-ink-soft">Nothing is approved or waiting for approval outside a run right now.</p>
@@ -53,38 +50,7 @@ export default async function RunsPage() {
       ) : null}
       <Panel title="Runs" padded={runs.length === 0}>
         {runs.length ? (
-          <div className="overflow-x-auto">
-            <table className="ledger">
-              <thead>
-                <tr>
-                  <th scope="col">Run</th>
-                  <th scope="col">Status</th>
-                  <th scope="col" className="hidden sm:table-cell">Built by</th>
-                  <th scope="col" className="hidden md:table-cell">Created</th>
-                  <th scope="col" className="r">Payments</th>
-                  <th scope="col" className="r">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((r) => (
-                  <tr key={r.id} className="row-link relative">
-                    <td className="font-medium">
-                      <Link href={`/runs/${r.id}`} className="after:absolute after:inset-0 after:content-['']">
-                        {r.name}
-                      </Link>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <TonePill tone={RUN_STATUS[r.status]?.tone ?? "neutral"}>{RUN_STATUS[r.status]?.label ?? r.status}</TonePill>
-                    </td>
-                    <td className="hidden text-ink-soft sm:table-cell">{humaniseActor(r.createdBy)}</td>
-                    <td className="num hidden whitespace-nowrap text-ink-soft md:table-cell" title={formatDateTime(r.createdAt)}>{formatDate(r.createdAt)}</td>
-                    <td className="r num">{r.status === "released" ? `${r.paid} of ${r.count} paid${r.withBank ? `, ${r.withBank} with the bank` : ""}` : r.count}</td>
-                    <td className="r num whitespace-nowrap">{r.totals.map((t) => formatMoney(t.minor, t.currency)).join(" + ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <RunsGrid rows={runRows} />
         ) : (
           <p className="text-ink-soft">No runs yet.</p>
         )}

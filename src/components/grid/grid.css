@@ -1,0 +1,93 @@
+/*
+ * Checkrail's AG Grid skin. Imported only by DataGrid.tsx, and every rule is scoped under .cr-grid so nothing
+ * leaks into the rest of the app. Colours come from the theme in theme.ts (the app's own tokens); this file
+ * carries what the theme API has no parameter for: Archivo's width axis and tabular figures.
+ */
+
+.cr-grid {
+  font-family: var(--font-archivo), system-ui, sans-serif;
+}
+
+/* Every number in a cell lines up (tnum), as in table.ledger. */
+.cr-grid .ag-cell,
+.cr-grid .ag-header-cell,
+.cr-grid .ag-paging-panel {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Dense labels: Archivo width 88, weight 500, 12px, sentence case (never all caps). */
+.cr-grid .ag-header-cell-text {
+  font-stretch: 88%;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 16px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.cr-grid .ag-header-cell.cr-right .ag-header-cell-label {
+  flex-direction: row-reverse;
+}
+
+.cr-grid .ag-cell {
+  display: flex;
+  align-items: center;
+  line-height: 20px;
+}
+.cr-grid .ag-cell.cr-right {
+  justify-content: flex-end;
+  text-align: right;
+}
+.cr-grid .ag-cell.cr-soft {
+  color: var(--ink-soft);
+}
+.cr-grid .ag-cell .cr-cell-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 3px;
+}
+.cr-grid .ag-cell .cr-cell-link:hover {
+  text-decoration-color: var(--ink);
+}
+
+/* Pinned totals: one row per currency, a stronger rule above, the figures in the wide money cut. */
+.cr-grid .ag-row-pinned .ag-cell {
+  font-weight: 600;
+}
+.cr-grid .ag-row-pinned .cr-total-label {
+  font-stretch: 88%;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* Filter popups: the app's field and button look. */
+.cr-grid .ag-filter-wrapper,
+.cr-grid .ag-menu {
+  font-size: 14px;
+}
+.cr-grid .ag-filter .ag-standard-button,
+.cr-grid .ag-filter-apply-panel-button {
+  font-weight: 500;
+  border-radius: 4px;
+}
+
+/* Overdue due dates read in the attention colour, never red. */
+.cr-grid .ag-cell.cr-overdue {
+  color: var(--attention);
+}
+
+/* Focus is always visible: the theme draws it on cells; links and checkboxes inside cells keep the app ring. */
+.cr-grid .ag-cell a:focus-visible,
+.cr-grid .ag-cell button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .cr-grid .ag-row-selected .ag-cell {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+}
