@@ -94,7 +94,7 @@ export function ActionBar(p: Props) {
               </div>
               <div className="flex flex-wrap gap-2">
                 {inCard ? null : (
-                  <button type="button" className={lead} disabled={pending} onClick={() => run("approve", () => approveAction(p.id, approvalNote.trim() || undefined, p.shownWarnings))}>
+                  <button type="button" className={lead} disabled={pending} onClick={() => run("approve", () => approveAction(p.id, approvalNote.trim() || undefined, p.shownWarnings ?? []))}>
                     {busy === "approve" ? "Approving" : "Approve"}
                   </button>
                 )}

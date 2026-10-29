@@ -123,6 +123,23 @@ describe("PayPalRail.execute outcome classification", () => {
     expect(await new PayPalRail(creds).findByIdempotencyKey("abc")).toBeNull();
   });
 
+  it("the strict lookup answers null only when PayPal definitively has no such batch; an outage throws (SEC7-1)", async () => {
+    stubFetch(() => json(404, { name: "RESOURCE_NOT_FOUND" }));
+    expect(await new PayPalRail(creds).findByIdempotencyKeyStrict("abc")).toBeNull();
+    stubFetch(() => json(200, { batch_header: { payout_batch_id: "PB-1", batch_status: "SUCCESS" } }));
+    expect(await new PayPalRail(creds).findByIdempotencyKeyStrict("abc")).toEqual({ batchId: "PB-1", batchStatus: "SUCCESS" });
+    // The lenient lookup reads each of these as "nothing found"; the strict one refuses to.
+    stubFetch(() => new Response("", { status: 503 }));
+    expect(await new PayPalRail(creds).findByIdempotencyKey("abc")).toBeNull();
+    await expect(new PayPalRail(creds).findByIdempotencyKeyStrict("abc")).rejects.toThrow(/HTTP 503/);
+    stubFetch(() => json(401, {}));
+    await expect(new PayPalRail(creds).findByIdempotencyKeyStrict("abc")).rejects.toThrow();
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("socket hang up");
+    });
+    await expect(new PayPalRail(creds).findByIdempotencyKeyStrict("abc")).rejects.toThrow();
+  });
+
   it("an authentication failure is definitive and nothing is posted", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {

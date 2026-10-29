@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { evidence, obligations, users } from "../db/schema";
+import { approvals, evidence, obligations, users } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { approveObligation, ingestObligation } from "./orchestrator";
+import { amendObligation, approveObligation, ingestObligation } from "./orchestrator";
+import { importDepartures } from "./rates";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { createRun, releaseRun, viewRun } from "./runs";
@@ -39,17 +40,25 @@ describe("PR7-1: the run confirmation says what will be paid, and a waiting item
   const ownDocs = () =>
     ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", rawInput: "Invoice INV-MS-7001 from Maria Santos for 2 days guiding, USD 90.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-7001", amountMinor: 9_000, currency: "USD", reference: "INV-MS-7001", excerpt: "Maria Santos, 2 days guiding, USD 90." }], actor: "user:lan" });
 
+  /** A waiting item with nothing to read: above the auto-pay line, supported by the business's own trip sheet, no warning and no reader concern. */
+  const cleanWaiting = () =>
+    ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "job_completion", rawInput: "Trip HG-3D-1031 closed. Please pay Maria Santos USD 300 for 6 days guiding (JOB-HG3D-1031).", evidence: [{ kind: "job_sheet", label: "Trip sheet HG-3D-1031 (Maria Santos)", amountMinor: 30_000, currency: "USD", reference: "JOB-HG3D-1031", excerpt: "Maria Santos, 6 days guiding, USD 300.00 (JOB-HG3D-1031)." }], actor: "user:lan" });
+
   it("counts what a release will pay and what it will leave, the same as the release does", async () => {
     const own = await ownDocs();
-    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [story.paypal, story.stellar, own] });
+    const clean = await cleanWaiting();
+    expect(ob(clean).state).toBe("awaiting_approval");
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [story.paypal, story.stellar, clean, own] });
     const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
-    // paypal is ready, stellar is waiting with nothing to read (a person approves it, release does), own is for its own page.
-    expect(view.items.map((i) => [i.obligationId, i.plan, i.leftWhy])).toEqual(expect.arrayContaining([[story.paypal, "pay", null], [story.stellar, "pay", null], [own, "left", "warning"]]));
-    expect(view.payNow).toMatchObject({ count: 2, approving: 1, left: 1, leftByReason: { warning: 1, limit: 0, second: 0, changed: 0, state: 0 } });
+    // paypal is ready; clean is waiting with nothing to read (a person approves it, release does); Ana (stellar) carries a
+    // reader concern and own has only the vendor's documents behind it, so both are for their own page.
+    expect(view.items.map((i) => [i.obligationId, i.plan, i.leftWhy])).toEqual(expect.arrayContaining([[story.paypal, "pay", null], [clean, "pay", null], [story.stellar, "left", "warning"], [own, "left", "warning"]]));
+    expect(view.payNow).toMatchObject({ count: 2, approving: 1, left: 2, leftByReason: { warning: 2, limit: 0, second: 0, changed: 0, state: 0 } });
     expect(view.payNow.byCurrency).toEqual([{ currency: "USD", minor: expect.any(Number) }]);
     const r = await releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId);
     expect(r).toMatchObject({ paid: view.payNow.count, skipped: view.payNow.left });
     expect(ob(own).state).toBe("awaiting_approval");
+    expect(ob(story.stellar).state).toBe("awaiting_approval");
   });
 
   it("an approver approves the waiting item from the run with the warnings the page showed, and the plan then includes it", async () => {
@@ -66,19 +75,34 @@ describe("PR7-1: the run confirmation says what will be paid, and a waiting item
   });
 
   it("refuses an approval when a warning appeared after the page was shown, and records nothing", async () => {
-    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [story.stellar] });
+    const clean = await cleanWaiting();
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [clean] });
     const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
     const item = view.items[0];
     expect(item.warnings).toEqual([]);
     // After the page was rendered, the vendor uploads a document through their link: a warning a person must read.
-    db.insert(evidence).values({ id: "evd_late", obligationId: story.stellar, kind: "receipt", label: "Invoice from the vendor", provenance: "vendor", createdAt: new Date().toISOString() }).run();
-    expect(() => approveObligation(db, story.stellar, "user:minh", undefined, item.fingerprints)).toThrow(/Something changed since this page was checked: .*vendor uploaded a document/);
-    expect(ob(story.stellar).state).toBe("awaiting_approval");
+    db.insert(evidence).values({ id: "evd_late", obligationId: clean, kind: "receipt", label: "Invoice from the vendor", provenance: "vendor", createdAt: new Date().toISOString() }).run();
+    expect(() => approveObligation(db, clean, "user:minh", undefined, item.fingerprints)).toThrow(/Something changed since this page was checked: .*vendor uploaded a document/);
+    expect(ob(clean).state).toBe("awaiting_approval");
     // Shown again, with the new warning in the fingerprints, the same person's approval goes through.
     const again = (await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"))).items[0];
     expect(again.warnings.join(" ")).toMatch(/vendor uploaded a document/);
-    approveObligation(db, story.stellar, "user:minh", undefined, again.fingerprints);
-    expect(ob(story.stellar).state).toBe("approved");
+    approveObligation(db, clean, "user:minh", undefined, again.fingerprints);
+    expect(ob(clean).state).toBe("approved");
+  });
+
+  it("refuses an approval, and records nothing, when the request changed and is blocked by the time it is approved (PR8-1)", async () => {
+    const clean = await cleanWaiting();
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [clean] });
+    const item = (await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"))).items[0];
+    // After the page was shown the clerk raises the amount above what the departure and rate card allow.
+    importDepartures(db, DEMO_BUSINESS_ID, as("minh"), "code,start,end,guests,vendor,unit,quantity\nHG-3D-1031,2026-01-01,2026-01-03,6,Maria Santos,day,6");
+    await amendObligation(db, clean, "user:lan", { amountMinor: 90_000 }, "typo");
+    expect(ob(clean).state).toBe("blocked");
+    const approvalsBefore = db.select().from(approvals).where(eq(approvals.obligationId, clean)).all().length;
+    expect(() => approveObligation(db, clean, "user:minh", undefined, item.fingerprints)).toThrow(/now blocked.*No approval was recorded/);
+    expect(db.select().from(approvals).where(eq(approvals.obligationId, clean)).all()).toHaveLength(approvalsBefore);
+    expect(ob(clean).state).toBe("blocked");
   });
 
   it("shows an approve action only to someone who may approve that item", async () => {

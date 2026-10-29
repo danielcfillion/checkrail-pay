@@ -50,7 +50,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const readerOnPay = items.filter((i) => i.plan === "pay" && reading.has(i.obligationId)).length;
   // What a release would actually do, in words: what is paid, and what is left for its own page and why.
   const leftWhy = [
-    payNow.leftByReason.warning ? `${payNow.leftByReason.warning} carry${payNow.leftByReason.warning === 1 ? "es" : ""} a warning or only the vendor's own support` : null,
+    payNow.leftByReason.warning ? `${payNow.leftByReason.warning} ${payNow.leftByReason.warning === 1 ? "carries" : "carry"} a warning, a reader concern or only the vendor's own support` : null,
     payNow.leftByReason.limit ? `${payNow.leftByReason.limit} ${payNow.leftByReason.limit === 1 ? "is" : "are"} above your approval limit or yours to approve` : null,
     payNow.leftByReason.second ? `${payNow.leftByReason.second} need${payNow.leftByReason.second === 1 ? "s" : ""} a second approver` : null,
     payNow.leftByReason.changed ? `${payNow.leftByReason.changed} changed amount since being added` : null,

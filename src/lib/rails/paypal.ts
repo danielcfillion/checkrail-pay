@@ -183,6 +183,22 @@ export class PayPalRail implements PaymentRail {
     return { batchId: header.payout_batch_id, batchStatus: header.batch_status ?? null };
   }
 
+  /**
+   * The same question, but an outage is an error and not "nothing found". The one claim that frees a payment to be paid
+   * again under a new key ("nothing moved") needs PayPal's own answer: a definitive not-found (404, or an answer with no
+   * batch) is null; no token, no answer, a timeout, a 5xx, an unreadable body or any other error throws.
+   */
+  async findByIdempotencyKeyStrict(key: string): Promise<{ batchId: string; batchStatus: string | null } | null> {
+    const res = await this.call("GET", `/v1/payments/payouts?sender_batch_id=${encodeURIComponent(key)}`);
+    if (res.transportError) throw new Error(`PayPal did not answer (${res.transportError})`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`PayPal answered HTTP ${res.status}`);
+    if (res.json === null || typeof res.json !== "object") throw new Error("PayPal's answer could not be read");
+    const header = (res.json as { batch_header?: { payout_batch_id?: string; batch_status?: string } }).batch_header;
+    if (!header?.payout_batch_id) return null;
+    return { batchId: header.payout_batch_id, batchStatus: header.batch_status ?? null };
+  }
+
   async getStatus(externalId: string): Promise<SettlementStatus> {
     const res = await this.call("GET", `/v1/payments/payouts/${encodeURIComponent(externalId)}`);
     if (res.transportError || !res.ok) return { status: "pending", externalStatus: res.transportError ? "no answer" : `HTTP ${res.status}`, raw: res.json };

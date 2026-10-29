@@ -19,7 +19,7 @@ export type UserCredential = { user: string; pass: string; role: Role };
 export const MIN_LIVE_PASSWORD = 12;
 
 /** Real money can move: live PayPal, public Stellar or live Wise. The sandbox and testnet are not covered, on purpose. */
-function realMoneyEnv(env: Record<string, string | undefined>): boolean {
+export function realMoneyEnv(env: Record<string, string | undefined>): boolean {
   return env.PAYPAL_ENV === "live" || env.STELLAR_NETWORK === "public" || env.WISE_ENV === "live";
 }
 

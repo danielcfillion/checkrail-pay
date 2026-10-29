@@ -93,10 +93,12 @@ function done(paths: string[] = ["/", "/obligations", "/ledger", "/accounting", 
 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string };
 
-export async function approveAction(id: string, note?: string, shownFingerprints?: string[]): Promise<ActionResult> {
+export async function approveAction(id: string, note: string | undefined, shownFingerprints: string[]): Promise<ActionResult> {
   return inRequest(async () => {
   try {
-    if (shownFingerprints && (!Array.isArray(shownFingerprints) || shownFingerprints.some((f) => typeof f !== "string" || f.length > 600))) throw new Error("Invalid page state");
+    // The page always sends the warnings it showed (an empty list when it showed none). A call without one is not a page:
+    // it would let the last evaluation on record stand in for what the person saw.
+    if (!Array.isArray(shownFingerprints) || shownFingerprints.some((f) => typeof f !== "string" || f.length > 600)) throw new Error("Invalid page state");
     const out = approveObligation(getDb(), id, (await actOn(id, "approve", "approve payments")).id, note, shownFingerprints);
     done([`/obligations/${id}`]);
     done();
@@ -749,7 +751,7 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
     if (typeof csv !== "string") throw new Error("Choose a CSV file");
     const r = await withBusiness((db, b, who) => importDeparturesAndRecheck(db, b, who, csv));
     done();
-    return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}${r.rechecked ? `. ${r.rechecked} waiting payment${r.rechecked === 1 ? " was" : "s were"} checked again${r.nowBlocked ? `, ${r.nowBlocked} now blocked by the rate card` : ""}` : ""}.`, errors: r.errors };
+    return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}${r.rechecked ? `. ${r.rechecked} waiting payment${r.rechecked === 1 ? " was" : "s were"} checked again${r.nowBlocked ? `, ${r.nowBlocked} now blocked by the rate card` : ""}${r.nowReady ? `, ${r.nowReady} now ready to pay without a person because the rate card confirms ${r.nowReady === 1 ? "it" : "them"}` : ""}` : ""}.`, errors: r.errors };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

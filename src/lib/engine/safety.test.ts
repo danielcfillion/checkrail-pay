@@ -169,6 +169,19 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     expect(await resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved" })).toBe("failed");
   });
 
+  it("an outage on PayPal's side blocks the nothing-moved claim although the plain lookup reads it as none (SEC7-1)", async () => {
+    const pp = new ScriptedRail("paypal", [unknown(), submitted("BATCH-2")]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    pp.known = null; // during the outage the plain lookup answers "nothing found"
+    (pp as unknown as { findByIdempotencyKeyStrict: () => Promise<never> }).findByIdempotencyKeyStrict = async () => {
+      throw new Error("PayPal answered HTTP 503");
+    };
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved" })).rejects.toThrow(/Could not ask the provider/);
+    expect(get(story.paypal).state).toBe("execution_pending");
+    expect(attemptsOf(story.paypal)[0].status).toBe("unknown");
+  });
+
   it("a payout that came back, retried on the same obligation, raises the came-back warning (SEC5-6)", async () => {
     const pp = new ScriptedRail("paypal", [submitted("BATCH-1")]);
     installRails(pp);

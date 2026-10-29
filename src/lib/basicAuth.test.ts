@@ -127,6 +127,27 @@ describe("middleware", () => {
     expect(middleware(from("wrong")).status).toBe(429);
   });
 
+  it("the published-login setting is ignored with more than one account or where real money can move (SEC7-3)", () => {
+    env.CHECKRAIL_THROTTLE_SPARES_VALID = "1";
+    const from = (ip: string, pw = "a-long-enough-pass") => req({ authorization: basic("judge", pw), "x-forwarded-for": ip });
+    const overLimit = (ip: string) => {
+      for (let i = 0; i < 11; i++) middleware(from(ip, "wrong"));
+    };
+    // Two accounts: one of them is not published, so a correct password is refused over the limit like any other.
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin,clerk:another-long-pass-1:clerk";
+    overLimit("203.0.113.101");
+    expect(middleware(from("203.0.113.101")).status).toBe(429);
+    // One account but real money can move.
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    env.PAYPAL_ENV = "live";
+    overLimit("203.0.113.102");
+    expect(middleware(from("203.0.113.102")).status).toBe(429);
+    // One account on the sandbox: the judging demo case still works.
+    env.PAYPAL_ENV = "sandbox";
+    overLimit("203.0.113.103");
+    expect(middleware(from("203.0.113.103")).status).toBe(200);
+  });
+
   it("open in development: acts as the demo owner and ignores forged identity headers", () => {
     const res = middleware(req({ [ACTOR_HEADER]: "forged", [ROLE_HEADER]: "admin" }));
     expect(res.status).toBe(200);

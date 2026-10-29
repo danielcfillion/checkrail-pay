@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed } from "@/lib/basicAuth";
+import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed, realMoneyEnv } from "@/lib/basicAuth";
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
@@ -65,7 +65,10 @@ export function middleware(req: NextRequest) {
     // Only for a login that is published anyway (the judging demo, where guessing it proves nothing): a correct
     // password gets in even when the address is over its limit, so one visitor's typos, or a proxy address shared by
     // everyone, cannot lock every judge out. Off by default: elsewhere an over-limit address is refused whatever it sends.
-    if (limited && !(who && process.env.CHECKRAIL_THROTTLE_SPARES_VALID === "1")) return tooMany(FAIL_WINDOW_MS);
+    // The setting is for a one-login judging demo only: it is ignored when real money can move or when more than one account
+    // is configured, so it can never switch the throttle off for a login that is a secret.
+    const sparesValid = process.env.CHECKRAIL_THROTTLE_SPARES_VALID === "1" && users.length === 1 && !realMoneyEnv(process.env);
+    if (limited && !(who && sparesValid)) return tooMany(FAIL_WINDOW_MS);
     // A missing header is the browser asking for the password prompt, not a guess; only wrong passwords count.
     if (!who && req.headers.get("authorization")) {
       overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);

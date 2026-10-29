@@ -741,6 +741,14 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
     audit(db, { obligationId, actor, action: "approval.refused", detail: { reason: "warnings not shown when the person approved", unseen: unseen.map(warningFingerprint) } });
     throw new Error(`Something changed since this page was checked: ${unseen.map((r) => r.message).join("; ")}. Read it, then approve again.`);
   }
+  // Approval does not bypass policy, so approving something that is blocked now records nothing but a misleading "approved
+  // by": the page this came from is out of date (the amount, vendor or reference changed since it was shown). Refuse, move
+  // the request to where policy puts it, and let the refreshed page say why.
+  if (before.decision === "block") {
+    moveTo(db, obligationId, targetState(before, ob.state as ObligationState), before);
+    audit(db, { obligationId, actor, action: "approval.refused", detail: { reason: "blocked by policy at the moment of approval", reasons: before.reasons } });
+    throw new Error(`This request changed since the page was loaded and is now blocked: ${before.reasons[0] ?? "see the request"}. No approval was recorded.`);
+  }
   const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint);
   db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), login: currentLogin(), createdAt: now() }).run();
   audit(db, { obligationId, actor, action: "approval.granted", detail: { note: note ?? null, acknowledged } });
@@ -1086,11 +1094,14 @@ export async function resolveManually(db: Db, obligationId: string, actor: strin
   // "Nothing moved" is the one claim that frees the payment to be paid again under a new key, so where the rail can be
   // asked it is checked, not taken on a person's word alone: a payout the provider already knows means the money may
   // have moved, and the person records it as found instead. A rail that cannot be read right now blocks the claim too.
-  const lookup = getRails()[attempt.rail as Rail].findByIdempotencyKey;
+  // The strict lookup where a rail has one (PayPal's plain lookup reads an outage as "nothing found", which is right for a
+  // replay, which the provider's own idempotency protects, and wrong here).
+  const asked = getRails()[attempt.rail as Rail];
+  const lookup = asked.findByIdempotencyKeyStrict ?? asked.findByIdempotencyKey;
   if (lookup) {
     let known: { batchId: string } | null;
     try {
-      known = await lookup.call(getRails()[attempt.rail as Rail], attempt.idempotencyKey);
+      known = await lookup.call(asked, attempt.idempotencyKey);
     } catch {
       throw new Error("Could not ask the provider whether this payment exists just now; try again in a minute. Nothing was changed");
     }

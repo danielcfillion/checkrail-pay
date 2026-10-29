@@ -370,6 +370,8 @@ export interface PaymentRail {
   getStatus(externalId: string): Promise<SettlementStatus>;
   /** Optional: does the provider already know this idempotency key? Used to reconcile an attempt whose outcome was unknown before replaying it. */
   findByIdempotencyKey?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
+  /** Optional: the same question where an outage must not read as "nothing found" (it throws unless the answer is definitive). Asked before a person's "nothing moved" frees a payment to be paid again. */
+  findByIdempotencyKeyStrict?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
   /** Optional: does this provider id belong to the attempt with this idempotency key? null when the provider could not be asked. */
   externalIdMatchesKey?(externalId: string, key: string): Promise<boolean | null>;
   /** Optional: money available to send in this currency. null when the provider cannot be asked (no permission, outage). */

@@ -163,6 +163,20 @@ describe("returned payouts", () => {
     });
   });
 
+  it("a reversal whose date cannot be read is listed, never applied, on a first or a later upload (SEC7 info)", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    const unreadable = (lines: ReturnType<typeof parsePayPalCsv>) => lines.map((l) => (l.grossMinor > 0 ? { ...l, date: "not a date" } : l));
+    const first = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, unreadable(parsePayPalCsv([head, payout, reversal("9AB1")].join("\n")))).result;
+    expect(first.returned).toHaveLength(0);
+    expect(first.returnedUnmatched?.[0].why).toMatch(/date could not be read/);
+    // The payout is now tied by that upload; the same unreadable reversal is still not applied.
+    const second = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, unreadable(parsePayPalCsv([head, reversal("9AB1")].join("\n")))).result;
+    expect(second.returned).toHaveLength(0);
+    expect(second.returnedUnmatched?.[0].why).toMatch(/date could not be read/);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
+  });
+
   it("a clerk's upload of a payout and its reversal in one file lists the reversal and applies nothing", async () => {
     const { db2, s2, head, payout, reversal } = await paid();
     const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");

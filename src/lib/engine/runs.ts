@@ -10,6 +10,7 @@ import { localDateString } from "../format";
 import { actorCan, otherPeopleWith, requirePermission, whoIs, type Actor } from "./users";
 import { currentLogin, humanOf } from "./requestContext";
 import { approvalGate, approveObligation, executeObligation, previewPolicy } from "./orchestrator";
+import { readerNotesFor } from "../reading";
 
 /**
  * Payment runs: the clerk gathers what is due into one list, the approver reviews the total and the funding, and
@@ -114,6 +115,11 @@ function approvalReading(db: Db, obligationId: string): { warnings: string[]; fi
   const out = previewPolicy(db, obligationId);
   const warn = out.rules.filter((r) => r.severity === "warn" && !r.passed);
   const found = warn.map((r) => r.message);
+  // The reading the request page shows (a recorded Claude run, else the reader's own output) is not a policy rule, so a
+  // concern in it is not in `warn`. A person reads it on the request page before it counts, as a warning is read; in a bulk
+  // release it keeps a waiting item out, and approving it from the run page (which shows the concern) is the way in.
+  const concern = readerNotesFor([obligationId], db)[obligationId];
+  if (concern) found.push(`Reader concern: ${concern.line}`);
   if (out.selfAttested && out.reasons[0]) found.push(out.reasons[0]);
   return { warnings: found, fingerprints: warn.map(warningFingerprint), secondApprover: !found.length && out.reasons.some((r) => /^Amount exceeds dual-approval threshold/.test(r)) };
 }

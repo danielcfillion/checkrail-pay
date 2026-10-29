@@ -212,8 +212,10 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     // it is the payment's own settlement date less one day: the app shows Vietnam time and a PayPal statement is in the
     // account's time zone, so the same moment can fall on different dates.
     const earliest = passPayoutDate.get(l.referenceTxnId ?? "") ?? dayBefore(localDateString(new Date(r.s.settledAt)));
-    if (/^\d{4}-\d{2}-\d{2}$/.test(earliest) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < earliest) {
-      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "it is dated before the payout it reverses" });
+    // A reversal whose date cannot be read is not checked against the payout, so it is not applied either.
+    const readable = /^\d{4}-\d{2}-\d{2}$/.test(l.date);
+    if (!readable || (/^\d{4}-\d{2}-\d{2}$/.test(earliest) && l.date < earliest)) {
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: readable ? "it is dated before the payout it reverses" : "its date could not be read, so it cannot be checked against the payout" });
       continue;
     }
     returnedIds.add(r.s.id);

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { obligations, settlements, auditEntries, accountingSyncs, paymentAttempts, routeQuotes } from "../db/schema";
+import { approvals, obligations, settlements, auditEntries, accountingSyncs, paymentAttempts, routeQuotes } from "../db/schema";
 import { seedDemo } from "../demo/seed";
 import { approveObligation, executeObligation, confirmSettlement, amendObligation, ingestObligation } from "./orchestrator";
 import { exportPendingCsv } from "../accounting/record";
@@ -68,11 +68,11 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
     expect(st.receivedCurrency).toBe("PHP");
   });
 
-  it("refuses to execute a blocked obligation even if someone approves it", () => {
+  it("refuses to execute a blocked obligation even if someone approves it: the approval is refused and records nothing", () => {
     const ob = get(story.blockedMismatch);
-    const outcome = approveObligation(db, ob.id, "user:minh", "just pay it");
-    expect(outcome.decision).toBe("block");
+    expect(() => approveObligation(db, ob.id, "user:minh", "just pay it")).toThrow(/now blocked.*No approval was recorded/);
     expect(get(ob.id).state).toBe("blocked");
+    expect(db.select().from(approvals).where(eq(approvals.obligationId, ob.id)).all()).toHaveLength(0);
   });
 
   it("executes the mismatch once the amount is corrected to what the evidence says", async () => {
