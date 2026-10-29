@@ -196,7 +196,7 @@ export default function DemoPage() {
       </PageHeader>
 
       <div className="mb-6 grid grid-cols-2 gap-4 border-y hairline py-3 sm:grid-cols-4">
-        <Stat label="Needs you" value={String(o.counts.needsAction)} />
+        <Stat label="Needs action" value={String(o.counts.needsAction)} />
         <Stat label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} />
         <Stat label="Paid, 30 days" value={formatMoneySymbol(o.money.paid30dMinor, base)} />
         <Stat label="Autonomy" value={ap ? (ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot") : ap.level === "review" ? "Review" : "Assist") : "none"} small />

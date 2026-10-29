@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getViewer } from "@/lib/viewer";
-import { findObligationsBySourceRef, getOverview, listAudit, listObligations, listPaymentPoints } from "@/lib/queries";
+import { runAs } from "@/lib/engine/requestContext";
+import { findObligationsBySourceRef, getOverview, listAudit, listObligations, listPaymentPoints, waitingFor } from "@/lib/queries";
 import { formatMoneySymbol, pluralise } from "@/lib/format";
 import { activityFeed } from "@/lib/activity";
 import { DemoBanner } from "@/components/DemoBanner";
@@ -12,6 +13,7 @@ import { AutopilotStrip } from "@/components/AutopilotStrip";
 import { MoneyOut } from "@/components/MoneyOut";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { DemoVisit } from "@/components/DemoProgress";
+import { waitingLine } from "@/components/waiting-line";
 
 export const dynamic = "force-dynamic";
 // The root segment does not get the layout's title template, so spell it out.
@@ -28,18 +30,32 @@ export default async function OverviewPage() {
   // The opening request of the demo story, for the banner's first button.
   const phuong = demo ? findObligationsBySourceRef(["INV-2026-0152"]).find((r) => r.vendorId === "ven_phuong") : undefined;
   const activity = activityFeed(listAudit(400), 10);
+  // "Waiting on you" is this viewer's own list (the sidebar and the Inbox tab); "Needs action" is everything that needs somebody.
+  const line = waitingLine({ mine: viewer ? runAs(viewer.login, () => waitingFor(viewer.actor)) : null, needsAction: o.counts.needsAction });
   const heading = (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Checkrail Pay"}</h1>
       <p className="mt-0.5 text-ink-soft">Checks every supplier payment before money moves.</p>
       <p className="mt-2">
-        {o.counts.needsAction === 0 ? (
-          "Nothing needs you right now."
-        ) : (
-          <Link href="/obligations?filter=needs_action" className="link">
-            {`${pluralise(o.counts.needsAction, "request")} need${o.counts.needsAction === 1 ? "s" : ""} you.`}
+        {line.leadHref ? (
+          <Link href={line.leadHref} className="link">
+            {line.lead}
           </Link>
+        ) : (
+          line.lead
         )}
+        {line.rest ? (
+          <>
+            {" "}
+            {line.restHref ? (
+              <Link href={line.restHref} className="link">
+                {line.rest}
+              </Link>
+            ) : (
+              line.rest
+            )}
+          </>
+        ) : null}
         {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}
         {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
       </p>
@@ -64,7 +80,7 @@ export default async function OverviewPage() {
         currency={base}
         header={
           <dl className="grid grid-cols-2 gap-y-4 sm:grid-cols-4 sm:divide-x sm:divide-[color:var(--rule)]">
-            <Figure label="Needs you" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
+            <Figure label="Needs action" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
             <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
             <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open request")}, ${o.counts.blocked} blocked held back`} />
             <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpaid parts and duplicates, since day one</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
@@ -73,7 +89,7 @@ export default async function OverviewPage() {
       />
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Panel title="Needs you" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
+        <Panel title="Needs action" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
           {o.needsAction.length ? <NeedsYouList rows={o.needsAction} /> : <div className="px-4 py-8 text-center text-ink-soft">Nothing waiting. New requests appear here when the agent reads them.</div>}
         </Panel>
 
@@ -101,7 +117,7 @@ export default async function OverviewPage() {
         </div>
       </div>
 
-      {/* The decisions come before the history: Money out is context, Needs you is the job. */}
+      {/* The decisions come before the history: Money out is context, Needs action is the job. */}
       <div className="mt-6">
         <MoneyOut points={points} currency={base} />
       </div>

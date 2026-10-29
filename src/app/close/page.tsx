@@ -2,7 +2,9 @@ import Link from "next/link";
 import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getViewer } from "@/lib/viewer";
 import { getDb } from "@/lib/db";
-import { getBusiness } from "@/lib/queries";
+import { runAs } from "@/lib/engine/requestContext";
+import { getBusiness, listObligations, waitingIdsFor } from "@/lib/queries";
+import { reasonFor } from "@/components/ObligationList";
 import { getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
 import { formatDateTime, formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise, stateLabel } from "@/lib/format";
 import { CapMeter } from "@/components/CapMeter";
@@ -43,6 +45,16 @@ export default async function DailyClosePage() {
   const c = getDailyClose(db, biz.id, biz.baseCurrency);
   const cur = c.baseCurrency;
   const past = listSignOffs(db, 5);
+  // One meaning of "waiting on you" everywhere (the sidebar, the Inbox tab, the overview): what this viewer's role lets them do next.
+  // Requests that wait on somebody else (evidence from the vendor, an approval above their limit) are listed under their own name.
+  const mineIds = viewer ? new Set(runAs(viewer.login, () => waitingIdsFor(viewer.actor))) : null;
+  const mineRows = mineIds
+    ? listObligations({ limit: 1000 })
+        .filter((r) => mineIds.has(r.id))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .map((r) => ({ id: r.id, vendorName: r.vendorName, amountMinor: r.amountMinor, currency: r.currency, note: reasonFor(r) || stateLabel(r.state) }))
+    : c.waitingOnYou.map((w) => ({ id: w.id, vendorName: w.vendorName, amountMinor: w.amountMinor, currency: w.currency, note: w.note ? plainReason(w.note) : stateLabel(w.state) }));
+  const others = mineIds ? c.waitingOnYou.filter((w) => !mineIds.has(w.id)) : [];
   const quiet = !c.attention.length && !c.paidByAgent.length && !c.paidByPeople.length && !c.settingsChanges.length;
 
   return (
@@ -60,17 +72,16 @@ export default async function DailyClosePage() {
 
       <dl className="grid grid-cols-2 gap-y-4 border-y hairline py-4 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
         <Figure label="Needs a look" value={String(c.attention.length)} note={c.attention.length ? "listed below, most serious first" : "nothing flagged by the rules"} tone={c.attention.length ? "attention" : undefined} />
-        <Figure label="Waiting on you" value={String(c.waitingOnYou.length)} note={c.waitingOnYou.length ? "approvals and sends" : "nothing waiting"} tone={c.waitingOnYou.length ? "attention" : undefined} />
+        <Figure label="Waiting on you" value={String(mineRows.length)} note={mineRows.length ? "your next step, as in the sidebar" : "nothing waiting on you"} tone={mineRows.length ? "attention" : undefined} />
         <Figure label="Sent by autopilot" value={formatMoneySymbol(c.totals.agentMinor, cur)} note={pluralise(c.totals.agentCount, "payment")} tone={c.totals.agentCount ? "settled" : undefined} />
         <Figure label="Sent by people" value={formatMoneySymbol(c.totals.peopleMinor, cur)} note={pluralise(c.totals.peopleCount, "payment")} />
         <Figure label="Held back" value={formatMoneySymbol(c.totals.stoppedMinor, cur)} note={`requested in ${pluralise(c.totals.stoppedCount, "request")} blocked or refused`} tone={c.totals.stoppedCount ? "blocked" : undefined} />
       </dl>
 
-      {/* minmax(0, 1fr) below lg: a bare grid column is as wide as its widest content, which pushed the page past a phone's edge once a payment table was listed. */}
-      {/* On a phone the two columns dissolve so each panel can be ordered: what needs a look, then what waits on you. */}
+      {/* One column of panels in reading order, so the tab order is the visual order on a phone; from lg the cap and the sign-off history sit in a narrow column beside them. minmax(0, 1fr): a bare grid column is as wide as its widest content, which pushed the page past a phone's edge once a payment table was listed. */}
       <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="contents lg:block lg:min-w-0 lg:space-y-6">
-          <Panel className="order-1 lg:order-none" title="Needs a look" aside={c.attention.length ? `${c.attention.length}` : "clear"} padded={false}>
+        <div className="min-w-0 space-y-6">
+          <Panel title="Needs a look" aside={c.attention.length ? `${c.attention.length}` : "clear"} padded={false}>
             {c.attention.length ? (
               <ul className="divide-y hairline">
                 {c.attention.map((a) => (
@@ -103,11 +114,56 @@ export default async function DailyClosePage() {
             )}
           </Panel>
 
-          <PaidPanel className="order-4 lg:order-none" title="Sent by autopilot" empty={c.autopilot.level === "autopilot" ? "The agent sent nothing in this period." : "Autopilot is off, so the agent sent nothing."} rows={c.paidByAgent} />
-          <PaidPanel className="order-5 lg:order-none" title="Sent by people" empty="Nobody sent a payment by hand in this period." rows={c.paidByPeople} />
+
+          <Panel title="Still waiting on you" aside={mineRows.length ? `${mineRows.length}` : "none"} padded={false}>
+            {mineRows.length ? (
+              <ul className="divide-y hairline">
+                {mineRows.map((w) => (
+                  <li key={w.id}>
+                    <Link href={`/obligations/${w.id}`} className="block px-4 py-2 hover:bg-paper/60">
+                      <span className="flex items-baseline justify-between gap-3">
+                        <span className="font-medium">{w.vendorName ?? "Unknown vendor"}</span>
+                        <span className="num">{formatMoney(w.amountMinor, w.currency)}</span>
+                      </span>
+                      <span className="line-clamp-2 text-xs text-ink-soft">{w.note}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="px-4 py-5 text-center text-ink-soft">Nothing is waiting on you.</p>
+            )}
+          </Panel>
+
+          {others.length ? (
+            <Panel title="Waiting on someone else" aside={`${others.length}`} padded={false}>
+              <ul className="divide-y hairline">
+                {others.map((w) => (
+                  <li key={w.id}>
+                    <Link href={`/obligations/${w.id}`} className="block px-4 py-2 hover:bg-paper/60">
+                      <span className="flex items-baseline justify-between gap-3">
+                        <span className="font-medium">{w.vendorName ?? "Unknown vendor"}</span>
+                        <span className="num">{formatMoney(w.amountMinor, w.currency)}</span>
+                      </span>
+                      <span className="line-clamp-2 text-xs text-ink-soft">{w.note ? plainReason(w.note) : stateLabel(w.state)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
+
+          {c.scheduled.length ? (
+            <Panel title="About to go out" aside={`${c.scheduled.length} scheduled`} padded={false}>
+              <ScheduledReleases compact windowSeconds={c.autopilot.cancelWindowSeconds} canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
+            </Panel>
+          ) : null}
+
+          <PaidPanel title="Sent by autopilot" empty={c.autopilot.level === "autopilot" ? "The agent sent nothing in this period." : "Autopilot is off, so the agent sent nothing."} rows={c.paidByAgent} />
+          <PaidPanel title="Sent by people" empty="Nobody sent a payment by hand in this period." rows={c.paidByPeople} />
 
           {c.settingsChanges.length ? (
-            <Panel className="order-7 lg:order-none" title="Autonomy changes" padded={false}>
+            <Panel title="Autonomy changes" padded={false}>
               <ul className="divide-y hairline">
                 {c.settingsChanges.map((s, i) => (
                   <li key={i} className="flex items-baseline justify-between gap-3 px-4 py-2">
@@ -122,43 +178,17 @@ export default async function DailyClosePage() {
             </Panel>
           ) : null}
 
-          {quiet ? <p className="order-8 text-center text-ink-soft lg:order-none">A quiet period. Sign off to start the next one from here.</p> : null}
+          {quiet ? <p className="text-center text-ink-soft">A quiet period. Sign off to start the next one from here.</p> : null}
         </div>
 
-        <div className="contents lg:block lg:min-w-0 lg:space-y-6">
+        <div className="min-w-0 space-y-6">
           {c.autopilot.level === "autopilot" ? (
-            <Panel className="order-6 lg:order-none" title="Autopilot cap" aside={c.autopilot.paused ? "paused" : "on"}>
+            <Panel title="Autopilot cap" aside={c.autopilot.paused ? "paused" : "on"}>
               <CapMeter label="Last 24 hours" usedMinor={c.autopilot.committed24hMinor} capMinor={c.autopilot.dailyCapMinor} currency={cur} />
             </Panel>
           ) : null}
 
-          {c.scheduled.length ? (
-            <Panel className="order-3 lg:order-none" title="About to go out" aside={`${c.scheduled.length} scheduled`} padded={false}>
-              <ScheduledReleases compact windowSeconds={c.autopilot.cancelWindowSeconds} canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
-            </Panel>
-          ) : null}
-
-          <Panel className="order-2 lg:order-none" title="Still waiting on you" aside={c.waitingOnYou.length ? `${c.waitingOnYou.length}` : "none"} padded={false}>
-            {c.waitingOnYou.length ? (
-              <ul className="divide-y hairline">
-                {c.waitingOnYou.map((w) => (
-                  <li key={w.id}>
-                    <Link href={`/obligations/${w.id}`} className="block px-4 py-2 hover:bg-paper/60">
-                      <span className="flex items-baseline justify-between gap-3">
-                        <span className="font-medium">{w.vendorName ?? "Unknown vendor"}</span>
-                        <span className="num">{formatMoney(w.amountMinor, w.currency)}</span>
-                      </span>
-                      <span className="line-clamp-2 text-xs text-ink-soft">{w.note ? plainReason(w.note) : stateLabel(w.state)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="px-4 py-5 text-center text-ink-soft">Nothing is waiting for a person.</p>
-            )}
-          </Panel>
-
-          <Panel className="order-9 lg:order-none" title="Past sign-offs" padded={false}>
+          <Panel title="Past sign-offs" padded={false}>
             {past.length ? (
               <ul className="divide-y hairline">
                 {past.map((p) => (
@@ -181,7 +211,7 @@ export default async function DailyClosePage() {
           </Panel>
           {/* Phones: the sign-off comes last, after what it attests to. */}
           {!viewer || viewer.can("sign_off") ? (
-            <div className="order-10 lg:hidden">
+            <div className="lg:hidden">
               <SignOffButton throughSeq={c.throughSeq} attention={c.attention.length} />
             </div>
           ) : null}
