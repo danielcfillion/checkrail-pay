@@ -3,7 +3,7 @@ import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, bills } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
 import { toBaseMinor, toBaseOrZero } from "../fx";
-import { decryptField } from "../crypto/dataKey";
+import { decryptField, keyedDigest } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
 import { expectedAmount } from "./rates";
 import { assertOpenPeriod } from "./books";
@@ -387,8 +387,11 @@ function moveTo(db: Db, obligationId: string, target: ObligationState, outcome: 
 /** Hash of the fields that decide where a payment lands. Same parts as the seed uses for vendors.detailsHash. */
 export function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null; bankAccountEnc?: string | null; bankCode?: string | null; bankAccountNumber?: string | null }): string {
   // A full account number joins the hash only when there is one, so details hashed before bank rails existed still match.
+  // It joins as a keyed digest, never raw: the stored hash sits next to the masked label (last four digits), and a
+  // plain hash of the number would let anyone with the database file find it by search without the data key.
   const account = v.bankAccountNumber ?? (v.bankAccountEnc ? decryptField(v.bankAccountEnc) : null);
-  return hashPayoutDetails(account ? [v.paypalEmail, v.stellarAccount, v.bankLabel, `${v.bankCode ?? ""}:${account}`] : [v.paypalEmail, v.stellarAccount, v.bankLabel]);
+  const bank = `${v.bankCode ?? ""}:${account}`;
+  return hashPayoutDetails(account ? [v.paypalEmail, v.stellarAccount, v.bankLabel, keyedDigest("payout-hash", bank)] : [v.paypalEmail, v.stellarAccount, v.bankLabel]);
 }
 
 /** Names of other vendors in the same business paid to the same PayPal email, Stellar account or bank account. */
