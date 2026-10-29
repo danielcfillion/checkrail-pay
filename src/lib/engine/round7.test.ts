@@ -12,6 +12,7 @@ import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remitt
 import { confirmSettlement, executeObligation } from "./orchestrator";
 import { agedPayables } from "./books";
 import { xeroBillRows } from "../accounting/xeroBills";
+import { paidSummary } from "../queries";
 import { resetRails } from "../rails";
 
 /** Practitioner round seven (PR7-n): fixes to what round six left. */
@@ -135,5 +136,15 @@ describe("PR7-3: the remittance says when a fee came out of the amount", () => {
     const advice = (id: string) => viewRemittance(db, createRemittanceLink(db, DEMO_BUSINESS_ID, as("lan"), id))!;
     expect(advice(story.stellar)).toMatchObject({ rail: "Stellar", amount: "USD 750.00", feeDeducted: "USD 13.25" });
     expect(advice(story.paypal)).toMatchObject({ rail: "PayPal", feeDeducted: null });
+  });
+});
+
+describe("PR6-6 follow-up: the fee on a returned payout is left out only for PayPal", () => {
+  const row = (rail: string, state: string) => ({ grossMinor: 42_500, feeMinor: 850, grossCurrency: "USD", state, rail });
+
+  it("PayPal returns its fee with the payout; a bank file, Wise or Stellar fee was spent", () => {
+    expect(paidSummary([row("paypal", "refunded")], "USD")).toEqual({ paidMinor: 0, feesMinor: 0, refundedMinor: 42_500 });
+    for (const rail of ["bank_file", "wise", "stellar"]) expect(paidSummary([row(rail, "refunded")], "USD")).toEqual({ paidMinor: 0, feesMinor: 850, refundedMinor: 42_500 });
+    expect(paidSummary([row("paypal", "settled"), row("bank_file", "refunded")], "USD")).toEqual({ paidMinor: 42_500, feesMinor: 1_700, refundedMinor: 42_500 });
   });
 });
