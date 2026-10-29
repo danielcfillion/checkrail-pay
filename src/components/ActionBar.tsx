@@ -6,6 +6,8 @@ import Link from "next/link";
 import { amendAction, approveAction, confirmAction, markReturnedAction, recheckAction, repayAction, requoteAction, executeAction, reconcileAction, rejectAction, resolveManuallyAction, retryFailedAction, type ActionResult } from "@/app/actions";
 import type { Rail } from "@/lib/domain/types";
 import { evidencedAmountFromReason, formatMoney, railLabel } from "@/lib/format";
+import { isDuplicateReason } from "./decision-model";
+import { SUMMARY, TOUCH_SM } from "./RequestPanels";
 import { useToast } from "./Toast";
 import { useStage } from "./ObligationStage";
 import { ConfirmButton } from "./ConfirmButton";
@@ -32,7 +34,7 @@ type Props = {
   billId?: string | null;
   /** Vendors to pick from when the request names nobody the business knows. */
   vendorChoices?: Array<{ id: string; name: string }>;
-  /** The decision card above already offers the primary action, so the same button here is secondary. */
+  /** The decision card above already offers the primary action to this viewer, so this panel leaves it out. */
   primaryInCard?: boolean;
 };
 
@@ -49,12 +51,14 @@ function Waiting({ children }: { children: React.ReactNode }) {
 export function ActionBar(p: Props) {
   const can: typeof ALL = { ...ALL, ...(p.perms ?? {}), reconcile: p.perms ? Boolean(p.perms.reconcile) : true };
   const [pending, start] = useTransition();
-  const [note, setNote] = useState("");
+  const { travel, note: approvalNote, setNote: setApprovalNote } = useStage();
+  const [batchId, setBatchId] = useState("");
+  const [returnedId, setReturnedId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
-  const { travel } = useStage();
-  const lead = p.primaryInCard ? "btn" : "btn btn-primary";
+  const lead = "btn btn-primary";
+  const inCard = Boolean(p.primaryInCard);
 
   const run = (label: string, fn: () => Promise<ActionResult>, after?: (r: ActionResult) => void) => {
     setBusy(label);
@@ -86,23 +90,25 @@ export function ActionBar(p: Props) {
                 <label className="lbl" htmlFor="approval-note">
                   Note (optional)
                 </label>
-                <input id="approval-note" className="field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Checked against the trip sheet" />
+                <input id="approval-note" className="field" value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)} placeholder="Checked against the trip sheet" />
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className={lead} disabled={pending} onClick={() => run("approve", () => approveAction(p.id, note || undefined, p.shownWarnings))}>
-                  {busy === "approve" ? "Approving" : "Approve"}
-                </button>
-                <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, note || undefined))}>
+                {inCard ? null : (
+                  <button type="button" className={lead} disabled={pending} onClick={() => run("approve", () => approveAction(p.id, approvalNote.trim() || undefined, p.shownWarnings))}>
+                    {busy === "approve" ? "Approving" : "Approve"}
+                  </button>
+                )}
+                <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, approvalNote.trim() || undefined))}>
                   {busy === "reject" ? "Rejecting" : "Reject"}
                 </button>
               </div>
-              <p className="text-xs text-ink-soft">Approving does not pay. Policy checks again, then the request is ready to pay.</p>
+              <p className="text-xs text-ink-soft">{inCard ? "The note goes with Approve above or Reject here. " : ""}Approving does not pay. Policy checks again, then the request is ready to pay.</p>
             </>
           ) : (
             <>
               <Waiting>{p.approveRefusal ?? "Waiting for an approver. Your role does not approve payments."}</Waiting>
               {can.approve ? (
-                <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Turned down"))}>
+                <button type="button" className={`btn btn-sm btn-danger ${TOUCH_SM}`} disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Turned down"))}>
                   {busy === "reject" ? "Rejecting" : "Reject"}
                 </button>
               ) : null}
@@ -119,7 +125,7 @@ export function ActionBar(p: Props) {
         <div className="space-y-3">
           {can.pay ? (
             <div className="flex flex-wrap gap-2">
-              {primary ? (
+              {primary && !inCard ? (
                 <button type="button" className={lead} disabled={pending} onClick={() => pay(primary)}>
                   {busy === `pay-${primary}` ? `Paying with ${railLabel(primary)}` : `Pay with ${railLabel(primary)}`}
                 </button>
@@ -130,7 +136,7 @@ export function ActionBar(p: Props) {
                 </button>
               ))}
               {!primary ? <p className="text-ink-soft">No rail can serve this vendor. Check the route comparison.</p> : null}
-              <button type="button" className="btn btn-sm" disabled={pending} onClick={() => run("requote", () => requoteAction(p.id))}>
+              <button type="button" className={`btn btn-sm ${TOUCH_SM}`} disabled={pending} onClick={() => run("requote", () => requoteAction(p.id))}>
                 {busy === "requote" ? "Quoting" : "Quote again"}
               </button>
             </div>
@@ -138,7 +144,7 @@ export function ActionBar(p: Props) {
             <Waiting>Approved and ready to send. Someone who sends payments sends it.</Waiting>
           )}
           {can.approve ? (
-            <button type="button" className="btn btn-sm btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled before payment"))}>
+            <button type="button" className={`btn btn-sm btn-danger ${TOUCH_SM}`} disabled={pending} onClick={() => run("reject", () => rejectAction(p.id, "Cancelled before payment"))}>
               {busy === "reject" ? "Cancelling" : "Cancel request"}
             </button>
           ) : null}
@@ -158,7 +164,7 @@ export function ActionBar(p: Props) {
       if (!p.vendorId && /not a known vendor/i.test(p.blockedReason ?? "")) return <PickVendor id={p.id} choices={p.vendorChoices ?? []} pending={pending} busy={busy} run={run} />;
       return (
         <div className="space-y-3">
-          <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} lead={lead} />
+          <CorrectAmount id={p.id} amountMinor={p.amountMinor} currency={p.currency} blockedReason={p.blockedReason} pending={pending} busy={busy} run={run} lead={lead} inCard={inCard} />
           <CheckAgain id={p.id} pending={pending} busy={busy} run={run} />
         </div>
       );
@@ -169,11 +175,11 @@ export function ActionBar(p: Props) {
         <div className="space-y-3">
           <p className="text-ink-soft">The rail rejected the payment and nothing moved. Retry on the same rail, try the other, or cancel. A retry re-checks the payout destination and runs policy again before any rail is called.</p>
           <div className="flex flex-wrap gap-2">
-            {p.availableRails.map((r) => (
+            {p.availableRails.filter((r) => !(inCard && r === p.selectedRail)).map((r) => (
               <button
                 key={r}
                 type="button"
-                className={`btn ${r === p.selectedRail && !p.primaryInCard ? "btn-primary" : ""}`}
+                className={`btn ${r === p.selectedRail ? "btn-primary" : ""}`}
                 disabled={pending}
                 onClick={() =>
                   run(`pay-${r}`, async () => {
@@ -218,14 +224,14 @@ export function ActionBar(p: Props) {
           <p className="text-ink-soft">
             {railLabel(p.selectedRail) || "The rail"} did not give a clear answer, so this payment may or may not have gone through. Nothing here will pay it again: Reconcile asks {railLabel(p.selectedRail) || "the rail"} about the same payment under the same idempotency key and records what it finds.
           </p>
-          {can.pay ? (
+          {can.pay && !inCard ? (
             <button type="button" className={lead} disabled={pending} onClick={() => run("reconcile", () => reconcileAction(p.id), (r) => r.ok && travel(3))}>
               {busy === "reconcile" ? "Asking the rail" : `Reconcile with ${railLabel(p.selectedRail) || "the rail"}`}
             </button>
           ) : null}
           {can.resolveStuck ? (
-          <details className="group text-sm">
-            <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
+          <details className="text-sm">
+            <summary className={SUMMARY}>Still unclear? Resolve it from the {railLabel(p.selectedRail) || "provider"} dashboard</summary>
             <div className="mt-3 space-y-3">
               <p className="text-ink-soft">Search the dashboard for this attempt&apos;s sender batch id. Both choices are recorded in the audit log under your name.</p>
               {p.pendingKey ? (
@@ -235,8 +241,8 @@ export function ActionBar(p: Props) {
                 </p>
               ) : null}
               <div className="flex flex-wrap items-center gap-2">
-                <input className="field w-56" placeholder="Payout batch id" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Payout batch id found in the dashboard" />
-                <button type="button" className="btn" disabled={pending || note.trim().length < 6} onClick={() => run("found", () => resolveManuallyAction(p.id, note.trim()))}>
+                <input className="field w-56" placeholder="Payout batch id" value={batchId} onChange={(e) => setBatchId(e.target.value)} aria-label="Payout batch id found in the dashboard" />
+                <button type="button" className="btn" disabled={pending || batchId.trim().length < 6} onClick={() => run("found", () => resolveManuallyAction(p.id, batchId.trim()))}>
                   {busy === "found" ? "Recording" : "I found it: record this id"}
                 </button>
               </div>
@@ -256,10 +262,12 @@ export function ActionBar(p: Props) {
     case "sent":
       return (
         <div className="space-y-3">
-          <p className="text-ink-soft">The payment has been handed to {railLabel(p.selectedRail) || "the rail"}. Check for settlement to pull the latest status.</p>
-          <button type="button" className={lead} disabled={pending} onClick={() => run("confirm", () => confirmAction(p.id), (r) => r.ok && travel(4))}>
-            {busy === "confirm" ? "Checking" : "Check settlement"}
-          </button>
+          <p className="text-ink-soft">The payment has been handed to {railLabel(p.selectedRail) || "the rail"}. {inCard ? "Check settlement above pulls the latest status." : "Check for settlement to pull the latest status."}</p>
+          {inCard ? null : (
+            <button type="button" className={lead} disabled={pending} onClick={() => run("confirm", () => confirmAction(p.id), (r) => r.ok && travel(4))}>
+              {busy === "confirm" ? "Checking" : "Check settlement"}
+            </button>
+          )}
         </div>
       );
 
@@ -268,17 +276,17 @@ export function ActionBar(p: Props) {
         <div className="space-y-3">
           <p className="text-ink-soft">{p.hasAccounting ? "Paid and recorded. Nothing left to do." : "Paid. Waiting for the accounting record."}</p>
           {can.reconcile ? (
-            <details className="group text-sm">
-              <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>The money came back (found in PayPal)?</summary>
+            <details className="text-sm">
+              <summary className={SUMMARY}>The money came back (found in PayPal)?</summary>
               <form
                 className="mt-2 flex flex-wrap items-center gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (note.trim()) run("returned", () => markReturnedAction(p.id, note.trim()));
+                  if (returnedId.trim()) run("returned", () => markReturnedAction(p.id, returnedId.trim()));
                 }}
               >
-                <input className="field num w-56" value={note} onChange={(e) => setNote(e.target.value)} placeholder="PayPal transaction id" aria-label="PayPal transaction id of the money that came back" />
-                <button type="submit" className="btn btn-sm btn-danger" disabled={pending || note.trim().length < 6}>
+                <input className="field num w-56" value={returnedId} onChange={(e) => setReturnedId(e.target.value)} placeholder="PayPal transaction id" aria-label="PayPal transaction id of the money that came back" />
+                <button type="submit" className={`btn btn-sm btn-danger ${TOUCH_SM}`} disabled={pending || returnedId.trim().length < 6}>
                   {busy === "returned" ? "Recording" : "Record it as come back"}
                 </button>
               </form>
@@ -309,18 +317,62 @@ export function ActionBar(p: Props) {
   }
 }
 
-function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy, run, lead = "btn btn-primary" }: { id: string; amountMinor: number | null; currency: string | null; blockedReason: string | null; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void; lead?: string }) {
+function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy, run, lead = "btn btn-primary", inCard = false }: { id: string; amountMinor: number | null; currency: string | null; blockedReason: string | null; pending: boolean; busy: string | null; run: (label: string, fn: () => Promise<ActionResult>) => void; lead?: string; inCard?: boolean }) {
   const evidenced = evidencedAmountFromReason(blockedReason);
-  const [value, setValue] = useState(evidenced !== null ? (evidenced / 100).toFixed(2) : amountMinor !== null ? (amountMinor / 100).toFixed(2) : "");
-  const duplicate = /already used/.test(blockedReason ?? "");
+  // The card above already offers the evidenced figure, so the field here starts empty: it is for a different amount.
+  const [value, setValue] = useState(inCard ? "" : evidenced !== null ? (evidenced / 100).toFixed(2) : amountMinor !== null ? (amountMinor / 100).toFixed(2) : "");
+  // Every duplicate (same reference, same job under a new reference, or paid in PayPal's own records) is fixed the same
+  // way: a genuinely different job gets its own reference, anything else is cancelled. The amount is not the problem.
+  const duplicate = isDuplicateReason(blockedReason);
+  const paypal = /^PayPal transaction/.test(blockedReason ?? "");
   const rateCard = /^Rate card/.test(blockedReason ?? "");
   const minor = value.trim() ? Math.round(Number(value.replace(/,/g, "")) * 100) : NaN;
   const valid = Number.isFinite(minor) && minor > 0 && minor !== amountMinor;
+  const cancel = (
+    <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(id, duplicate ? "Duplicate of a paid request" : "Rejected after amount mismatch"))}>
+      {busy === "reject" ? "Cancelling" : "Cancel request"}
+    </button>
+  );
+
+  if (duplicate)
+    return (
+      <div className="space-y-3">
+        <p className="text-ink-soft">
+          {paypal ? "PayPal's own records show this job already paid to this payee." : "This job was already paid."} If it is genuinely a second job, give it its own reference below and policy checks it again. {inCard ? "Otherwise cancel it above." : "Otherwise cancel it."}
+        </p>
+        <CorrectReference id={id} pending={pending} busy={busy} run={run} />
+        {inCard ? null : cancel}
+      </div>
+    );
+
+  const form = (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (valid) run("amend", () => amendAction(id, { amountMinor: minor }, rateCard && minor === evidenced ? `Short pay to the rate card: ${formatMoney(minor, currency)}` : `Corrected to evidenced amount ${formatMoney(minor, currency)}`));
+      }}
+    >
+      <div>
+        <label className="lbl" htmlFor="corrected-amount">
+          {inCard ? "A different amount" : "Corrected amount"} ({currency ?? "USD"})
+        </label>
+        <input id="corrected-amount" className="field num w-40" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder={inCard && evidenced !== null ? (evidenced / 100).toFixed(2) : undefined} />
+      </div>
+      <button type="submit" className={inCard ? "btn" : lead} disabled={pending || !valid}>
+        {busy === "amend" ? "Correcting" : inCard ? "Correct and re-check" : `Correct to ${Number.isFinite(minor) ? formatMoney(minor, currency) : "amount"}`}
+      </button>
+    </form>
+  );
 
   return (
     <div className="space-y-3">
-      {duplicate ? (
-        <p className="text-ink-soft">This reference was already paid. If it is genuinely a second job, change the reference below; otherwise cancel it.</p>
+      {inCard ? (
+        <p className="text-ink-soft">
+          {rateCard && evidenced !== null
+            ? `Correcting to the rate card (${formatMoney(evidenced, currency)}) is a short pay: a person approves it, and the vendor should be told why the rest is not paid.`
+            : "The correction above re-runs policy. If the evidence is wrong instead, correct to a different amount here."}
+        </p>
       ) : (
         <p className="text-ink-soft">
           {rateCard && evidenced !== null
@@ -330,30 +382,8 @@ function CorrectAmount({ id, amountMinor, currency, blockedReason, pending, busy
               : "Correct the amount to what the evidence supports, then policy re-runs."}
         </p>
       )}
-      {duplicate ? (
-        <CorrectReference id={id} pending={pending} busy={busy} run={run} />
-      ) : (
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (valid) run("amend", () => amendAction(id, { amountMinor: minor }, rateCard && minor === evidenced ? `Short pay to the rate card: ${formatMoney(minor, currency)}` : `Corrected to evidenced amount ${formatMoney(minor, currency)}`));
-          }}
-        >
-          <div>
-            <label className="lbl" htmlFor="corrected-amount">
-              Corrected amount ({currency ?? "USD"})
-            </label>
-            <input id="corrected-amount" className="field num w-40" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} />
-          </div>
-          <button type="submit" className={lead} disabled={pending || !valid}>
-            {busy === "amend" ? "Correcting" : `Correct to ${Number.isFinite(minor) ? formatMoney(minor, currency) : "amount"}`}
-          </button>
-        </form>
-      )}
-      <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run("reject", () => rejectAction(id, duplicate ? "Duplicate of a paid request" : "Rejected after amount mismatch"))}>
-        {busy === "reject" ? "Cancelling" : "Cancel request"}
-      </button>
+      {form}
+      {cancel}
     </div>
   );
 }
@@ -363,7 +393,7 @@ function CheckAgain({ id, pending, busy, run }: { id: string; pending: boolean; 
   return (
     <p className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs text-ink-soft hairline">
       Fixed the cause somewhere else (verified the vendor, added a rate or departure)?
-      <button type="button" className="btn btn-sm" disabled={pending} onClick={() => run("recheck", () => recheckAction(id))}>
+      <button type="button" className={`btn btn-sm ${TOUCH_SM}`} disabled={pending} onClick={() => run("recheck", () => recheckAction(id))}>
         {busy === "recheck" ? "Checking" : "Check again"}
       </button>
     </p>
@@ -399,8 +429,8 @@ function AmendDetails({ id, amountMinor, currency, pending, busy, run, note }: {
   const minor = value.trim() ? Math.round(Number(value.replace(/,/g, "")) * 100) : NaN;
   const valid = Number.isFinite(minor) && minor > 0 && minor !== amountMinor;
   return (
-    <details className="group border-t pt-3 text-sm hairline">
-      <summary className="inline-flex h-[26px] items-center gap-1.5 rounded px-1.5 text-xs font-medium text-ink-soft hover:bg-[color:var(--paper)] hover:text-ink"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="transition-transform group-open:rotate-90 motion-reduce:transition-none"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>Correct the amount</summary>
+    <details className="border-t pt-3 text-sm hairline">
+      <summary className={SUMMARY}>Correct the amount</summary>
       <form
         className="mt-3 flex flex-wrap items-end gap-2"
         onSubmit={(e) => {

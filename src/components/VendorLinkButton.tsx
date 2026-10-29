@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createVendorLinkAction } from "@/app/actions";
 import { CopyButton } from "./CopyButton";
+import { TOUCH_SM } from "./RequestPanels";
 import { useToast } from "./Toast";
 
 /** Make a remittance or evidence link for this payment, and the message to paste into Zalo, WhatsApp or email. */
@@ -37,13 +38,13 @@ export function VendorLinkButton({ kind, obligationId }: { kind: "remittance" | 
     return (
       <div className="flex flex-wrap items-center gap-2">
         <input aria-label="What you need" className="field" style={{ width: "16rem" }} value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="The signed trip sheet for HG-4D-1004" />
-        <button type="button" className="btn btn-sm btn-primary" disabled={pending} onClick={make}>
+        <button type="button" className={`btn btn-sm btn-primary ${TOUCH_SM}`} disabled={pending} onClick={make}>
           {pending ? "Making link" : "Make the link"}
         </button>
       </div>
     );
   return (
-    <button type="button" className="btn btn-sm" disabled={pending} onClick={() => (kind === "evidence" ? setAsking(true) : make())}>
+    <button type="button" className={`btn btn-sm ${TOUCH_SM}`} disabled={pending} onClick={() => (kind === "evidence" ? setAsking(true) : make())}>
       {kind === "remittance" ? "Remittance advice for the vendor" : "Ask the vendor for the document"}
     </button>
   );

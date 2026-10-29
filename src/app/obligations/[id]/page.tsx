@@ -5,14 +5,14 @@ import { notFound } from "next/navigation";
 import { getBusiness, getObligationDetail, listVendors } from "@/lib/queries";
 import { toBaseMinor } from "@/lib/fx";
 import { billBalance } from "@/lib/engine/bills";
-import { bills as billsTable } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { bills as billsTable, obligations as obligationsTable } from "@/lib/db/schema";
+import { and, eq, gt } from "drizzle-orm";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate, dualControlGap } from "@/lib/engine/orchestrator";
 import { InvoiceDates } from "@/components/InvoiceDates";
 import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
-import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, stateLabel, truncateMiddle } from "@/lib/format";
+import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
 import { VendorLinkButton } from "@/components/VendorLinkButton";
 import { ObligationStageProvider, StageCheckLine } from "@/components/ObligationStage";
@@ -23,8 +23,9 @@ import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
 import { DecisionCard } from "@/components/DecisionCard";
-import { decide, toneText, type Decision } from "@/components/decision-model";
-import { Disclosure, ReferencePanel, WorkingPanel } from "@/components/RequestPanels";
+import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
+import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
+import { amountAsRead, correctionLine, RECORDED_LABEL, selectRecordedReading, summaryWithoutCount } from "@/components/agent-reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
 
@@ -47,7 +48,7 @@ const raw = (s: string) => {
 };
 
 /** Mobile order (under 1024px): actions, evidence, then the rest. Desktop keeps the three columns. */
-const ORDER = { exception: "order-1", actions: "order-2", evidence: "order-3", deciding: "order-4", policy: "order-5", request: "order-6", agent: "order-7", route: "order-8", recipient: "order-9", bill: "order-10", settlement: "order-11", attempts: "order-12", approvals: "order-13", history: "order-14" } as const;
+const ORDER = { exception: "order-1", actions: "order-2", evidence: "order-3", policy: "order-5", request: "order-6", agent: "order-7", route: "order-8", recipient: "order-9", bill: "order-10", settlement: "order-11", attempts: "order-12", approvals: "order-13", history: "order-14" } as const;
 const ord = (k: keyof typeof ORDER) => `${ORDER[k]} lg:order-none`;
 
 export default async function ObligationPage({ params }: { params: Promise<{ id: string }> }) {
@@ -57,7 +58,6 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const o = d.obligation;
   const hasAccounting = Boolean(d.accounting);
   const availableRails = d.quotes.filter((q) => q.available).map((q) => q.rail as Rail);
-  const caption = o.state === "blocked" && o.blockedReason ? shortReason(o.blockedReason) : undefined;
   const viewer = await getViewer();
   const bill = o.billId ? (() => {
     const b = getDb().select().from(billsTable).where(eq(billsTable.id, o.billId!)).get();
@@ -74,6 +74,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const selectedQuote = d.quotes.find((x) => x.rail === o.selectedRail && x.available) ?? null;
   const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
   const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
+  const caption = o.state === "blocked" && o.blockedReason ? checkLineCaption(o.blockedReason, earlier) : undefined;
   const decision: Decision = decide({
     state: o.state,
     amountMinor: o.amountMinor,
@@ -96,15 +97,36 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   // The agent's concerns become policy warnings; list them here only if Policy does not already show them.
   const concernsElsewhere = d.aiFlags.length > 0 && d.aiFlags.every((f) => ruleMessages.has(f));
   const missingElsewhere = d.aiMissing.length > 0 && d.aiMissing.every((m) => ruleMessages.has(`Agent wants: ${m}`));
-  const otherFailing = rules.filter((r) => !r.passed && r.message !== decision.statedReason);
+  const stated = new Set([decision.statedReason, ...(decision.alsoStated ?? [])]);
+  const otherFailing = rules.filter((r) => !r.passed && !stated.has(r.message));
   const otherBlocks = otherFailing.filter((r) => r.severity === "block").length;
   const otherWarnings = otherFailing.length - otherBlocks;
   const perm = { approve: perms?.approve ?? true, pay: perms?.pay ?? true, amend: perms?.amend ?? true };
+  const cardCarriesPrimary = Boolean(decision.action && allowedAction(decision.action, perm, approveRefusal));
+  // "What you are deciding", as one line on the decision card.
+  const deciding = ["awaiting_approval", "blocked", "needs_evidence"].includes(o.state)
+    ? decidingLine({
+        askMinor: o.amountMinor,
+        currency: o.currency,
+        evidence: d.evidence.filter((e) => !e.supersededBy),
+        vendorName: d.vendor?.name ?? null,
+        rail: o.selectedRail,
+        verified: Boolean(d.vendor?.verifiedAt),
+        alsoFound: { blocks: otherBlocks, warnings: otherWarnings },
+      })
+    : null;
+  // A live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
+  const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
+  const newer = o.vendorId && o.sourceRef ? getDb().select({ id: obligationsTable.id }).from(obligationsTable).where(and(eq(obligationsTable.vendorId, o.vendorId), eq(obligationsTable.sourceRef, o.sourceRef), gt(obligationsTable.createdAt, o.createdAt))).get() : undefined;
+  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  const corrected = correctionLine(d.audit, o.currency);
+  const toolCtx = { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length };
+  const concernLine = concernsElsewhere || missingElsewhere ? `${[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. ${d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} listed under Policy.` : null;
 
   return (
     <ObligationStageProvider>
       <nav className="mb-3 text-xs text-ink-soft" aria-label="Breadcrumb">
-        <Link href="/obligations" className="hover:text-ink">
+        <Link href="/obligations" className={`hover:text-ink ${TOUCH_INLINE}`}>
           Inbox
         </Link>
         <span aria-hidden> / </span>
@@ -142,14 +164,16 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
         </div>
       </header>
 
-      <DecisionCard id={o.id} decision={decision} perms={perm} approveRefusal={approveRefusal} shownWarnings={shownWarnings} />
+      <DecisionCard id={o.id} decision={decision} perms={perm} approveRefusal={approveRefusal} shownWarnings={shownWarnings} deciding={deciding} />
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)_minmax(0,5fr)]">
         {/* Column 1: the request and its evidence. Under 1024px the columns dissolve so each panel can be ordered. */}
         <div className="contents lg:block lg:space-y-6">
-          <WorkingPanel className={ord("request")} title="The request" aside={sourceTypeLabel(o.sourceType)}>
+          <WorkingPanel className={ord("request")} title="The request">
             <blockquote className="whitespace-pre-wrap leading-5">{o.rawInput}</blockquote>
             <dl className="num mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t pt-3 text-xs hairline">
+              <dt className="text-ink-soft">Came in as</dt>
+              <dd>{sourceTypeLabel(o.sourceType) || "a typed request"}</dd>
               <dt className="text-ink-soft">Created</dt>
               <dd>{formatDateTime(o.createdAt)}</dd>
               <InvoiceDates id={o.id} invoiceDate={o.invoiceDate} dueDate={o.dueDate} editable={Boolean(viewer?.can("amend")) && !["settled", "cancelled", "refunded"].includes(o.state)} />
@@ -175,7 +199,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                       {evidenceKindLabel(e.kind)}
                       {e.reference ? <span className="num">, {e.reference}</span> : null}
                       {e.provenance === "operator" ? <span className="text-attention">, typed by operator</span> : null}
-                      {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className="link" href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
+                      {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className={`link ${TOUCH_INLINE}`} href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
                     </p>
                     {e.excerpt ? <blockquote className="mt-1 border-l-2 pl-3 text-ink-soft hairline">{e.excerpt}</blockquote> : null}
                   </li>
@@ -187,7 +211,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           </WorkingPanel>
 
           {d.vendor ? (
-            <ReferencePanel className={ord("recipient")} title="Recipient" aside={<Link href={`/vendors/${d.vendor.id}`} className="link">Vendor page</Link>}>
+            <ReferencePanel className={ord("recipient")} title="Recipient" aside={<Link href={`/vendors/${d.vendor.id}`} className={`link ${TOUCH_INLINE}`}>Vendor page</Link>}>
               <KeyValue
                 rows={[
                   ["Name", d.vendor.name],
@@ -204,101 +228,66 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
 
         {/* Column 2: agent reading, policy, route */}
         <div className="contents lg:block lg:space-y-6">
-          <WorkingPanel className={ord("agent")} title="What the agent read" aside={o.aiConfidence !== null ? <span className="num">confidence {o.aiConfidence}%</span> : null}>
-            {o.aiSummary ? <p>{o.aiSummary}</p> : <p className="text-ink-soft">The agent has not read this yet.</p>}
-            {d.aiFlags.length && !concernsElsewhere ? (
-              <div className="mt-3">
-                <p className="dense text-attention">Concerns</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {d.aiFlags.map((f, i) => (
-                    <li key={i}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {d.agentRun?.notes.length ? (
-              <div className="mt-3">
-                <p className="dense text-ink-soft">Notes (do not affect payment)</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-ink-soft">
-                  {d.agentRun.notes.map((n, i) => (
-                    <li key={i}>{n}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {d.aiMissing.length && !missingElsewhere ? (
-              <div className="mt-3">
-                <p className="dense text-attention">Wants before paying</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {d.aiMissing.map((f, i) => (
-                    <li key={i}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {concernsElsewhere || missingElsewhere ? (
-              <p className="mt-3 text-ink-soft">
-                {[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. {d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} covered under Policy.
-              </p>
-            ) : null}
-            {d.agentRun ? (
-              <div className="mt-3 border-t pt-3 hairline">
-                <p className="dense text-ink-soft">Read by</p>
-                <p className="mt-0.5">
-                  {d.agentRun.engine === "claude" ? <>Claude <span className="num text-ink-soft">{d.agentRun.model}</span></> : <>Rule-based reader <span className="text-ink-soft">(no model call)</span></>}
+          <WorkingPanel className={ord("agent")} title="What the agent read" aside={!recorded && o.aiConfidence !== null ? <span className="num">confidence {o.aiConfidence}%</span> : null}>
+            {recorded ? (
+              <>
+                <p className="mb-3 rounded border border-[color:var(--rule-strong)] bg-[color:var(--paper)] px-3 py-2 text-xs leading-4 text-ink-soft">{RECORDED_LABEL}</p>
+                <p className="dense text-ink-soft">
+                  Claude&apos;s confidence <span className="num">{recorded.confidence}%</span>
                 </p>
-                <p className="dense mt-2 text-ink-soft">What the agent checked</p>
-                {d.agentRun.toolCalls.length ? (
-                  <>
-                    <ul className="mt-1 space-y-1">
-                      {d.agentRun.toolCalls.map((t, i) => (
-                        <li key={i} className="grid grid-cols-[12px_1fr] gap-x-2">
-                          <span aria-hidden className="mt-[7px] h-1.5 w-1.5 rounded-full bg-[color:var(--ink-soft)]" />
-                          <span>{toolCallSentence(t, { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length })}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <Disclosure className="mt-2" summary="Show raw">
-                      <ul className="space-y-1.5">
-                        {d.agentRun.toolCalls.map((t, i) => (
-                          <li key={i} className="rounded bg-[color:var(--paper)] px-2.5 py-1.5">
-                            <p className="num text-xs font-medium">{t.name}</p>
-                            <pre className="num mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit" }}>
-                              {t.input && t.input !== "{}" ? `input ${raw(t.input)}\n` : ""}
-                              {t.resultPreview ? `result ${raw(t.resultPreview)}` : ""}
-                            </pre>
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-1 text-2xs text-ink-soft">Results are stored clipped to 200 characters.</p>
+                <p className="mt-1">{tidyDates(recorded.summary)}</p>
+                {corrected ? <p className="num mt-1 font-medium text-ink-soft">{corrected}</p> : null}
+                <ReadingList title="Concerns" tone="attention" items={recorded.flags.map(tidyDates)} />
+                <ReadingList title="Wants before paying" tone="attention" items={recorded.missing.map(tidyDates)} />
+                <ReadingList title="Notes" items={recorded.notes.map(tidyDates)} soft />
+                <ToolCalls calls={recorded.toolCalls} ctx={toolCtx} title="What Claude checked" />
+                <div className="mt-3 border-t pt-3 hairline">
+                  <p className="text-xs text-ink-soft">This demo&apos;s own reading: rule-based reader (no model call)</p>
+                  {o.aiSummary ? (
+                    <Disclosure className="mt-1" summary="Show its reading">
+                      <p className="text-ink-soft">{summaryWithoutCount(o.aiSummary)}</p>
+                      {concernLine ? <p className="mt-1 text-ink-soft">{concernLine}</p> : null}
+                      {d.aiFlags.length && !concernsElsewhere ? <ReadingList title="Concerns" tone="attention" items={d.aiFlags} /> : null}
+                      {d.aiMissing.length && !missingElsewhere ? <ReadingList title="Wants before paying" tone="attention" items={d.aiMissing} /> : null}
                     </Disclosure>
-                  </>
-                ) : (
-                  <p className="mt-0.5 text-ink-soft">None. This reading used no tools{d.agentRun.engine === "rules" ? "" : " beyond the request and attached records"}.</p>
-                )}
-              </div>
-            ) : null}
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                {o.aiSummary ? <p>{summaryWithoutCount(o.aiSummary)}</p> : <p className="text-ink-soft">The agent has not read this yet.</p>}
+                {corrected ? <p className="num mt-1 text-ink-soft">{corrected}</p> : null}
+                {d.aiFlags.length && !concernsElsewhere ? <ReadingList title="Concerns" tone="attention" items={d.aiFlags} /> : null}
+                {d.agentRun?.notes.length ? <ReadingList title="Notes (do not affect payment)" items={d.agentRun.notes} soft /> : null}
+                {d.aiMissing.length && !missingElsewhere ? <ReadingList title="Wants before paying" tone="attention" items={d.aiMissing} /> : null}
+                {concernLine ? <p className="mt-3 text-ink-soft">{concernLine}</p> : null}
+                {d.agentRun ? (
+                  <div className="mt-3 border-t pt-3 hairline">
+                    <p className="dense text-ink-soft">Read by</p>
+                    <p className="mt-0.5">
+                      {d.agentRun.engine === "claude" ? <>Claude <span className="num text-ink-soft">{d.agentRun.model}</span></> : <>Rule-based reader <span className="text-ink-soft">(no model call)</span></>}
+                    </p>
+                    {d.agentRun.toolCalls.length ? (
+                      <ToolCalls calls={d.agentRun.toolCalls} ctx={toolCtx} title="What the agent checked" />
+                    ) : (
+                      <>
+                        <p className="dense mt-2 text-ink-soft">What the agent checked</p>
+                        <p className="mt-0.5 text-ink-soft">None. This reading used no tools{d.agentRun.engine === "rules" ? "" : " beyond the request and attached records"}.</p>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            )}
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
           </WorkingPanel>
 
-          {["awaiting_approval", "blocked", "needs_evidence"].includes(o.state) ? (
-            <WorkingPanel className={ord("deciding")} title="What you are deciding" aside="at a glance">
-              <ApprovalContext
-                ask={formatMoney(o.amountMinor, o.currency)}
-                evidence={d.evidence.filter((e) => e.amountMinor !== null && !e.supersededBy).map((e) => `${e.label}: ${formatMoney(e.amountMinor, e.currency)}`)}
-                destination={d.vendor ? [d.vendor.name, o.selectedRail === "stellar" ? `Stellar ${truncateMiddle(d.vendor.stellarAccount, 6)}` : (o.selectedRail === "wise" || o.selectedRail === "bank_file") && d.vendor.bankLabel ? `bank account ${d.vendor.bankLabel}${d.vendor.accountHolder ? ` (${d.vendor.accountHolder})` : ""}` : d.vendor.paypalEmail ? `PayPal ${d.vendor.paypalEmail}` : "no payout method on file", d.vendor.verifiedAt ? `details verified ${formatDate(d.vendor.verifiedAt)}` : "details never verified"].join(", ") : "Unknown vendor"}
-                route={(() => { const q = selectedQuote; return q ? `${railLabel(q.rail)}, recipient gets ${formatMoney(q.receiveAmountMinor, q.receiveCurrency)}, fee ${formatMoney(q.feeMinor, q.sendCurrency)}` : "no route yet"; })()}
-                why={otherFailing.length ? `Policy also found ${[otherBlocks ? `${otherBlocks} more ${otherBlocks === 1 ? "block" : "blocks"}` : null, otherWarnings ? `${otherWarnings} ${otherWarnings === 1 ? "warning" : "warnings"}` : null].filter(Boolean).join(" and ")}, listed first under Policy.` : ""}
-                whyColour={toneText(decision.tone)}
-              />
-            </WorkingPanel>
-          ) : null}
-          <WorkingPanel className={ord("policy")} title="Policy" aside={o.policyDecision ? decisionText(o.policyDecision) : null}>
+          <WorkingPanel className={ord("policy")} title="Policy">
             <RuleChecklist rules={rules} earlier={earlier} />
           </WorkingPanel>
 
           <WorkingPanel className={ord("route")} title="Route">
-            <RouteCompare quotes={d.quotes} selectedRail={o.selectedRail} routeReason={o.routeReason} />
+            <RouteCompare quotes={d.quotes} selectedRail={o.selectedRail} routeReason={o.routeReason} ready={o.state === "approved"} />
           </WorkingPanel>
         </div>
 
@@ -317,16 +306,16 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </section>
           ) : null}
           {o.state === "approved" && o.releaseAt ? (
-            <WorkingPanel className={ord("exception")} title="Autopilot" aside="scheduled">
+            <WorkingPanel className={ord("exception")} title="Autopilot">
               <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>
               <div className="mt-2">
                 <ScheduledReleases compact rows={[{ id: o.id, vendorName: o.vendorName, amountText: formatMoney(o.amountMinor, o.currency), releaseAt: o.releaseAt }]} />
               </div>
             </WorkingPanel>
           ) : null}
-          <WorkingPanel className={ord("actions")} label="Actions" title="Actions" aside={stateLabel(o.state)}>
+          <WorkingPanel className={`${ord("actions")} pointer-coarse:[&_.btn]:h-11!`} label="Actions" title="Actions">
             {dualGap ? <p className="mb-2 rounded border border-attention bg-attention-soft px-3 py-2 text-xs text-ink" role="status">{dualGap}</p> : null}
-            <ActionBar id={o.id} shownWarnings={shownWarnings} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} billId={o.billId} vendorChoices={vendorChoices} primaryInCard={Boolean(decision.action)} />
+            <ActionBar id={o.id} shownWarnings={shownWarnings} pendingKey={d.attempts.filter((a) => a.status === "unknown" || a.status === "pending").at(-1)?.idempotencyKey ?? null} state={o.state} amountMinor={o.amountMinor} currency={o.currency} blockedReason={o.blockedReason} selectedRail={o.selectedRail} availableRails={availableRails} hasAccounting={hasAccounting} perms={perms} approveRefusal={approveRefusal} vendorId={o.vendorId} billId={o.billId} vendorChoices={vendorChoices} primaryInCard={cardCarriesPrimary} />
             {o.vendorId && (["sent", "settled"].includes(o.state) ? !viewer || viewer.can("pay") : ["needs_evidence", "blocked", "awaiting_approval"].includes(o.state) && (!viewer || viewer.can("amend"))) ? (
               <div className="mt-4 border-t pt-3 hairline">
                 <VendorLinkButton kind={["sent", "settled"].includes(o.state) ? "remittance" : "evidence"} obligationId={o.id} />
@@ -440,7 +429,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </ReferencePanel>
           ) : null}
 
-          <ReferencePanel className={ord("history")} title="History" aside={`${d.audit.length} entries`}>
+          <ReferencePanel className={ord("history")} title="History">
             <Timeline entries={d.audit} />
           </ReferencePanel>
         </div>
@@ -452,48 +441,48 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   );
 }
 
-function decisionText(d: string): string {
-  switch (d) {
-    case "auto_execute":
-      return "cleared to pay";
-    case "require_approval":
-      return "approval required";
-    case "block":
-      return "blocked";
-    case "hold":
-      return "held";
-    default:
-      return d.replace(/_/g, " ");
-  }
-}
-
-/** Trims a blocked reason to a short caption for the check line. */
-function shortReason(reason: string): string {
-  if (/already used/.test(reason)) return "duplicate reference";
-  const m = reason.match(/says ([A-Z]{3} [\d,]+\.\d{2})/);
-  if (m) return `evidence says ${m[1]}`;
-  return reason.length > 48 ? reason.slice(0, 45) + "…" : reason;
-}
-
-/** The four facts an approver needs side by side: what was asked, what the evidence says, where the money goes, and what it costs. */
-function ApprovalContext({ ask, evidence, destination, route, why, whyColour }: { ask: string; evidence: string[]; destination: string; route: string; why: string; whyColour: string }) {
+/** A short list in the agent panel: concerns, missing records or notes. */
+function ReadingList({ title, items, tone, soft = false }: { title: string; items: string[]; tone?: "attention"; soft?: boolean }) {
+  if (!items.length) return null;
   return (
-    <div>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
-        <dt className="dense text-ink-soft">Asked for</dt>
-        <dd className="num font-medium">{ask}</dd>
-        <dt className="dense text-ink-soft">Evidence says</dt>
-        <dd className="num">{evidence.length ? evidence.join("; ") : <span className="text-attention">nothing with an amount</span>}</dd>
-        <dt className="dense text-ink-soft">Goes to</dt>
-        <dd>{destination}</dd>
-        <dt className="dense text-ink-soft">Route</dt>
-        <dd>{route}</dd>
-      </dl>
-      {why ? (
-        <p className="mt-3 border-t pt-3 font-medium hairline" style={{ color: whyColour }}>
-          {why}
-        </p>
-      ) : null}
+    <div className="mt-3">
+      <p className={`dense ${tone === "attention" ? "text-attention" : "text-ink-soft"}`}>{title}</p>
+      <ul className={`mt-1 list-disc space-y-1 pl-5 ${soft ? "text-ink-soft" : ""}`}>
+        {items.map((f, i) => (
+          <li key={i}>{f}</li>
+        ))}
+      </ul>
     </div>
+  );
+}
+
+/** The reader's tool calls as plain sentences, with the stored input and result behind "Show raw". */
+function ToolCalls({ calls, ctx, title }: { calls: Array<{ name: string; input: string; resultPreview: string }>; ctx: Parameters<typeof toolCallSentence>[1]; title: string }) {
+  return (
+    <>
+      <p className="dense mt-3 text-ink-soft">{title}</p>
+      <ul className="mt-1 space-y-1">
+        {calls.map((t, i) => (
+          <li key={i} className="grid grid-cols-[12px_1fr] gap-x-2">
+            <span aria-hidden className="mt-[7px] h-1.5 w-1.5 rounded-full bg-[color:var(--ink-soft)]" />
+            <span>{toolCallSentence(t, ctx)}</span>
+          </li>
+        ))}
+      </ul>
+      <Disclosure className="mt-2" summary="Show raw">
+        <ul className="space-y-1.5">
+          {calls.map((t, i) => (
+            <li key={i} className="rounded bg-[color:var(--paper)] px-2.5 py-1.5">
+              <p className="num text-xs font-medium">{t.name}</p>
+              <pre className="num mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap break-all text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit" }}>
+                {t.input && t.input !== "{}" ? `input ${raw(t.input)}\n` : ""}
+                {t.resultPreview ? `result ${raw(t.resultPreview)}` : ""}
+              </pre>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1 text-2xs text-ink-soft">Results are stored clipped to 200 characters.</p>
+      </Disclosure>
+    </>
   );
 }
