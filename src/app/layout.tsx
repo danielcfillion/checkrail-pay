@@ -54,7 +54,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     return (
       <html lang="en" className={archivo.variable} suppressHydrationWarning>
         <body>
-          <ToastProvider>{children}</ToastProvider>
+          <ToastProvider bare>{children}</ToastProvider>
         </body>
       </html>
     );
