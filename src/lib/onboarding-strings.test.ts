@@ -55,7 +55,7 @@ describe("onboarding strings", () => {
     for (const lang of ["en", "vi"] as const) {
       for (const [path, text] of texts(STRINGS[lang])) {
         expect(text.trim(), `${lang} ${path}`).not.toBe("");
-        expect(text, `${lang} ${path}`).not.toContain("—");
+        expect(text, `${lang} ${path}`).not.toContain("\u2014");
       }
     }
   });
