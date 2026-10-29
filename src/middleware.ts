@@ -54,7 +54,7 @@ export function middleware(req: NextRequest) {
   }
 
   const users = configuredUsers();
-  if (users === null) return new NextResponse("CHECKRAIL_USERS or CHECKRAIL_BASIC_AUTH is set but malformed (user:password:role, comma separated); refusing all requests.", { status: 503 });
+  if (users === null) return new NextResponse("CHECKRAIL_USERS or CHECKRAIL_BASIC_AUTH is set but malformed (user:password:role, comma separated), or, with live PayPal, public Stellar or live Wise, a password is under 12 characters; refusing all requests.", { status: 503 });
 
   let actor: string;
   let role: string;

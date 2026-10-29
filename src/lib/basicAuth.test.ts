@@ -1,11 +1,26 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
-import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, parseCredential, safeEqual } from "./basicAuth";
+import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, configuredUsers, parseCredential, safeEqual } from "./basicAuth";
 import { middleware } from "../middleware";
 import { resetDemoAction } from "../app/actions";
 import { config } from "./config";
 
 const basic = (user: string, pass: string) => `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
+
+describe("password length where real money can move (SEC5-3)", () => {
+  const users = "owner:Long-enough-pass-1:admin,clerk:short:clerk";
+  it("refuses a short password with live PayPal, public Stellar or live Wise", () => {
+    for (const env of [{ PAYPAL_ENV: "live" }, { STELLAR_NETWORK: "public" }, { WISE_ENV: "live" }]) {
+      expect(configuredUsers({ CHECKRAIL_USERS: users, ...env })).toBeNull();
+      expect(configuredUsers({ CHECKRAIL_BASIC_AUTH: "owner:short", ...env })).toBeNull();
+    }
+  });
+  it("accepts long passwords there, and any password on the sandbox, testnet or mock rails", () => {
+    expect(configuredUsers({ CHECKRAIL_USERS: "owner:Long-enough-pass-1:admin", PAYPAL_ENV: "live" })).toHaveLength(1);
+    expect(configuredUsers({ CHECKRAIL_USERS: users, PAYPAL_ENV: "sandbox", STELLAR_NETWORK: "testnet", RAIL_MODE: "live" })).toHaveLength(2);
+    expect(configuredUsers({ CHECKRAIL_USERS: users })).toHaveLength(2);
+  });
+});
 
 describe("basic auth helpers (C3)", () => {
   it("parses user:pass and keeps colons in the password", () => {
@@ -121,7 +136,11 @@ describe("middleware", () => {
     expect(fwd(res, ROLE_HEADER)).toBe("clerk");
     expect(fwd(res, PERSONA_HEADER)).toBe("judge");
     env.PAYPAL_ENV = "live";
-    expect(fwd(middleware(req(asLan)), ACTOR_HEADER)).toBe("judge");
+    // With real money a short password is refused outright (SEC5-3); with a long one the persona is still ignored.
+    expect(middleware(req(asLan)).status).toBe(503);
+    env.CHECKRAIL_USERS = "judge:a-long-live-password:admin";
+    const asLanLong = { authorization: basic("judge", "a-long-live-password"), cookie: "checkrail_persona=lan" };
+    expect(fwd(middleware(req(asLanLong)), ACTOR_HEADER)).toBe("judge");
   });
 
   it("only an owner login can act as someone else", () => {
