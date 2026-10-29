@@ -8,7 +8,8 @@ import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { billRecordOf, createBill, payBill } from "./bills";
 import { getDailyClose, signOffDailyClose } from "./dailyClose";
-import { agedPayables } from "./books";
+import { agedPayables, markReturnedByHand } from "./books";
+import { listSettlements, listVendors, paidSummary } from "../queries";
 import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remittance } from "./vendorLinks";
 import { BankFileRail } from "../rails/bankFile";
 import { buildAccountingRecord, toCsv } from "../accounting/record";
@@ -20,13 +21,14 @@ import { resetRails, setRailsForTest } from "../rails";
 /** Practitioner round six (PR6-n): fixes to the outputs around the money path. */
 
 let db: Db;
+let story: { paypal: string };
 const as = (u: string): Actor => resolveActor(db, DEMO_BUSINESS_ID, u, db.select().from(users).where(eq(users.id, u)).get()!.role as Role);
 const ob = (id: string) => db.select().from(obligations).where(eq(obligations.id, id)).get()!;
 
 beforeEach(async () => {
   resetRails();
   db = openTestDb();
-  await seedDemo(db, { history: true });
+  ({ story } = await seedDemo(db, { history: true }));
   setRailsForTest({ bank_file: new BankFileRail(() => db) });
 });
 afterEach(() => {
@@ -213,4 +215,23 @@ describe("PR6-5: aged payables tie to the bills in the books", () => {
     approveObligation(db, id, "user:minh");
     await executeObligation(db, id, { actor: "user:minh" });
   }
+});
+
+describe("PR6-6: paid to date on the vendor page does not count money that came back", () => {
+  const maria = () => paidSummary(listSettlements(db).filter((x) => x.obligation.vendorId === "ven_maria").map((x) => ({ ...x, state: x.obligation.state })), "USD");
+
+  it("subtracts a refunded payment and its fee, and shows what came back", async () => {
+    await executeObligation(db, story.paypal, { actor: "user:minh" });
+    await confirmSettlement(db, story.paypal);
+    const before = maria();
+    const fee = db.select().from(settlements).where(eq(settlements.obligationId, story.paypal)).get()!.feeMinor;
+    expect(fee).toBeGreaterThan(0);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), story.paypal, "5TXMARIA180ABC");
+    expect(ob(story.paypal).state).toBe("refunded");
+    const after = maria();
+    expect(after.paidMinor).toBe(before.paidMinor - 18_000);
+    expect(after.feesMinor).toBe(before.feesMinor - fee);
+    expect(after.refundedMinor).toBe(18_000);
+    expect(listVendors(db).find((v) => v.id === "ven_maria")!.paidMinor).toBe(after.paidMinor);
+  });
 });
