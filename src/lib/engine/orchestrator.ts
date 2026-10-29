@@ -473,6 +473,20 @@ function simulatedPayPalHistory(db: Db, businessId: string): string {
  * Evaluate policy for an obligation without writing anything: no audit row, no change to the stored decision, no
  * superseded approvals. Pages that only look (a payment run, a list) use this; a GET must not change the record.
  */
+/**
+ * PayPal reports a returned, reversed or refunded payout as a failed attempt. Retrying it re-approves the same
+ * obligation, so the "a payment to these details came back" rule would never see it (it looks at other obligations).
+ * True when this obligation's own attempt came back after the details were last verified.
+ */
+function cameBackOnItsOwn(db: Db, obligationId: string, verifiedAt: string | null): boolean {
+  return db
+    .select({ status: paymentAttempts.status, externalStatus: paymentAttempts.externalStatus, errorMessage: paymentAttempts.errorMessage, updatedAt: paymentAttempts.updatedAt })
+    .from(paymentAttempts)
+    .where(eq(paymentAttempts.obligationId, obligationId))
+    .all()
+    .some((a) => a.status === "failed" && /RETURNED|REVERSED|REFUNDED/i.test(`${a.externalStatus ?? ""} ${a.errorMessage ?? ""}`) && (!verifiedAt || a.updatedAt > verifiedAt));
+}
+
 export function previewPolicy(db: Db, obligationId: string): PolicyOutcome {
   return evaluateOutcome(db, obligationId).outcome;
 }
@@ -566,7 +580,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     today: localDateString(),
     // A payout to these same details came back since they were last verified: likely a dead address.
     paypalHistory: ob.paypalHistoryJson ? (JSON.parse(ob.paypalHistoryJson) as PayPalHistoryCheck) : null,
-    returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? null) : null,
+    returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? (cameBackOnItsOwn(db, obligationId, vendorRow.verifiedAt) ? obligationId : null)) : null,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
     withholding,
     taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,
@@ -1067,6 +1081,19 @@ export async function resolveManually(db: Db, obligationId: string, actor: strin
     } catch {
       return "sent";
     }
+  }
+  // "Nothing moved" is the one claim that frees the payment to be paid again under a new key, so where the rail can be
+  // asked it is checked, not taken on a person's word alone: a payout the provider already knows means the money may
+  // have moved, and the person records it as found instead. A rail that cannot be read right now blocks the claim too.
+  const lookup = getRails()[attempt.rail as Rail].findByIdempotencyKey;
+  if (lookup) {
+    let known: { batchId: string } | null;
+    try {
+      known = await lookup.call(getRails()[attempt.rail as Rail], attempt.idempotencyKey);
+    } catch {
+      throw new Error("Could not ask the provider whether this payment exists just now; try again in a minute. Nothing was changed");
+    }
+    if (known) throw new Error(`The provider already has a payout for this attempt (${known.batchId}); record it as found instead of paying again. Nothing was changed`);
   }
   db.update(paymentAttempts).set({ status: "failed", errorMessage: `Confirmed by ${actor} that nothing moved${resolution.note ? `: ${resolution.note}` : ""}`, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
   transition(db, obligationId, "failed", actor, "execution.resolved_by_hand", { attemptId: attempt.id, nothingMoved: true, note: resolution.note ?? null });

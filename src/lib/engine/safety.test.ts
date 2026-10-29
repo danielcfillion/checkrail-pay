@@ -42,6 +42,12 @@ class ScriptedRail implements PaymentRail {
   async getStatus(): Promise<SettlementStatus> {
     return this.status;
   }
+  /** What the provider says when asked whether it knows an attempt's key: a batch id, nothing, or an outage. */
+  known: string | null | Error = null;
+  async findByIdempotencyKey(): Promise<{ batchId: string; batchStatus: string | null } | null> {
+    if (this.known instanceof Error) throw this.known;
+    return this.known ? { batchId: this.known, batchStatus: "PENDING" } : null;
+  }
 }
 
 const base = { feeMinor: 0, receivedMinor: null, receivedCurrency: null, fxRate: null, raw: null };
@@ -145,6 +151,40 @@ describe("C1: ambiguous outcomes never lead to a second payment", () => {
     expect(actionsOf(story.paypal)).toContain("execution.retry_requested");
     expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("submitted");
     expect(attemptsOf(story.paypal)).toHaveLength(2);
+  });
+
+  it("nothing moved is checked with the provider: a known payout or an outage blocks the claim (SEC5-4)", async () => {
+    const pp = new ScriptedRail("paypal", [unknown()]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    pp.known = "BATCH-ALREADY";
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved" })).rejects.toThrow(/already has a payout for this attempt \(BATCH-ALREADY\)/);
+    pp.known = new Error("PayPal 503");
+    await expect(resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved" })).rejects.toThrow(/Could not ask the provider/);
+    // Both refusals changed nothing: the attempt is still unresolved and the payment cannot be retried.
+    expect(get(story.paypal).state).toBe("execution_pending");
+    expect(attemptsOf(story.paypal)[0].status).toBe("unknown");
+    expect(() => retryFailed(db, story.paypal, "user:daniel")).toThrow();
+    pp.known = null;
+    expect(await resolveManually(db, story.paypal, "user:daniel", { kind: "nothing_moved" })).toBe("failed");
+  });
+
+  it("a payout that came back, retried on the same obligation, raises the came-back warning (SEC5-6)", async () => {
+    const pp = new ScriptedRail("paypal", [submitted("BATCH-1")]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    pp.status = { status: "failed", externalStatus: "SUCCESS/RETURNED", raw: null };
+    expect(await confirmSettlement(db, story.paypal)).toBe("failed");
+    expect(runPolicy(db, story.paypal).rules.some((r) => r.ruleId === "payout_returned")).toBe(true);
+  });
+
+  it("a payout that failed for another reason does not raise it", async () => {
+    const pp = new ScriptedRail("paypal", [submitted("BATCH-1")]);
+    installRails(pp);
+    await executeObligation(db, story.paypal, { actor: "user:daniel" });
+    pp.status = { status: "failed", externalStatus: "SUCCESS/FAILED", raw: null };
+    expect(await confirmSettlement(db, story.paypal)).toBe("failed");
+    expect(runPolicy(db, story.paypal).rules.some((r) => r.ruleId === "payout_returned")).toBe(false);
   });
 
   it("a person can resolve a stuck payment from the dashboard: found records the id, nothing moved allows a retry", async () => {
@@ -536,6 +576,11 @@ describe("H8: unclaimed or held PayPal payouts are exceptions, never failures", 
     expect(await confirmSettlement(db, story.paypal, "poll")).toBe("failed");
     expect(attemptsOf(story.paypal)[0].status).toBe("failed");
     transition(db, story.paypal, "approved", "user:daniel", "retry");
+    // The payout came back to these same details, so policy stops the retry until a person has read why (SEC5-6),
+    // and the person's approval then covers the warning they saw.
+    await expect(executeObligation(db, story.paypal, { actor: "user:daniel" })).rejects.toThrow(/came back/);
+    expect(get(story.paypal).state).toBe("awaiting_approval");
+    approveObligation(db, story.paypal, "user:daniel");
     expect((await executeObligation(db, story.paypal, { actor: "user:daniel" })).status).toBe("submitted");
   });
 
