@@ -82,7 +82,8 @@ export function checkStatement(i: { rules: Rule[]; reader?: ReaderView | null; m
     const bits: string[] = [];
     if (concerns > 0) bits.push(`raised ${plural(concerns, "concern", "concerns")}`);
     if (missing > 0) bits.push(`wants ${plural(missing, "missing record", "missing records")}`);
-    const confidence = reader.confidence !== null ? `Confidence ${reader.confidence}%${low ? `, below the ${min}% threshold` : ""}.` : "";
+    // With a concern named, the figure is enough; the threshold is spelled out when confidence is the only reason.
+    const confidence = reader.confidence !== null ? `Confidence ${reader.confidence}%.` : "";
     tail =
       bits.length > 0
         ? `, ${joiner} ${who} ${bits.join(" and ")}: ${firstClause((reader.concerns[0] ?? reader.missing[0]) as string)}. ${confidence}`

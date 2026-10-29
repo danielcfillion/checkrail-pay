@@ -26,7 +26,7 @@ describe("checkStatement", () => {
   it("says a recorded run raised the concern and that the rules did not see it", () => {
     const s = checkStatement({ rules: [pass("a")], reader: { confidence: 30, concerns: [PAYPAL_FLAG], missing: [], recorded: true } });
     expect(s.kind).toBe("reader");
-    expect(s.text).toBe("Rules passed, but the recorded Claude run raised 1 concern: JOB-PAL3D-0927 appears to have already been paid. Confidence 30%, below the 75% threshold. The rules did not see this run.");
+    expect(s.text).toBe("Rules passed, but the recorded Claude run raised 1 concern: JOB-PAL3D-0927 appears to have already been paid. Confidence 30%. The rules did not see this run.");
     expect(s.chip).toBe("1 reader concern");
   });
 
@@ -70,7 +70,7 @@ describe("checkStatement", () => {
     expect(s).toEqual({ kind: "blocked", text: "1 rule blocks this request.", chip: "1 blocking rule" });
     const two = checkStatement({ rules: [block("a", "x"), block("b", "y"), warn("c", "z")], reader: { confidence: 10, concerns: ["Looks wrong"], missing: [], recorded: false } });
     expect(two.kind).toBe("blocked");
-    expect(two.text).toBe("2 rules block this request and 1 warning, and the reader raised 1 concern: Looks wrong. Confidence 10%, below the 75% threshold.");
+    expect(two.text).toBe("2 rules block this request and 1 warning, and the reader raised 1 concern: Looks wrong. Confidence 10%.");
   });
 });
 
