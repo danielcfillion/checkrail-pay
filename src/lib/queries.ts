@@ -250,9 +250,10 @@ export function getOverview(db: Db = getDb()) {
 }
 
 /** Approved and scheduled by autopilot: the agent will send it, so it does not need a person. */
-function scheduled(r: ObligationRow): boolean {
+export function isScheduled(r: { state: string; releaseAt: string | null }): boolean {
   return r.state === "approved" && !!r.releaseAt;
 }
+const scheduled = isScheduled;
 
 /** For a blocked mismatch, how much the block saved: requested minus evidenced amount, if positive. */
 function mismatchDelta(r: ObligationRow): number {
@@ -337,6 +338,8 @@ export function waitingIdsFor(actor: Actor, db: Db = getDb()): string[] {
   const open = db.select().from(obligations).where(inArray(obligations.state, ["awaiting_approval", "approved", "blocked", "needs_evidence", "failed"])).all();
   const mayApprove = actorCan(actor, "approve");
   for (const o of open) {
+    // A payment autopilot has scheduled waits on the agent, not on a person (a person may still cancel it).
+    if (isScheduled(o)) continue;
     if (o.state === "awaiting_approval" && mayApprove) {
       const mine = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, o.id), eq(approvals.decision, "approved"), eq(approvals.actor, actor.id))).get();
       if (mine || approvalGate(db, o.id, actor.id).refusal) continue;

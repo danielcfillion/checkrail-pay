@@ -130,7 +130,7 @@ export default function AccountingPage() {
                 <th scope="col" className="hidden md:table-cell">
                   Destination
                 </th>
-                <th scope="col" className="hidden xl:table-cell">
+                <th scope="col" className="hidden 2xl:table-cell">
                   Queued
                 </th>
               </tr>
@@ -149,7 +149,7 @@ export default function AccountingPage() {
                         {p.reference ?? r.obligation.sourceRef ?? "none"}
                       </Link>
                     </td>
-                    <td className="min-w-[10rem] font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
+                    <td className="min-w-[12rem] font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
                     <td className="hidden sm:table-cell">
                       <RailTag rail={p.rail} />
                     </td>
@@ -157,14 +157,14 @@ export default function AccountingPage() {
                     <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
                     <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
                     <td className="hidden text-ink-soft lg:table-cell">
-                      <span className="block max-w-[9rem] truncate" title={p.accountCode ?? undefined}>
+                      <span className="block max-w-[6rem] truncate" title={p.accountCode ?? undefined}>
                         {p.accountCode ?? ""}
                       </span>
                     </td>
                     <td className="hidden whitespace-nowrap text-ink-soft md:table-cell" title={r.externalRef ?? undefined}>
                       {destinationLabel(r.destination, r.externalRef)}
                     </td>
-                    <td className="num hidden whitespace-nowrap text-ink-soft xl:table-cell" title={formatDateTime(r.createdAt)}>
+                    <td className="num hidden whitespace-nowrap text-ink-soft 2xl:table-cell" title={formatDateTime(r.createdAt)}>
                       {formatDate(r.createdAt)}
                     </td>
                   </tr>

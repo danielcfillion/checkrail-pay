@@ -454,6 +454,14 @@ describe("H3: approvals are people, and the ingester cannot approve", () => {
     expect(waitingIdsFor(as("thu"), db)).toEqual([]);
   });
 
+  it("a payment autopilot has scheduled waits on the agent, not on a person (the Needs someone count)", async () => {
+    const ready = db.select().from(obligations).where(eq(obligations.state, "approved")).get()!;
+    const as = (u: string) => resolveActor(db, DEMO_BUSINESS_ID, u, db.select().from(users).where(eq(users.id, u)).get()!.role as Role);
+    expect(waitingIdsFor(as("daniel"), db)).toContain(ready.id);
+    db.update(obligations).set({ releaseAt: new Date(Date.now() + 600_000).toISOString() }).where(eq(obligations.id, ready.id)).run();
+    expect(waitingIdsFor(as("daniel"), db)).not.toContain(ready.id);
+  });
+
   it("an approved payment can still have its amount corrected, and the correction needs approval again", async () => {
     const id = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
