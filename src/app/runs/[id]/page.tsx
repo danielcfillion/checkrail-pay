@@ -50,13 +50,13 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const readerOnPay = items.filter((i) => i.plan === "pay" && reading.has(i.obligationId)).length;
   // What a release would actually do, in words: what is paid, and what is left for its own page and why.
   const leftWhy = [
-    payNow.leftByReason.warning ? `${payNow.leftByReason.warning} carry${payNow.leftByReason.warning === 1 ? "es" : ""} a warning or only the vendor's own support, which a person reads first` : null,
+    payNow.leftByReason.warning ? `${payNow.leftByReason.warning} carry${payNow.leftByReason.warning === 1 ? "es" : ""} a warning or only the vendor's own support` : null,
     payNow.leftByReason.limit ? `${payNow.leftByReason.limit} ${payNow.leftByReason.limit === 1 ? "is" : "are"} above your approval limit or yours to approve` : null,
     payNow.leftByReason.second ? `${payNow.leftByReason.second} need${payNow.leftByReason.second === 1 ? "s" : ""} a second approver` : null,
     payNow.leftByReason.changed ? `${payNow.leftByReason.changed} changed amount since being added` : null,
     payNow.leftByReason.state ? `${payNow.leftByReason.state} ${payNow.leftByReason.state === 1 ? "is" : "are"} no longer payable` : null,
   ].filter(Boolean);
-  const confirmText = `${payNow.count ? `Pay ${pluralise(payNow.count, "payment")} now${payNow.approving ? `, approving ${payNow.approving} that ${payNow.approving === 1 ? "is" : "are"} waiting` : ""}.` : "Nothing in this run can be paid now."}${payNow.left ? ` ${payNow.left} will be left for ${payNow.left === 1 ? "its" : "their"} own ${payNow.left === 1 ? "page" : "pages"} and not paid: ${leftWhy.join("; ")}.${canApproveHere ? " Approve them here first to include them." : ""}` : ""}${readerOnPay ? ` ${readerOnPay} of the payments going out ${readerOnPay === 1 ? "carries" : "carry"} a reader concern or low confidence that a release does not stop for; read ${readerOnPay === 1 ? "it" : "them"} on the lines first.` : ""} Each payment is checked again just before it goes; anything that changed is skipped, not paid.`;
+  const confirmText = `${payNow.count ? `Pay ${pluralise(payNow.count, "payment")} now${payNow.approving ? `, approving ${payNow.approving} that ${payNow.approving === 1 ? "is" : "are"} waiting` : ""}.` : "Nothing in this run can be paid now."}${payNow.left ? ` ${payNow.left} will be left for ${payNow.left === 1 ? "its" : "their"} own ${payNow.left === 1 ? "page" : "pages"}, not paid: ${leftWhy.join("; ")}.${canApproveHere ? " Approve here first to include." : ""}` : ""}${readerOnPay ? ` ${readerOnPay} going out ${readerOnPay === 1 ? "carries" : "carry"} a reader concern or low confidence that release does not stop for: read the line${readerOnPay === 1 ? "" : "s"} first.` : ""} Each is checked again just before it goes.`;
   const canBuild = !viewer || viewer.can("build_run");
   const byCurrency = new Map<string, number>();
   for (const t of totals) byCurrency.set(t.currency, (byCurrency.get(t.currency) ?? 0) + t.totalMinor + t.feeMinor);

@@ -39,8 +39,8 @@ export function ConfirmButton({ label, busyLabel, confirmText, action, tone = "d
     );
   }
   return (
-    <span className="inline-flex flex-wrap items-center gap-2">
-      <span className="text-ink-soft">{confirmText}</span>
+    <span className="inline-flex flex-wrap items-center gap-2" role="group" aria-label={`Confirm: ${label}`}>
+      <span className="max-w-prose text-ink-soft" role="status">{confirmText}</span>
       <button
         type="button"
         className={`btn ${toneClass} ${sizeClass}`}
