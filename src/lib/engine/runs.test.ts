@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { evidence, obligations, paymentAttempts, paymentRunItems, paymentRuns, users } from "../db/schema";
+import { auditEntries, evidence, obligations, paymentAttempts, paymentRunItems, paymentRuns, users } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { createRun, releaseRun, runCandidates, viewRun } from "./runs";
+import { ingestObligation, previewPolicy } from "./orchestrator";
 import { resetRails } from "../rails";
 
 let db: Db;
@@ -63,6 +64,34 @@ describe("payment runs", () => {
     expect(r).toMatchObject({ paid: 1, skipped: 1 });
     expect(state(story.stellar)).toBe("awaiting_approval");
     expect(items(runId).map((i) => i.message ?? "").some((m) => /warning a person must read first.*vendor uploaded a document/.test(m))).toBe(true);
+  });
+
+  it("viewing a run writes nothing to the record (SEC6-1)", async () => {
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [story.paypal, story.stellar] });
+    const audits = () => db.select().from(auditEntries).all().length;
+    const before = audits();
+    await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
+    await viewRun(db, DEMO_BUSINESS_ID, runId, as("thu"));
+    expect(audits()).toBe(before);
+  });
+
+  it("leaves an item that only the vendor's own documents support for its own page (SEC2-8)", async () => {
+    const id = await ingestObligation(db, {
+      businessId: DEMO_BUSINESS_ID,
+      sourceType: "invoice",
+      rawInput: "Invoice INV-MS-3333 from Maria Santos for 2 days guiding, USD 90.",
+      evidence: [{ kind: "invoice", label: "Invoice INV-MS-3333", amountMinor: 9_000, currency: "USD", reference: "INV-MS-3333", excerpt: "Maria Santos, 2 days guiding, USD 90." }],
+      actor: "user:lan",
+    });
+    // No warning rule fires: the only reason a person is needed is that nothing but the vendor's own say-so supports it.
+    expect(previewPolicy(db, id).rules.filter((r) => r.severity === "warn" && !r.passed)).toEqual([]);
+    expect(state(id)).toBe("awaiting_approval");
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Solo", obligationIds: [id] });
+    const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
+    expect(view.items[0].warnings.join(" ")).toMatch(/vendor's own documents/);
+    const r = await releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId);
+    expect(r).toMatchObject({ paid: 0, skipped: 1 });
+    expect(state(id)).toBe("awaiting_approval");
   });
 
   it("skips an item whose amount changed after it was added, and one the releaser may not approve", async () => {

@@ -206,7 +206,7 @@ export interface PolicyInput {
   withholding?: { rule: string; withheldMinor: number; reason: string } | null;
   taxFormWarning?: string | null;
   /** What the business's own rate card and departure records say this job should cost (see engine/rates.ts). */
-  expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string } | null;
+  expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string; endDate?: string } | null;
   /** The bill this payment settles all or part of, with what other payments and credits already cover. */
   bill?: { id: string; vendorId: string; reference: string; kind: string; status: string; totalMinor: number; currency: string; coveredMinor: number } | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
@@ -274,6 +274,8 @@ export interface PolicyOutcome {
   rules: PolicyRuleResult[];
   /** Warnings that were not on screen when the existing approval was given. Their presence voids that approval. */
   unacknowledged?: string[];
+  /** The payment goes to a person only because nothing but the vendor's own say-so (or a rate card for a trip that has not run) supports it. */
+  selfAttested?: boolean;
 }
 
 export interface RouteQuote {

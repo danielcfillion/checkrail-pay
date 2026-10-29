@@ -9,7 +9,7 @@ import { getRails } from "../rails";
 import { localDateString } from "../format";
 import { actorCan, otherPeopleWith, requirePermission, whoIs, type Actor } from "./users";
 import { currentLogin, humanOf } from "./requestContext";
-import { approvalGate, approveObligation, executeObligation, runPolicy } from "./orchestrator";
+import { approvalGate, approveObligation, executeObligation, previewPolicy } from "./orchestrator";
 
 /**
  * Payment runs: the clerk gathers what is due into one list, the approver reviews the total and the funding, and
@@ -93,9 +93,15 @@ export interface RunView {
   releaseRefusal: string | null;
 }
 
-/** What policy would ask a person to read before approving this one: the warnings on a fresh evaluation. */
+/**
+ * What policy would ask a person to read before approving this one: the warnings on a fresh evaluation, and the reason
+ * when nothing but the vendor's own say-so supports the amount. Read-only: viewing a run must not write to the record.
+ */
 function approvalWarnings(db: Db, obligationId: string): string[] {
-  return runPolicy(db, obligationId).rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => r.message);
+  const out = previewPolicy(db, obligationId);
+  const found = out.rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => r.message);
+  if (out.selfAttested && out.reasons[0]) found.push(out.reasons[0]);
+  return found;
 }
 
 /** The run as the releaser sees it: each item's current state, totals per rail and currency, and what is in the account. */

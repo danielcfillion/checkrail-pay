@@ -87,6 +87,26 @@ export function hasConfusables(s: string | null | undefined): boolean {
   return n.split(/[^\p{L}\p{N}]+/u).some((tok) => /[A-Za-z0-9]/.test(tok) && /[\p{L}\p{N}]/u.test(tok.replace(PLAIN_LATIN, "")));
 }
 
+/**
+ * Reference-shaped words in free text that carry a look-alike: a letter from another script or a hidden character
+ * inside something shaped like JOB-HG4D-0914 or PO-1182. The reference field is always ASCII, so the look-alike has
+ * to be looked for in the request and its records, where it hides a re-issued job from the duplicate checks. Words
+ * with no hyphen and a digit after it (ordinary prose, Thai or Khmer text with a number glued on) are not references
+ * and are left alone.
+ */
+export function lookalikeWords(...texts: Array<string | null | undefined>): string[] {
+  const out = new Set<string>();
+  for (const t of texts) {
+    if (!t) continue;
+    for (const w of t.split(/\s+/)) {
+      if (!w || w.length > 80) continue;
+      if (!/[A-Za-z]{1,6}-[A-Za-z0-9-]*\d/.test(w.replace(/[^\x00-\x7F]/g, ""))) continue;
+      if (hasConfusables(w)) out.add(w);
+    }
+  }
+  return [...out];
+}
+
 /** True when the flag comes only from mixed scripts that the fold list could not map back to Latin. */
 export function mixesScripts(s: string | null | undefined): boolean {
   return !!s && hasConfusables(s) && foldConfusables(s) === s.normalize("NFKC");

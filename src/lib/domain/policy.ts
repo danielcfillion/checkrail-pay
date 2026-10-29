@@ -1,6 +1,6 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { localDateString } from "../format";
-import { foldConfusables, hasConfusables, mixesScripts } from "./ids";
+import { foldConfusables, hasConfusables, lookalikeWords, mixesScripts } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -178,13 +178,17 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // R4c: the business's own rate card and departure say what this job costs. More than that is blocked; a match is
   // support that does not come from the vendor, which Autopilot needs (see below).
   let rateCardMatch = false;
+  let rateCardNotYet: string | null = null;
   if (exp) {
     const slack = Math.floor((exp.expectedMinor * policy.amountToleranceBps) / 10_000);
     const asked = obligation.amountMinor!;
     const fullJob = bill ? bill.totalMinor : asked;
     if (fullJob > exp.expectedMinor + slack) rules.push(block("expected_amount", `Rate card and departure ${exp.departureCode} say ${fmt(exp.expectedMinor, exp.currency)} (${exp.basis}); this asks for ${fmt(fullJob, obligation.currency!)}`));
     else {
-      rateCardMatch = true;
+      // The rate card says what a finished job costs; it does not show the job was done. It counts as support only
+      // once the departure has ended, so nothing is paid on a trip that has not run without a person.
+      if (exp.endDate && input.today && exp.endDate > input.today) rateCardNotYet = exp.endDate;
+      else rateCardMatch = true;
       rules.push(pass("expected_amount", `Within the rate card for ${exp.departureCode}: ${exp.basis} = ${fmt(exp.expectedMinor, exp.currency)}`));
     }
   }
@@ -259,6 +263,10 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
   else if (mixesScripts(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} mixes letters from different scripts, so it could not be compared with earlier references; check it is not a re-issue of a job already paid`));
   else if (hasConfusables(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} contains look-alike letters from another script or hidden characters; it was compared as ${foldConfusables(obligation.sourceRef)}`));
+
+  // A reference hidden behind a look-alike letter in the request or its records is not found by the duplicate checks.
+  const lookalikes = lookalikeWords(input.requestText, ...evidence.flatMap((e) => [e.label, e.excerpt, e.reference]));
+  if (lookalikes.length) rules.push(warn("reference_lookalike", `${lookalikes.slice(0, 3).join(", ")} mixes look-alike letters from another script or hidden characters, so it could not be compared with earlier jobs; check it is not a re-issue of a job already paid`));
 
   // R6: recipient details changed since verification
   if (policy.blockOnRecipientChange && vendor) {
@@ -345,7 +353,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // vendor did not write supports it: a job sheet, booking or purchase order from the business's systems, or the
   // rate card. This holds at every autonomy level.
   const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
-  const selfAttested = (): PolicyOutcome => ({ decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"], rules });
+  const selfAttested = (): PolicyOutcome => ({
+    decision: "require_approval",
+    reasons: [rateCardNotYet && exp ? `The rate card confirms this amount, but departure ${exp.departureCode} does not end until ${rateCardNotYet}; nothing is paid on a trip that has not run without a person, so a person approves this one` : "Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"],
+    rules,
+    selfAttested: true,
+  });
   // A cash advance is money out before anything is delivered, backed only by the record the business typed itself:
   // a person approves every one, at every autonomy level (and never the person who prepared it, while someone else can).
   if (input.paymentKind === "advance" && input.approvalsCount < 1) {

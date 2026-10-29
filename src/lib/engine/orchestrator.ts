@@ -469,7 +469,32 @@ function simulatedPayPalHistory(db: Db, businessId: string): string {
   return JSON.stringify({ transaction_details: details, total_items: details.length });
 }
 
+/**
+ * Evaluate policy for an obligation without writing anything: no audit row, no change to the stored decision, no
+ * superseded approvals. Pages that only look (a payment run, a list) use this; a GET must not change the record.
+ */
+export function previewPolicy(db: Db, obligationId: string): PolicyOutcome {
+  return evaluateOutcome(db, obligationId).outcome;
+}
+
+/** Evaluate policy and record the result: the stored decision, tax kept back, superseded approvals and an audit row. */
 export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
+  const { outcome, withholding } = evaluateOutcome(db, obligationId);
+  db.update(obligations).set({ withheldMinor: withholding?.withheldMinor ?? null, withholdingNote: withholding?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
+  if (outcome.unacknowledged?.length) {
+    // The approvals were given over a different set of warnings. They no longer count; a person looks again.
+    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
+    audit(db, { obligationId, actor: "policy", action: "approval.superseded", detail: { reason: "new warnings since approval", rules: outcome.unacknowledged } });
+  }
+  db.update(obligations)
+    .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
+    .where(eq(obligations.id, obligationId))
+    .run();
+  audit(db, { obligationId, actor: "policy", action: "policy.evaluated", detail: { decision: outcome.decision, rules: outcome.rules } });
+  return outcome;
+}
+
+function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome; withholding: ReturnType<typeof withholdingFor> } {
   const ob = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
   const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
@@ -523,7 +548,6 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     .reduce((sum, o) => sum + inBase(o.amountMinor, o.currency), 0);
   // Tax kept back from this payment, recomputed with every policy run so a corrected amount or a new form counts.
   const withholding = vendorRow && ob.amountMinor && ob.currency ? withholdingFor(policy, biz.country, vendorRow, ob.amountMinor, ob.currency) : null;
-  db.update(obligations).set({ withheldMinor: withholding?.withheldMinor ?? null, withholdingNote: withholding?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
@@ -557,17 +581,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     vendorRecentMinor,
     businessRecentMinor,
   });
-  if (outcome.unacknowledged?.length) {
-    // The approvals were given over a different set of warnings. They no longer count; a person looks again.
-    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
-    audit(db, { obligationId, actor: "policy", action: "approval.superseded", detail: { reason: "new warnings since approval", rules: outcome.unacknowledged } });
-  }
-  db.update(obligations)
-    .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
-    .where(eq(obligations.id, obligationId))
-    .run();
-  audit(db, { obligationId, actor: "policy", action: "policy.evaluated", detail: { decision: outcome.decision, rules: outcome.rules } });
-  return outcome;
+  return { outcome, withholding };
 }
 
 /**

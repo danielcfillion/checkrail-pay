@@ -131,6 +131,8 @@ function splitCsv(line: string): string[] {
 
 export interface Expectation {
   departureCode: string;
+  /** Last day of the departure; the rate card counts as support only once it has passed. */
+  endDate: string;
   expectedMinor: number;
   currency: string;
   /** "4 vehicle-days x USD 200.00" for the reviewer. */
@@ -158,7 +160,7 @@ export function expectedAmount(db: Db, businessId: string, vendorId: string, job
       total += r.rateMinor * s.quantity;
       parts.push(`${s.quantity} ${UNIT_LABEL[s.unit as Unit]}${s.quantity === 1 ? "" : "s"} x ${fmt(r.rateMinor, r.currency)}`);
     }
-    return { departureCode: d.code, expectedMinor: total, currency, basis: parts.join(" + ") };
+    return { departureCode: d.code, endDate: d.endDate, expectedMinor: total, currency, basis: parts.join(" + ") };
   }
   return null;
 }
