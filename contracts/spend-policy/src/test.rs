@@ -2,6 +2,7 @@
 extern crate std;
 
 use super::*;
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{token::StellarAssetClient, token::TokenClient, BytesN, Env, String};
 
@@ -252,4 +253,60 @@ fn the_owner_can_replace_the_agent_key() {
     assert_eq!(s.policy.config().agent, new_agent);
     s.policy.propose(&pid(&s.env, 1), &s.guide, &(10 * USD), &memo(&s.env, "x"));
     assert_eq!(s.env.auths()[0].0, new_agent);
+}
+
+#[test]
+fn a_proposal_nobody_releases_expires_and_anyone_can_sweep_it() {
+    let s = setup();
+    s.policy.propose(&pid(&s.env, 1), &s.guide, &(500 * USD), &memo(&s.env, "x"));
+    assert_eq!(s.policy.payment(&pid(&s.env, 1)).unwrap().expires_at, 1_000_000 + 600 + PROPOSAL_LIFE);
+    assert_eq!(s.policy.try_expire(&pid(&s.env, 1)), Err(Ok(Error::NotExpired)));
+    // Still releasable, and not yet sweepable, on the last second.
+    later(&s.env, 600 + PROPOSAL_LIFE);
+    assert_eq!(s.policy.try_expire(&pid(&s.env, 1)), Err(Ok(Error::NotExpired)));
+    later(&s.env, 1);
+    assert_eq!(s.policy.try_release(&pid(&s.env, 1)), Err(Ok(Error::Expired)));
+    s.policy.expire(&pid(&s.env, 1)); // no auth needed: it only frees what the proposal held
+    assert_eq!(s.policy.payment(&pid(&s.env, 1)).unwrap().status, Status::Expired);
+    assert_eq!(s.policy.scheduled_total(), 0);
+    assert_eq!(s.token.balance(&s.guide), 0);
+    assert_eq!(s.policy.try_expire(&pid(&s.env, 1)), Err(Ok(Error::NotPending)));
+    assert_eq!(s.policy.try_cancel(&pid(&s.env, 1)), Err(Ok(Error::NotPending)));
+}
+
+#[test]
+fn sweeping_expired_proposals_frees_the_daily_cap_a_stuck_agent_was_holding() {
+    let s = setup();
+    for n in 1..=4u8 {
+        s.policy.propose(&pid(&s.env, n), &s.guide, &(500 * USD), &memo(&s.env, "x"));
+    }
+    assert_eq!(s.policy.try_propose(&pid(&s.env, 5), &s.guide, &(1 * USD), &memo(&s.env, "x")), Err(Ok(Error::OverDailyCap)));
+    later(&s.env, 600 + PROPOSAL_LIFE + 1);
+    for n in 1..=4u8 {
+        s.policy.expire(&pid(&s.env, n));
+    }
+    s.policy.propose(&pid(&s.env, 5), &s.guide, &(500 * USD), &memo(&s.env, "x"));
+    assert_eq!(s.policy.scheduled_total(), 500 * USD);
+}
+
+#[test]
+fn a_released_payment_cannot_be_swept_and_an_early_release_still_works() {
+    let s = setup();
+    s.policy.propose(&pid(&s.env, 1), &s.guide, &(100 * USD), &memo(&s.env, "x"));
+    later(&s.env, 600);
+    s.policy.release(&pid(&s.env, 1));
+    later(&s.env, PROPOSAL_LIFE + 1);
+    assert_eq!(s.policy.try_expire(&pid(&s.env, 1)), Err(Ok(Error::NotPending)));
+}
+
+#[test]
+fn storage_time_to_live_is_topped_up_when_the_contract_is_used() {
+    let s = setup();
+    s.policy.propose(&pid(&s.env, 1), &s.guide, &(10 * USD), &memo(&s.env, "x"));
+    let instance = s.env.as_contract(&s.policy.address, || s.env.storage().instance().get_ttl());
+    let payment = s.env.as_contract(&s.policy.address, || s.env.storage().persistent().get_ttl(&Key::Payment(pid(&s.env, 1))));
+    let payee = s.env.as_contract(&s.policy.address, || s.env.storage().persistent().get_ttl(&Key::Allowed(s.guide.clone())));
+    for ttl in [instance, payment, payee] {
+        assert!(ttl >= TTL_THRESHOLD, "ttl {ttl} is under the threshold");
+    }
 }

@@ -11,6 +11,7 @@ Checkrail Pay already enforces its autopilot limits in its own database. This co
 | Payee allow-list | owner only | propose and release |
 | Cancel window before money moves (at least 60 seconds; zero is refused) | owner | release |
 | Cancel a scheduled payment | owner | until release |
+| Sweep a proposal nobody released (it lapses 3 days after its window and stops holding the daily cap) | anyone | after it lapses |
 | Pause | owner or agent (the safe direction) | propose and release |
 | Resume | owner only | |
 | One payment per id (idempotency) | nobody | propose |
@@ -21,7 +22,7 @@ The agent key can only `propose`. Anyone can call `release` once the window has 
 
 ## Status
 
-Written and unit-tested (16 tests: caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits applying at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation, a flood of tiny payments leaving the spend list bounded, no zero cancel window, owner and agent kept apart, agent key rotation). Owner-side changes (payees, limits, agent key, withdrawals) emit events so a monitor can alert on them. Known gaps, from the round 5 security review (`docs/audits/security-2026-10-29-r5.md`): scheduled payments never expire (the owner cancels them one at a time) and storage time-to-live is not extended, so an idle contract can be archived until someone restores it. Neither moves funds; both should be closed before the contract holds real money. Not yet deployed to testnet: the build environment it was written in has no network path to Stellar. The app does not call it yet; wiring it in as the Stellar rail's execution path is the proposed SCF work.
+Written and unit-tested (20 tests: caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits applying at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation, a flood of tiny payments leaving the spend list bounded, no zero cancel window, owner and agent kept apart, agent key rotation, proposals that lapse and can be swept, storage time-to-live topped up on use). Owner-side changes (payees, limits, agent key, withdrawals) emit events so a monitor can alert on them. Not yet deployed to testnet: the build environment it was written in has no network path to Stellar. The app does not call it yet; wiring it in as the Stellar rail's execution path is the proposed SCF work.
 
 ## Test
 
