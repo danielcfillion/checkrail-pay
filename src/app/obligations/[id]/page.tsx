@@ -148,7 +148,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">
               {o.vendorId ? (
-                <Link href={`/vendors/${o.vendorId}`} className="hover:underline">
+                <Link href={`/vendors/${o.vendorId}`} className={`hover:underline ${TOUCH_INLINE}`}>
                   {o.vendorName ?? "Unknown vendor"}
                 </Link>
               ) : (

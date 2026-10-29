@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getViewer } from "@/lib/viewer";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
@@ -79,7 +80,7 @@ export default async function DailyClosePage() {
                         <span className="dense mr-2" style={{ color: KIND[a.kind].tone }}>
                           {KIND[a.kind].label}
                         </span>
-                        <Link href={`/obligations/${a.id}`} className="font-medium hover:underline">
+                        <Link href={`/obligations/${a.id}`} className={`font-medium hover:underline ${TOUCH_INLINE}`}>
                           {a.vendorName ?? "Unknown vendor"}
                         </Link>{" "}
                         <span className="num text-ink-soft">{a.sourceRef ?? "no reference"}</span>

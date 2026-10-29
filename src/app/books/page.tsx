@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
@@ -45,7 +46,7 @@ export default async function BooksPage() {
                 <thead>
                   <tr>
                     <th scope="col">Vendor</th>
-                    <th scope="col">Reference</th>
+                    <th scope="col" className="max-sm:hidden">Reference</th>
                     <th scope="col" className="hidden sm:table-cell">Due</th>
                     <th scope="col">Age</th>
                     <th scope="col" className="hidden md:table-cell">Status</th>
@@ -56,13 +57,15 @@ export default async function BooksPage() {
                   {aged.rows.map((r) => (
                     <tr key={`${r.kind}-${r.id}`}>
                       <td className="font-medium">
-                        <Link href={r.kind === "bill" ? `/vendors/${r.vendorId}` : `/obligations/${r.id}`} className="hover:underline">
+                        <Link href={r.kind === "bill" ? `/vendors/${r.vendorId}` : `/obligations/${r.id}`} className={`hover:underline ${TOUCH_INLINE}`}>
                           {r.vendorName}
                         </Link>
+                        {/* On a phone the reference rides under the name, so the amount keeps its column. */}
+                        <span className="num block text-xs font-normal text-ink-soft sm:hidden">{r.reference}</span>
                       </td>
-                      <td className="num whitespace-nowrap text-ink-soft">{r.reference}</td>
+                      <td className="num whitespace-nowrap text-ink-soft max-sm:hidden">{r.reference}</td>
                       <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
-                      <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
+                      <td className={`whitespace-nowrap ${r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}`}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
                       <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : stateLabel(r.state).toLowerCase()}</td>
                       <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
                     </tr>

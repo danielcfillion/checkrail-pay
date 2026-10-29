@@ -42,16 +42,19 @@ export default async function DeparturesPage() {
               <tr>
                 <th scope="col">Departure</th>
                 <th scope="col">Dates</th>
-                <th scope="col" className="r">Guests</th>
+                <th scope="col" className="r max-sm:hidden">Guests</th>
                 <th scope="col">Services</th>
               </tr>
             </thead>
             <tbody>
               {deps.map((d) => (
                 <tr key={d.id}>
-                  <td className="num font-medium">{d.code}</td>
-                  <td className="num whitespace-nowrap text-ink-soft">{formatDateRange(d.startDate, d.endDate)}</td>
-                  <td className="r num">{d.guests}</td>
+                  <td className="num font-medium">
+                    {d.code}
+                    <span className="block text-xs font-normal text-ink-soft sm:hidden">{d.guests} {d.guests === 1 ? "guest" : "guests"}</span>
+                  </td>
+                  <td className="num text-ink-soft sm:whitespace-nowrap">{formatDateRange(d.startDate, d.endDate)}</td>
+                  <td className="r num max-sm:hidden">{d.guests}</td>
                   <td>
                     {d.services.map((s) => (
                       <span key={s.id} className="block">

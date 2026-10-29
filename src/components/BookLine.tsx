@@ -64,9 +64,9 @@ export function BookLine({ rows, currency = "USD", header }: { rows: ObligationR
             <div key={s} className="absolute top-0 h-full" style={{ left: `${stationOffset(i)}%` }}>
               {/* tick */}
               <div className="absolute w-px" style={{ top: LINE_Y - 6, height: 12, background: "var(--rule-strong)", transform: "translateX(-50%)" }} />
-              {/* marks above the line: pointer shortcuts (tabindex -1); on a phone the station row below is the target */}
+              {/* marks above the line: pointer shortcuts (tabindex -1). On a phone, or any touch screen, they are not targets (16 px dots are too small): the station label and the rows below are. */}
               <div
-                className="absolute flex items-end gap-1 max-sm:pointer-events-none"
+                className="absolute flex items-end gap-1 max-sm:pointer-events-none pointer-coarse:pointer-events-none"
                 style={{ bottom: `calc(100% - ${LINE_Y - 8}px)`, transform: anchorTransform(i), maxWidth: "min(160px, 18vw)", flexWrap: "wrap-reverse", justifyContent: align, width: "max-content" }}
               >
                 {d.items.slice(0, MAX_MARKS).map((r) => {
@@ -111,7 +111,7 @@ export function BookLine({ rows, currency = "USD", header }: { rows: ObligationR
               <Link
                 href={`/obligations?filter=${STATION_FILTER[i]}`}
                 aria-label={stationSummary(i, d, currency)}
-                className="group absolute hidden whitespace-nowrap rounded-sm px-1 py-0.5 sm:block"
+                className="group absolute hidden whitespace-nowrap rounded-sm px-1 py-0.5 sm:block pointer-coarse:after:absolute pointer-coarse:after:-inset-x-2 pointer-coarse:after:-inset-y-3 pointer-coarse:after:content-['']"
                 style={{ top: LINE_Y + 8, transform: anchorTransform(i), margin: i === 0 ? "0 0 0 -4px" : i === 4 ? "0 -4px 0 0" : undefined, textAlign: i === 0 ? "left" : i === 4 ? "right" : "center" }}
               >
                 <span className="dense block group-hover:underline" style={{ color: lit ? "var(--ink)" : "var(--ink-soft)" }}>
