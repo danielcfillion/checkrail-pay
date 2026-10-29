@@ -51,7 +51,7 @@ Every request travels one line through five stations: read, verified, routed, pa
 
 **PayPal's own records decide.** Before every decision that can move money, the app itself (deterministic code, not the model) reads PayPal Transaction Search. When PayPal already paid this job to this payee, the request is blocked with the PayPal transaction id: "PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com". The model cannot add or remove that record. Transaction Search can lag by up to three hours, so Checkrail's own payment history stays the first duplicate check.
 
-**Policy decides.** A deterministic policy engine (a pure function, 25 named rules, no model) checks the vendor, the evidence, the amount against the evidence and the rate card, duplicate jobs, changed payout details, the corridor and the agent's concerns. Outcome: block, hold, require approval or pay.
+**Policy decides.** A deterministic policy engine (a pure function, named rules, no model) checks the vendor, the evidence, the amount against the evidence and the rate card, duplicate jobs, changed payout details, the corridor and the agent's concerns. Outcome: block, hold, require approval or pay.
 
 **You choose how much the agent does.** Review everything, Assist (clean small payments are pre-approved, a person sends) or Autopilot (clean payments inside your caps are sent after a cancel window). Autonomy removes the approval step and nothing else. Policy runs again at the moment of release.
 
@@ -90,7 +90,7 @@ The agent is Claude (`claude-sonnet-5-5`) through the Anthropic SDK, with a smal
 
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 354 tests in 47 files. Six review rounds on 16 Oct by AI agents briefed as critics, and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Every finding was fixed with a test.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 426 tests in 55 files. Six review rounds on 16 Oct by AI agents briefed as critics, and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Round 1 findings were fixed with tests; round 2 findings are listed with their status in `docs/audits/`, and some remain open.
 
 ## Challenges we ran into
 

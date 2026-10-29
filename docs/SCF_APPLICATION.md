@@ -51,7 +51,7 @@ The agent key can only propose; release is permissionless after the window and r
 | Withdraw the balance | owner, any time | |
 
 What this buys:
-- A compromised Checkrail server can propose payments, but only to payees the owner allowed, only under the caps, and only after a window in which the owner can cancel or pause.
+- A compromised Checkrail server can propose payments, but only to payees the owner allowed, only under the caps, and only after a window in which the owner can cancel or pause. It can also deny service: it can fill the contract's release list and freeze it for up to 24 hours (a finding still open in `docs/audits/`), so the pitch does not claim it can only ever be stopped instantly.
 - For suppliers who hold their own Stellar wallet, a changed payout address needs the owner's signature on the allow-list, which closes the classic invoice-fraud path on chain.
 - **Anchor corridors are different.** On an anchor payout (for example US to the Philippines through PeraHub over SEP-31) every supplier is paid by sending USDC to the anchor's receiving account, and the supplier is identified off chain in the SEP-31 transaction. The on-chain payee is the anchor for every supplier, so an allow-list of addresses alone protects nothing there. The fix is to bind each allowed payee to the anchor account plus the supplier's SEP-31 receiver id. That binding is planned, not built; until it exists, on-chain allow-listing applies only to wallet-holding payees.
 - The business funds the contract and can withdraw at any time. Checkrail never holds funds.
@@ -75,11 +75,11 @@ Checkrail Pay reads each supplier request (Claude, or a rule-based reader), chec
 As of 29 Oct 2026:
 
 - **Spend-policy contract:** written in Rust on soroban-sdk 29.0.1. 11 unit tests pass with `cargo test` (caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation). Not deployed to testnet. Not called by the app yet.
-- **Checkrail Pay app:** 354 tests in 47 files, 25 named policy rules, a typed state machine with whitelisted transitions, idempotency on every rail attempt, autonomy levels with caps and a cancel window, a Daily close with audited sign-off, a Xero bills import file and CSV export.
+- **Checkrail Pay app:** 426 tests in 55 files, named policy rules, a typed state machine with whitelisted transitions, idempotency on every rail attempt, autonomy levels with caps and a cancel window, a Daily close with audited sign-off, a Xero bills import file and CSV export.
 - **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
 - **Claude (`claude-sonnet-5-5`): has read the full demo live,** with three read-only PayPal REST calls (Transaction Search and Invoicing).
 - **Stellar PYUSD rail: simulated.** The adapter is written to the Stellar SDK with memo-based idempotency and has never run on testnet.
-- **Reviews:** six review rounds on 16 Oct by AI agents briefed as critics, and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Every finding was fixed with a test.
+- **Reviews:** six review rounds on 16 Oct by AI agents briefed as critics, and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Round 1 findings were fixed with tests; round 2 findings are listed with their status in `docs/audits/`, and some remain open.
 
 ### Tranches and ask
 

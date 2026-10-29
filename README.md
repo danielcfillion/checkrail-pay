@@ -36,7 +36,7 @@ Every request travels one line through five stations:
     read ──── verified ──── routed ──── paid ──── reconciled
 
 1. **Read.** An agent reads the request and its evidence (a pasted message, a PDF read from its text layer, a photo read by Claude when a key is set). Claude in live mode, a rule-based reader otherwise. It returns a structured reading, a confidence score and concerns. It cannot pay anyone.
-2. **Verified.** A deterministic policy engine, a pure function with no network and no model, runs 25 named rules: known and unblocked vendor, amount and currency, evidence attached and who supplied it, evidence that names the payee in full, amount against the evidence or what is still open on the bill, rate card and departure, duplicate job, the same reference on another payee, verified payout details, corridor, tax form, and the agent's confidence and concerns. Every rule that applies is listed on the payment page. Outcome: block, hold, require approval or pay.
+2. **Verified.** A deterministic policy engine, a pure function with no network and no model, runs a set of named rules: known and unblocked vendor, amount and currency, evidence attached and who supplied it, evidence that names the payee in full, amount against the evidence or what is still open on the bill, rate card and departure, duplicate job, the same reference on another payee, verified payout details, corridor, tax form, and the agent's confidence and concerns. Every rule that applies is listed on the payment page. Outcome: block, hold, require approval or pay.
 3. **Routed.** Every rail is quoted. Vendor preference first, then the rail that delivers more per dollar the sender actually spends. A gap under 0.5% is a tie, and ties go PayPal, then Wise, then the bank file, then Stellar.
 4. **Paid.** Policy runs again, then the rail is called with an idempotency key on the attempt.
 5. **Reconciled.** Settlement is confirmed by polling the rail. Bills go to a Xero import file at approval, settlements export as CSV, and the PayPal statement is matched back line by line.
@@ -56,7 +56,7 @@ As of 29 Oct 2026:
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
-- **Tests:** 354 in 47 files. **Policy:** 25 named rules in `src/lib/domain/policy.ts`.
+- **Tests:** 426 in 55 files. **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -118,7 +118,7 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - Payout detail changes need a second person with a stated verification method.
 
 ### Reviews
-- Six review rounds on 16 Oct by AI agents briefed as critics (`docs/CRITIC_REVIEW_02.md`, `docs/critic/`), and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Every finding was fixed with a test.
+- Six review rounds on 16 Oct by AI agents briefed as critics (`docs/CRITIC_REVIEW_02.md`, `docs/critic/`), and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Round 1 findings were fixed with tests. Round 2 findings are listed in `docs/audits/` with their status; some are still open (see there).
 
 ### Known gaps
 - No inbound email or Zalo intake yet: requests are pasted or uploaded. No notifications, so the cancel window is a delay, not an alert.
