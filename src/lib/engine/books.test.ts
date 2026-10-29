@@ -121,4 +121,35 @@ describe("returned payouts", () => {
     expect(byClerk.returned?.[0].applied).toBe(false);
     expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
   });
+
+  it("a clerk's upload shows matches but saves nothing, so it cannot plant an anchor or block the real line (SEC3-1, SEC3-2)", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    const planted = payout.replace('"9AB1"', '"PLANTED0001"');
+    const byClerk = reconcilePayPal(db2, DEMO_BUSINESS_ID, lan, parsePayPalCsv([head, planted].join("\n"))).result;
+    expect(byClerk.matched).toHaveLength(1);
+    expect(byClerk.recorded).toBe(false);
+    const row = () => db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!;
+    expect(row().statementRef ?? null).toBeNull();
+    expect(row().reconciledAt ?? null).toBeNull();
+    // SEC3-2: the genuine line from PayPal still matches afterwards; nothing planted is in the way.
+    const real = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout].join("\n"))).result;
+    expect(real.recorded).toBe(true);
+    expect(real.matched).toHaveLength(1);
+    expect(real.statementOnly).toHaveLength(0);
+    expect(row().statementRef).toBe("9AB1");
+  });
+
+  it("a reversal naming an id only a clerk planted is listed, not applied (SEC3-1)", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    reconcilePayPal(db2, DEMO_BUSINESS_ID, lan, parsePayPalCsv([head, payout.replace('"9AB1"', '"PLANTED0001"')].join("\n")));
+    // Later the accountant uploads a file (for instance one passed on by the clerk) with a reversal for that id.
+    const r = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, reversal("PLANTED0001")].join("\n"))).result;
+    expect(r.returned).toHaveLength(0);
+    expect(r.returnedUnmatched?.[0].why).toMatch(/not matched to a payment here/);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
+  });
 });

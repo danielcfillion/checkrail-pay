@@ -120,6 +120,8 @@ export interface ReconResult {
   feesMinor: Record<string, number>;
   periodFrom: string | null;
   periodTo: string | null;
+  /** False when a clerk ran it: the matches are shown but not saved, because only a reconciler's upload is trusted to tie a payment to a statement line. */
+  recorded?: boolean;
 }
 
 const PAYOUT_TYPE = /payout|mass pay|payment sent|general payment/i;
@@ -131,6 +133,10 @@ const RETURN_TYPE = /reversal|returned|unclaimed|refund/i;
  */
 export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: StatementLine[], fileName?: string, source: "paypal_csv" | "paypal_api" = "paypal_csv"): { id: string; result: ReconResult } {
   if (!actorCan(by, "reconcile")) requirePermission(by, "pay", "reconcile statements");
+  // A statement line becomes the anchor a later reversal points at, so only someone who reconciles may save one. A
+  // clerk who prepares payments sees the matches but writes nothing: otherwise a planted transaction id would both
+  // block the real line's match and give a later forged reversal something to name.
+  const canRecord = actorCan(by, "reconcile");
   const out = lines.filter((l) => l.grossMinor < 0 && PAYOUT_TYPE.test(l.type) && !/denied|reversed|refunded/i.test(l.status));
   const dates = lines.map((l) => l.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
   const periodFrom = dates[0] ?? null;
@@ -143,7 +149,7 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     .where(and(eq(obligations.businessId, businessId), eq(settlements.rail, "paypal")))
     .all();
   const used = new Set<string>();
-  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], returned: [], returnedUnmatched: [], feeDiffs: [], feesMinor: {}, periodFrom, periodTo };
+  const result: ReconResult = { matched: [], statementOnly: [], appOnly: [], returned: [], returnedUnmatched: [], feeDiffs: [], feesMinor: {}, periodFrom, periodTo, recorded: canRecord };
   for (const l of out) {
     const amount = -l.grossMinor;
     result.feesMinor[l.currency] = (result.feesMinor[l.currency] ?? 0) + Math.abs(l.feeMinor);
@@ -177,7 +183,7 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     if (r && !r.s.statementRef) (source === "paypal_api" ? byTxn : sameFile).set(m.statementRef, r);
   }
   const returnedIds = new Set<string>();
-  const canRefund = actorCan(by, "reconcile");
+  const canRefund = canRecord;
   for (const l of backs) {
     const r = l.referenceTxnId ? byTxn.get(l.referenceTxnId) : undefined;
     const fits = r && !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && !!l.fromEmail && !!r.email && r.email.toLowerCase() === l.fromEmail;
@@ -203,6 +209,7 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
   }
   const ts = now();
   db.transaction((tx) => {
+    if (!canRecord) return;
     for (const m of result.matched) tx.update(settlements).set({ reconciledAt: ts, statementRef: m.statementRef.slice(0, 64) }).where(eq(settlements.id, m.settlementId)).run();
   });
   for (const r of result.returned!) {

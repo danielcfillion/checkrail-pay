@@ -89,6 +89,11 @@ export default async function BooksPage() {
                 {last.result.periodFrom} to {last.result.periodTo}: <span className="text-settled">{last.result.matched.length} matched</span>,{" "}
                 <span className={last.result.statementOnly.length ? "text-attention" : ""}>{last.result.statementOnly.length} on the statement only</span>, {last.result.appOnly.length} recorded here only.
               </p>
+              {last.result.recorded === false ? (
+                <p className="rounded-md border border-attention/40 bg-attention/10 p-2 text-attention">
+                  Shown to you, not saved. Only someone who reconciles (the accountant, an approver or the owner) saves matches against a statement.
+                </p>
+              ) : null}
               {last.result.statementOnly.length ? (
                 <div>
                   <p className="font-medium text-attention">Money left PayPal with no payment here. Look at these first:</p>
