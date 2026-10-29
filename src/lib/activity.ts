@@ -1,4 +1,4 @@
-import { humaniseActor, railLabel } from "./format";
+import { humaniseActor, humaniseStates, railLabel } from "./format";
 
 /**
  * The overview's Live activity: one row per event a person cares about (blocked, held for approval, approved, paid,
@@ -84,6 +84,7 @@ export function plainReason(reason: string | null | undefined): string {
   else if (/times this vendor's usual/.test(r)) out = `${r.split(":")[0]}: a person approves`;
   else if (/review everything/.test(r)) out = "You review every payment";
   else out = r.replace(/\b(?:obligation|payment request) obl_[a-z0-9]+ \((\w+)\)/gi, "an earlier request ($1)").replace(/\b(?:obligation|payment request) obl_[a-z0-9]+/gi, "an earlier request").replace(/\bobl_[a-z0-9]+/gi, "an earlier request");
+  out = humaniseStates(out);
   return fresh ? `New since approval: ${out.charAt(0).toLowerCase()}${out.slice(1)}` : out;
 }
 

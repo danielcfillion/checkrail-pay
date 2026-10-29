@@ -62,6 +62,8 @@ describe("round 2 wording and order", () => {
 
   it("says policy reasons in plain words (DS2-16)", () => {
     expect(plainReason("Amount exceeds auto-execute threshold USD 250.00")).toBe("Above USD 250: a person approves");
+    // A state code in the engine's duplicate message is shown as the state's label (NEW-4).
+    expect(plainReason("Reference JOB-KAL2D-1002 was already used by obligation obl_abc123 (awaiting_approval)")).toBe("Reference JOB-KAL2D-1002 was already used by an earlier request (awaiting approval)");
     expect(plainReason("Amount exceeds the autopilot per-payment cap USD 500.00")).toBe("Above the USD 500 autopilot cap: a person approves");
     expect(plainReason("Same job as obligation obl_4fbc2b0094b54704 (settled): both name INV-TAM-0834")).toBe("Same job as an earlier request (settled): both name INV-TAM-0834");
     expect(plainReason("New since approval: Amount exceeds auto-execute threshold USD 250.00")).toBe("New since approval: above USD 250: a person approves");
