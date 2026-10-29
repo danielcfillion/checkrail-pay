@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { viewEvidenceRequest } from "@/lib/engine/vendorLinks";
 import { EvidenceUpload } from "@/components/EvidenceUpload";
+import { PublicFrame } from "@/components/PublicFrame";
 import { VendorHeader } from "@/components/VendorHeader";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export default async function EvidencePage({ params }: { params: Promise<{ token
   const { token } = await params;
   const v = viewEvidenceRequest(getDb(), token);
   return (
-    <>
+    <PublicFrame>
       <VendorHeader payer={v?.businessName} />
       <h1 className="text-2xl font-semibold tracking-tight">{v ? "We need one document to pay you" : "Link not available"}</h1>
       {!v ? (
@@ -28,6 +29,6 @@ export default async function EvidencePage({ params }: { params: Promise<{ token
           </div>
         </>
       )}
-    </>
+    </PublicFrame>
   );
 }
