@@ -80,20 +80,62 @@ describe("returned payouts", () => {
     return { db2, s2, head, payout, reversal };
   }
 
-  it("ties a reversal to the payout it names, marks it refunded and flags a fee that differs", async () => {
+  it("ties a payout and its reversal in one file in one pass, marks it refunded and flags a fee that differs (PR6-9)", async () => {
     const { db2, s2, head, payout, reversal } = await paid();
     const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
-    // The payout and its reversal in one uploaded file: the reversal is listed for a person, not applied.
-    const same = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n"))).result;
-    expect(same.returned).toHaveLength(0);
-    expect(same.returnedUnmatched?.[0].why).toMatch(/only in this same file/);
-    expect(same.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
+    const file = parsePayPalCsv([head, payout, reversal("9AB1")].join("\n"));
+    const first = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, file).result;
+    expect(first.matched).toHaveLength(1);
+    expect(first.returned).toHaveLength(1);
+    expect(first.returned?.[0]).toMatchObject({ obligationId: s2.paypal, applied: true });
+    expect(first.returnedUnmatched).toHaveLength(0);
+    expect(first.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+    // The same file again changes nothing and refunds nothing a second time.
+    const again = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, file).result;
+    expect(again.returned).toHaveLength(0);
+    expect(again.returnedUnmatched?.[0].why).toMatch(/already marked as come back/);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+  });
+
+  it("ties a reversal in a later statement to a payout an earlier reconciliation tied", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout].join("\n")));
     expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
-    // Next month's statement names the payout an earlier reconciliation tied: now it is applied.
     const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, reversal("9AB1")].join("\n")));
     expect(result.returned).toHaveLength(1);
     expect(result.statementOnly).toHaveLength(0);
     expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+  });
+
+  it("in one file, a reversal from someone else, for another amount, or dated before the payout is listed, not applied", async () => {
+    const variants: Array<[string, (line: string) => string, RegExp]> = [
+      ["another sender", (l) => l.replace(/"maria[^"]*@[^"]*"/i, '"someone.else@example.com"'), /amount, currency or sender does not match/],
+      ["another amount", (l) => l.replace('"180.00"', '"90.00"'), /amount, currency or sender does not match/],
+      ["dated before the payout", (l) => l.replace(/^"\d+\/\d+\/\d+"/, '"01/01/2020"'), /dated before the payout/],
+    ];
+    for (const [label, change, why] of variants) {
+      const { db2, s2, head, payout, reversal } = await paid();
+      const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+      const bad = change(reversal("9AB1"));
+      expect(bad, label).not.toBe(reversal("9AB1"));
+      const r = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, bad].join("\n"))).result;
+      expect(r.returned, label).toHaveLength(0);
+      expect(r.returnedUnmatched, label).toHaveLength(1);
+      expect(r.returnedUnmatched?.[0].why, label).toMatch(why);
+      expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state, label).toBe("settled");
+    }
+  });
+
+  it("a clerk's upload of a payout and its reversal in one file lists the reversal and applies nothing", async () => {
+    const { db2, s2, head, payout, reversal } = await paid();
+    const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");
+    const r = reconcilePayPal(db2, DEMO_BUSINESS_ID, lan, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n"))).result;
+    expect(r.recorded).toBe(false);
+    expect(r.returned).toHaveLength(0);
+    expect(r.returnedUnmatched?.[0].why).toMatch(/only in this same file/);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
   });
 
   it("a hand-made payout line with no recipient, plus a reversal naming it, reopens nothing and overwrites nothing (security round 2)", async () => {

@@ -172,16 +172,26 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
   // business's settlements, and only when it names the vendor as sender. An amount and an email are not enough: two
   // payouts of the same amount to the same vendor would be indistinguishable.
   const backs = lines.filter((l) => l.grossMinor > 0 && RETURN_TYPE.test(`${l.type} ${l.status} ${l.note}`));
-  // Anchors a reversal may point at: statement lines tied to a payment by an earlier reconciliation, and, when the
-  // lines come straight from PayPal's API, payouts matched in this same read. A payout line in an uploaded file is
-  // not trusted as an anchor in that same file: a hand-made payout plus a reversal naming it would reopen a paid
-  // invoice. Such a reversal is listed for a person to confirm in PayPal instead.
+  // Anchors a reversal may point at: statement lines tied to a payment by an earlier reconciliation, and payouts
+  // matched in this same pass, so a payout and its reversal in one file are tied in one upload (a short payout or a
+  // same-month return puts both in the same statement). Payouts come first, reversals second.
+  //
+  // A same-pass payout is trusted only when the upload is recorded, that is a reconciler's, or when the lines come
+  // straight from PayPal's API. A clerk's upload records and applies nothing, so for a clerk such a reversal is listed
+  // for a person to confirm. This trusts nothing a reconciler cannot already do: markReturnedByHand takes any
+  // transaction id they name. The reversal must still name the payout's id, come from the vendor's own PayPal address,
+  // match the payout's amount and currency (see `fits`), and not be dated before the payout.
   const byTxn = new Map<string, (typeof rows)[number]>();
   for (const r of rows) if (r.s.statementRef) byTxn.set(r.s.statementRef, r);
   const sameFile = new Map<string, (typeof rows)[number]>();
+  const passPayoutDate = new Map<string, string>();
   for (const m of result.matched) {
     const r = rows.find((x) => x.s.id === m.settlementId);
-    if (r && !r.s.statementRef) (source === "paypal_api" ? byTxn : sameFile).set(m.statementRef, r);
+    if (r && !r.s.statementRef) {
+      const trusted = source === "paypal_api" || canRecord;
+      (trusted ? byTxn : sameFile).set(m.statementRef, r);
+      if (trusted) passPayoutDate.set(m.statementRef, m.date);
+    }
   }
   const returnedIds = new Set<string>();
   const canRefund = canRecord;
@@ -191,6 +201,11 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     if (!r || !fits) {
       const inThisFile = l.referenceTxnId && sameFile.has(l.referenceTxnId);
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : inThisFile ? "the payout it reverses is only in this same file; confirm in PayPal, then record it on the payment page" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
+      continue;
+    }
+    const payoutDate = passPayoutDate.get(l.referenceTxnId ?? "");
+    if (payoutDate && /^\d{4}-\d{2}-\d{2}$/.test(payoutDate) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < payoutDate) {
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "it is dated before the payout it reverses" });
       continue;
     }
     returnedIds.add(r.s.id);
