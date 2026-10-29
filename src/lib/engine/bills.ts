@@ -1,6 +1,6 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db";
-import { billAllocations, bills, obligations, vendors } from "../db/schema";
+import { billAllocations, bills, evidence, obligations, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef } from "../domain/money";
@@ -187,6 +187,28 @@ export function closeIfDone(db: Db, billId: string): void {
   const bal = billBalance(db, billId);
   const settledOut = b.kind === "credit_note" ? bal.creditedMinor : bal.paidMinor + bal.creditedMinor;
   if (settledOut >= b.totalMinor) db.update(bills).set({ status: "closed" }).where(eq(bills.id, billId)).run();
+}
+
+/**
+ * The bill that a payment's evidence record was written from, when it was one. payBill files the bill's reference and
+ * total as the payment's evidence, marked as a person's entry: policy still warns about it and never counts it as
+ * support that is independent of the people involved. But it was entered once, as a bill, not typed into this payment,
+ * so screens say where it came from instead of "typed by operator".
+ */
+export function billRecordOf(db: Db, obligationId: string): { reference: string; kind: string; recordedBy: string; evidenceIds: string[] } | null {
+  const o = db.select({ billId: obligations.billId }).from(obligations).where(eq(obligations.id, obligationId)).get();
+  if (!o?.billId) return null;
+  const b = db.select().from(bills).where(eq(bills.id, o.billId)).get();
+  if (!b) return null;
+  const label = `${b.kind === "advance" ? "Advance" : "Invoice"} ${b.reference} (`;
+  const ids = db
+    .select({ id: evidence.id, label: evidence.label, reference: evidence.reference, amountMinor: evidence.amountMinor, currency: evidence.currency, provenance: evidence.provenance })
+    .from(evidence)
+    .where(and(eq(evidence.obligationId, obligationId), isNull(evidence.supersededBy)))
+    .all()
+    .filter((e) => e.provenance === "operator" && e.label.startsWith(label) && e.reference === b.reference && e.amountMinor === b.totalMinor && e.currency === b.currency)
+    .map((e) => e.id);
+  return ids.length ? { reference: b.reference, kind: b.kind, recordedBy: b.createdBy, evidenceIds: ids } : null;
 }
 
 /** Every bill for a vendor with its balance, and the vendor's position per currency. */

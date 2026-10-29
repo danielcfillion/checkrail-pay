@@ -8,6 +8,7 @@ import { startOfLocalDay } from "./format";
 import { actorCan, type Actor } from "./engine/users";
 import { toBaseOrZero } from "./fx";
 import { approvalGate } from "./engine/orchestrator";
+import { billRecordOf } from "./engine/bills";
 
 /**
  * Read models for the operator dashboard. Plain functions over the DB, no
@@ -56,6 +57,8 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
     policyRules: latestPolicyRules(id, db),
     agentRun: latestAgentRun(id, db),
     payoutException: row.o.state === "sent" ? latestPayoutException(id, db) : null,
+    /** The bill this payment's evidence was written from, when it was (see billRecordOf). */
+    billRecord: billRecordOf(db, id),
   };
 }
 

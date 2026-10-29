@@ -12,7 +12,7 @@ import { approvalGate, dualControlGap } from "@/lib/engine/orchestrator";
 import { InvoiceDates } from "@/components/InvoiceDates";
 import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
-import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, truncateMiddle } from "@/lib/format";
+import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, humaniseActor, railLabel, roleLabel, sourceTypeLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
 import { VendorLinkButton } from "@/components/VendorLinkButton";
 import { ObligationStageProvider, StageCheckLine } from "@/components/ObligationStage";
@@ -198,7 +198,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                     <p className="dense text-ink-soft">
                       {evidenceKindLabel(e.kind)}
                       {e.reference ? <span className="num">, {e.reference}</span> : null}
-                      {e.provenance === "operator" ? <span className="text-attention">, typed by operator</span> : null}
+                      {e.provenance === "operator" ? <span className="text-attention">{d.billRecord?.evidenceIds.includes(e.id) ? `, from a bill recorded by ${humaniseActor(d.billRecord.recordedBy)}` : ", typed by operator"}</span> : null}
                       {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className={`link ${TOUCH_INLINE}`} href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
                     </p>
                     {e.excerpt ? <blockquote className="mt-1 border-l-2 pl-3 text-ink-soft hairline">{e.excerpt}</blockquote> : null}
