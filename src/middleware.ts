@@ -59,8 +59,12 @@ export function middleware(req: NextRequest) {
   let actor: string;
   let role: string;
   if (users.length > 0) {
-    if (overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS, Date.now(), false)) return tooMany(FAIL_WINDOW_MS);
+    const limited = overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS, Date.now(), false);
     const who = authenticate(req.headers.get("authorization"), users);
+    // Only for a login that is published anyway (the judging demo, where guessing it proves nothing): a correct
+    // password gets in even when the address is over its limit, so one visitor's typos, or a proxy address shared by
+    // everyone, cannot lock every judge out. Off by default: elsewhere an over-limit address is refused whatever it sends.
+    if (limited && !(who && process.env.CHECKRAIL_THROTTLE_SPARES_VALID === "1")) return tooMany(FAIL_WINDOW_MS);
     // A missing header is the browser asking for the password prompt, not a guess; only wrong passwords count.
     if (!who && req.headers.get("authorization")) {
       overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);

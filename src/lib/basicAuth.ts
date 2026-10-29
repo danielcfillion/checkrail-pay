@@ -119,6 +119,6 @@ export function checkBasicAuth(authorization: string | null | undefined, setting
  * mock mode, to be safe), and only when asked for or when no logins exist (open development server).
  */
 export function personasAllowed(env: Record<string, string | undefined> = process.env, loginsConfigured: boolean): boolean {
-  if (env.PAYPAL_ENV === "live" || env.STELLAR_NETWORK === "public") return false;
+  if (realMoneyEnv(env)) return false;
   return env.CHECKRAIL_DEMO_PERSONAS === "1" || !loginsConfigured;
 }

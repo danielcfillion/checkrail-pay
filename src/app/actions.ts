@@ -782,7 +782,7 @@ export async function reconcilePayPalAction(fileName: string, csv: string): Prom
     if (!biz) return { ok: false, message: "No business configured." };
     const { id, result } = reconcilePayPal(db, biz.id, await currentActor(), parsePayPalCsv(csv), typeof fileName === "string" ? fileName : undefined);
     done(["/books", "/ledger"]);
-    return { ok: true, message: `${result.matched.length} matched, ${result.statementOnly.length} on the statement only, ${result.appOnly.length} recorded here but not on the statement.`, id };
+    return { ok: true, message: `${result.matched.length} matched, ${result.statementOnly.length} on the statement only, ${result.appOnly.length} recorded here but not on the statement.${result.recorded === false ? " Shown to you, not saved: someone who reconciles (the accountant, an approver or the owner) saves matches." : ""}`, id };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

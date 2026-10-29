@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, configuredUsers, parseCredential, safeEqual } from "./basicAuth";
+import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, configuredUsers, parseCredential, personasAllowed, safeEqual } from "./basicAuth";
 import { middleware } from "../middleware";
 import { resetDemoAction } from "../app/actions";
 import { config } from "./config";
@@ -19,6 +19,13 @@ describe("password length where real money can move (SEC5-3)", () => {
     expect(configuredUsers({ CHECKRAIL_USERS: "owner:Long-enough-pass-1:admin", PAYPAL_ENV: "live" })).toHaveLength(1);
     expect(configuredUsers({ CHECKRAIL_USERS: users, PAYPAL_ENV: "sandbox", STELLAR_NETWORK: "testnet", RAIL_MODE: "live" })).toHaveLength(2);
     expect(configuredUsers({ CHECKRAIL_USERS: users })).toHaveLength(2);
+  });
+});
+
+describe("demo personas and real money (SEC6-3)", () => {
+  it("are off with live PayPal, public Stellar or live Wise, and on elsewhere when asked for", () => {
+    for (const live of [{ PAYPAL_ENV: "live" }, { STELLAR_NETWORK: "public" }, { WISE_ENV: "live" }]) expect(personasAllowed({ CHECKRAIL_DEMO_PERSONAS: "1", ...live }, true)).toBe(false);
+    expect(personasAllowed({ CHECKRAIL_DEMO_PERSONAS: "1", PAYPAL_ENV: "sandbox", WISE_ENV: "sandbox" }, true)).toBe(true);
   });
 });
 
@@ -53,7 +60,7 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP"] as const;
+  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP", "CHECKRAIL_THROTTLE_SPARES_VALID"] as const;
   const saved: Record<string, string | undefined> = {};
   const env = process.env as Record<string, string | undefined>;
   beforeEach(() => {
@@ -84,6 +91,19 @@ describe("middleware", () => {
     expect(middleware(req({ authorization: basic("judge", "a-long-enough-pass") })).status).toBe(200);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("lets a correct password in over the limit only where the login is published (SEC5-3)", () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const from = (pw: string) => req({ authorization: basic("judge", pw), "x-forwarded-for": "203.0.113.99" });
+    for (let i = 0; i < 11; i++) middleware(from("wrong"));
+    expect(middleware(from("wrong")).status).toBe(429);
+    // Default: an address over its limit is refused whatever it sends, so guessing stays throttled.
+    expect(middleware(from("a-long-enough-pass")).status).toBe(429);
+    // The judging demo publishes its login, so a visitor who types it correctly is never locked out by others.
+    env.CHECKRAIL_THROTTLE_SPARES_VALID = "1";
+    expect(middleware(from("a-long-enough-pass")).status).toBe(200);
+    expect(middleware(from("wrong")).status).toBe(429);
   });
 
   it("open in development: acts as the demo owner and ignores forged identity headers", () => {
