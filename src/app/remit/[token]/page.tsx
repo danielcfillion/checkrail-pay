@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Remittance advice", robots: { index: false, follow: false } };
 
 const T = {
-  en: { title: "Remittance advice", from: "From", to: "To", ref: "For", amount: "Amount", received: "You receive", via: "Paid by", date: "Date", pref: "Provider reference", paid: "Paid", way: "On its way", withheld: "Tax withheld (paid to the tax office)", invoice: "Invoice", total: "Total", left: "Left to pay", short: "Your invoice says", agreed: "we paid the agreed rate", kinds: { deposit: "Deposit", balance: "Balance", part: "Part payment", payment: "Payment", credit: "Credit note", advance: "Advance" }, now: "this payment", save: "Save as PDF", issued: "Issued by" },
-  vi: { title: "Thông báo thanh toán", from: "Bên trả", to: "Bên nhận", ref: "Cho", amount: "Số tiền", received: "Bạn nhận", via: "Hình thức", date: "Ngày", pref: "Mã giao dịch", paid: "Đã thanh toán", way: "Đang chuyển", withheld: "Thuế khấu trừ (nộp cho cơ quan thuế)", invoice: "Hóa đơn", total: "Tổng", left: "Còn lại", short: "Hóa đơn ghi", agreed: "chúng tôi thanh toán theo giá đã thỏa thuận", kinds: { deposit: "Đặt cọc", balance: "Thanh toán còn lại", part: "Thanh toán một phần", payment: "Thanh toán", credit: "Giảm trừ", advance: "Tạm ứng" }, now: "lần này", save: "Lưu PDF", issued: "Phát hành bởi" },
+  en: { title: "Remittance advice", from: "From", to: "To", ref: "For", amount: "Amount", received: "You receive", via: "Paid by", date: "Date", pref: "Provider reference", paid: "Paid", way: "On its way", withheld: "Tax withheld (paid to the tax office)", fee: "Fee deducted from the amount", invoice: "Invoice", total: "Total", left: "Left to pay", short: "Your invoice says", agreed: "we paid the agreed rate", kinds: { deposit: "Deposit", balance: "Balance", part: "Part payment", payment: "Payment", credit: "Credit note", advance: "Advance" }, now: "this payment", save: "Save as PDF", issued: "Issued by" },
+  vi: { title: "Thông báo thanh toán", from: "Bên trả", to: "Bên nhận", ref: "Cho", amount: "Số tiền", received: "Bạn nhận", via: "Hình thức", date: "Ngày", pref: "Mã giao dịch", paid: "Đã thanh toán", way: "Đang chuyển", withheld: "Thuế khấu trừ (nộp cho cơ quan thuế)", fee: "Phí đã trừ vào số tiền", invoice: "Hóa đơn", total: "Tổng", left: "Còn lại", short: "Hóa đơn ghi", agreed: "chúng tôi thanh toán theo giá đã thỏa thuận", kinds: { deposit: "Đặt cọc", balance: "Thanh toán còn lại", part: "Thanh toán một phần", payment: "Thanh toán", credit: "Giảm trừ", advance: "Tạm ứng" }, now: "lần này", save: "Lưu PDF", issued: "Phát hành bởi" },
 };
 
 export default async function RemitPage({ params }: { params: Promise<{ token: string }> }) {
@@ -32,6 +32,7 @@ export default async function RemitPage({ params }: { params: Promise<{ token: s
     [t.amount, r.amount],
     [t.received, r.received],
     [t.withheld, r.withheld],
+    [t.fee, r.feeDeducted ?? null],
     [t.via, r.rail],
     [t.date, r.date],
     [t.pref, r.providerRef],

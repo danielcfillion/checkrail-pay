@@ -8,6 +8,8 @@ import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { createRun, releaseRun, viewRun } from "./runs";
 import { createBill, payBill } from "./bills";
+import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remittance } from "./vendorLinks";
+import { confirmSettlement, executeObligation } from "./orchestrator";
 import { agedPayables } from "./books";
 import { xeroBillRows } from "../accounting/xeroBills";
 import { resetRails } from "../rails";
@@ -105,5 +107,33 @@ describe("PR7-2: a bill nobody approved is not in the ageing or its total", () =
     expect(after.rows.find((r) => r.reference === "INV-KAL-1030")).toMatchObject({ kind: "bill", amountMinor: 50_000 });
     expect(after.recordedNotApproved.some((r) => r.reference === "INV-KAL-1030")).toBe(false);
     expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows.some((r) => r["*InvoiceNumber"] === "INV-KAL-1030")).toBe(true);
+  });
+});
+
+describe("PR7-3: the remittance says when a fee came out of the amount", () => {
+  const base: Remittance = { businessName: "Ridgeline Expeditions LLC", vendorName: "Ana Reyes", reference: "JOB-PAL3D-0927", amount: "USD 750.00", received: "PHP 45,664.99", rail: "Stellar", date: "30 Oct 2026", providerRef: null, status: "paid", language: "en", withheld: null, shortPaid: null, history: null, feeDeducted: "USD 13.25" };
+
+  it("states the deduction in English and in Vietnamese, with what the vendor receives", () => {
+    expect(remittanceMessageFor([base], ["{link0}"])).toBe("Hi Ana Reyes, Ridgeline Expeditions LLC has paid USD 750.00 for JOB-PAL3D-0927 by Stellar on 30 Oct 2026. A USD 13.25 fee was deducted from the amount; you receive PHP 45,664.99. Details: {link0}");
+    const vi = remittanceMessageFor([{ ...base, language: "vi", rail: "Stellar" }], ["{link0}"]);
+    expect(vi).toMatch(/phí USD 13.25 đã được trừ vào số tiền; bạn nhận PHP 45,664.99\./);
+  });
+
+  it("names the reference when there are several payments, and says nothing when no fee was deducted", () => {
+    const two = remittanceMessageFor([base, { ...base, reference: "JOB-PAL3D-0928", feeDeducted: null }], ["a", "b"]);
+    expect(two).toMatch(/For JOB-PAL3D-0927, a USD 13.25 fee was deducted from the amount; you receive PHP 45,664.99\./);
+    expect(two.match(/deducted/g)).toHaveLength(1);
+    expect(remittanceMessageFor([{ ...base, feeDeducted: null }], ["a"])).not.toMatch(/deducted/);
+  });
+
+  it("a Stellar payment's advice carries the fee; a PayPal payment's, where the sender pays the fee on top, does not", async () => {
+    for (const id of [story.stellar, story.paypal]) {
+      if (ob(id).state === "awaiting_approval") approveObligation(db, id, "user:daniel");
+      await executeObligation(db, id, { actor: "user:minh" });
+      await confirmSettlement(db, id);
+    }
+    const advice = (id: string) => viewRemittance(db, createRemittanceLink(db, DEMO_BUSINESS_ID, as("lan"), id))!;
+    expect(advice(story.stellar)).toMatchObject({ rail: "Stellar", amount: "USD 750.00", feeDeducted: "USD 13.25" });
+    expect(advice(story.paypal)).toMatchObject({ rail: "PayPal", feeDeducted: null });
   });
 });
