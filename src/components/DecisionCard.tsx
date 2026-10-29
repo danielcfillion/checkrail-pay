@@ -172,6 +172,20 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
               {busy ? busyLabel(action) : action.label}
             </button>
             {decision.actionHint && action.kind === "approve" ? <p className="mt-1.5 text-xs leading-4 text-ink-soft">{decision.actionHint}</p> : null}
+            {action.kind === "approve" ? (
+              // Reject and the note live under Actions; this takes the person there, to the note, with the Reject button beside it.
+              <button
+                type="button"
+                className="link mt-1 text-xs"
+                onClick={() => {
+                  const note = document.getElementById("approval-note");
+                  note?.scrollIntoView({ block: "center" });
+                  note?.focus();
+                }}
+              >
+                Reject, with a note
+              </button>
+            ) : null}
           </div>
         ) : null}
       </section>
