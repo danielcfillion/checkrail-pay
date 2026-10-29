@@ -13,7 +13,7 @@ export const metadata = { title: "Inbox" };
 
 const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }> = [
   { key: "all", label: "All" },
-  { key: "needs_action", label: "Needs action", states: ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"] },
+  { key: "needs_action", label: "Needs someone", states: ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"] },
   { key: "in_flight", label: "In flight", states: ["execution_pending", "sent"] },
   { key: "settled", label: "Settled", states: ["settled"] },
   { key: "blocked", label: "Blocked", states: ["blocked", "failed"] },

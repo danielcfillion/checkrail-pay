@@ -1,5 +1,6 @@
 import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { listVendors } from "@/lib/queries";
 import { countryName, formatDate, roleLabel } from "@/lib/format";
 import { EmptyState, Money, PageHeader, Panel, RailTag, RelativeTime } from "@/components/ui";
@@ -85,7 +86,7 @@ export default async function VendorsPage() {
               {vendors.map((v) => (
                 <tr key={v.id} className="row-link relative">
                   <td className="font-medium">
-                    <Link href={`/vendors/${v.id}`} className="after:absolute after:inset-0 after:content-['']">
+                    <Link href={`/vendors/${v.id}`} className={`after:absolute after:inset-0 after:content-[''] ${TOUCH_INLINE}`}>
                       {v.name}
                     </Link>
                     {v.openCount ? <span className="num ml-2 text-xs text-ink-soft">{v.openCount} open</span> : null}

@@ -149,7 +149,7 @@ export default function AccountingPage() {
                         {p.reference ?? r.obligation.sourceRef ?? "none"}
                       </Link>
                     </td>
-                    <td className="font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
+                    <td className="min-w-[10rem] font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
                     <td className="hidden sm:table-cell">
                       <RailTag rail={p.rail} />
                     </td>
@@ -157,7 +157,7 @@ export default function AccountingPage() {
                     <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
                     <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
                     <td className="hidden text-ink-soft lg:table-cell">
-                      <span className="block max-w-[12rem] truncate" title={p.accountCode ?? undefined}>
+                      <span className="block max-w-[9rem] truncate" title={p.accountCode ?? undefined}>
                         {p.accountCode ?? ""}
                       </span>
                     </td>

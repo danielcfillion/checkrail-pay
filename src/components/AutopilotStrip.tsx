@@ -20,10 +20,10 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
       ? ap.paused
         ? "Nothing is sent without a person until you resume."
         : // The daily cap counts every payment sent or scheduled in the last 24 hours, people's as well as the agent's (policy, autopilot daily cap).
-          `The agent sends clean payments up to ${formatMoneyShort(ap.perPaymentCapMinor, currency)} each. ${formatMoneyShort(ap.committed24hMinor, currency)} of ${formatMoneyShort(ap.dailyCapMinor, currency)} daily cap used (all payments, last 24 hours).`
+          `The agent sends payments the rules pass, up to ${formatMoneyShort(ap.perPaymentCapMinor, currency)} each. ${formatMoneyShort(ap.committed24hMinor, currency)} of ${formatMoneyShort(ap.dailyCapMinor, currency)} daily cap used (all payments, last 24 hours).`
       : ap.level === "review"
         ? "A person approves and sends every payment."
-        : "Clean small requests are approved for you. A person sends them.";
+        : "Small requests the rules pass are approved for you. A person sends them.";
   return (
     <section className="panel mb-6" aria-label="Autonomy">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
