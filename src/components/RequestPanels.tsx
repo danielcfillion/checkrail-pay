@@ -41,7 +41,7 @@ export const SUMMARY = "pointer-coarse:min-h-11";
 /** For a small button (btn-sm). */
 export const TOUCH_SM = "pointer-coarse:h-11!";
 /** For an inline text control (a link-styled button or an icon): a taller hit area without moving the text. */
-export const TOUCH_INLINE = "pointer-coarse:inline-block pointer-coarse:min-h-11 pointer-coarse:-my-3.5 pointer-coarse:py-3.5";
+export const TOUCH_INLINE = "pointer-coarse:inline-block pointer-coarse:min-h-11 pointer-coarse:-my-3.5 pointer-coarse:py-3.5 pointer-coarse:-mx-2 pointer-coarse:px-2";
 
 /** A disclosure that reads as a control: the global summary style draws the chevron that turns when open. */
 export function Disclosure({ summary, children, className = "" }: { summary: ReactNode; children: ReactNode; className?: string }) {

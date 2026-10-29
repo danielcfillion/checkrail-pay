@@ -301,9 +301,12 @@ export function decide(i: DecisionInput): Decision {
       const rail = i.selectedRail ?? i.availableRails[0] ?? null;
       const passed = i.rules.filter((r) => r.passed).length;
       const delivered = i.quote && i.quote.receiveAmountMinor !== null ? ` Recipient gets ${formatMoney(i.quote.receiveAmountMinor, i.quote.receiveCurrency)} by ${railLabel(i.quote.rail)}, fee ${formatMoney(i.quote.feeMinor, i.quote.sendCurrency)}.` : "";
-      const checks = i.rules.length ? (passed === i.rules.length ? `All ${passed} checks passed.` : `${passed} of ${i.rules.length} checks passed; the rest were approved.`) : "";
+      // The same rule as the approval band: "All N checks passed" only when the reading holds no open concern either.
+      const st = checkStatement({ rules: i.rules, reader: i.reader });
+      const readerOpen = st.kind === "reader" || st.kind === "low_confidence" || st.kind === "blocked";
+      const checks = readerOpen ? st.text : i.rules.length ? (passed === i.rules.length ? `All ${passed} checks passed.` : `${passed} of ${i.rules.length} checks passed; the rest were approved.`) : "";
       const scheduled = i.releaseAt ? " Autopilot sends it when the cancel window ends." : "";
-      return { tone: "settled", title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null };
+      return { tone: "settled", title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null, chip: readerOpen ? st.chip : null };
     }
     case "settled": {
       const s = i.settlement;

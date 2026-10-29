@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { entryParts, formatDateRange, groupThousands, humaniseEntry, parseDateInput, timeAgoShort } from "./format";
+import { entryParts, formatDateRange, groupThousands, humaniseEntry, humaniseStates, parseDateInput, timeAgoShort } from "./format";
 
 describe("dates as people read them (DS2-17)", () => {
   it("shows a departure as one range", () => {
@@ -45,5 +45,13 @@ describe("groupThousands", () => {
     expect(groupThousands("n/a")).toBe("n/a");
     expect(groupThousands(null)).toBe("");
     expect(groupThousands(1500)).toBe("1,500");
+  });
+});
+
+describe("humaniseStates", () => {
+  it("turns a state code in brackets into its label, and leaves other text alone", () => {
+    expect(humaniseStates("Reference JOB-KAL2D-1002 was already used by obl_abc (awaiting_approval)")).toBe("Reference JOB-KAL2D-1002 was already used by obl_abc (awaiting approval)");
+    expect(humaniseStates("used by obl_abc (settled) and obl_def (approved)")).toBe("used by obl_abc (settled) and obl_def (ready to pay)");
+    expect(humaniseStates("a note about awaiting_approval (not a state code in brackets)")).toBe("a note about awaiting_approval (not a state code in brackets)");
   });
 });

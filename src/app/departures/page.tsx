@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
@@ -58,7 +59,7 @@ export default async function DeparturesPage() {
                   <td>
                     {d.services.map((s) => (
                       <span key={s.id} className="block">
-                        <Link href={`/vendors/${s.vendorId}`} className="hover:underline">
+                        <Link href={`/vendors/${s.vendorId}`} className={`hover:underline ${TOUCH_INLINE}`}>
                           {s.vendorName}
                         </Link>
                         <span className="text-ink-soft">

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition, type ReactNode } from "reac
 import { useRouter } from "next/navigation";
 import { createVendorAction, proposePayoutAction, updateVendorAction } from "@/app/actions";
 import { submitOnboardingAction } from "@/app/onboard/actions";
-import { bankOptionLabel, precheckOnboarding, STRINGS, type OnboardingError } from "@/lib/onboarding-strings";
+import { bankOptionLabel, errorText, precheckOnboarding, STRINGS, type OnboardingError } from "@/lib/onboarding-strings";
 import { useToast } from "./Toast";
 
 export type VendorFormValues = {
@@ -135,9 +135,11 @@ export function VendorForm({ mode, initial: given = EMPTY_VENDOR, vendorId, toke
     );
   }
 
+  // The Stellar field is only on the form for some vendors; an error names it only when it is there.
+  const showStellar = internal || mode === "payout" || v.country === "PH" || Boolean(v.stellarAccount);
   const errorFor = (field: string) => {
     const p = problems.find((x) => x.field === field);
-    return p ? t.errors[p.code] : undefined;
+    return p ? errorText(t, p.code, showStellar) : undefined;
   };
 
   return (
@@ -244,7 +246,7 @@ export function VendorForm({ mode, initial: given = EMPTY_VENDOR, vendorId, toke
             <Field label={t.paypalEmail} id="v-pp" hint={internal || mode === "payout" ? undefined : t.paypalEmailHint} error={errorFor("v-pp")}>
               <input id="v-pp" type="email" className="field" value={v.paypalEmail} onChange={set("paypalEmail")} maxLength={254} {...fieldA11y("v-pp", errorFor("v-pp"), false, !internal && mode !== "payout")} />
             </Field>
-            {internal || mode === "payout" || v.country === "PH" || v.stellarAccount ? (
+            {showStellar ? (
               <Field label={t.stellar} id="v-xlm" error={errorFor("v-xlm")}>
                 <input id="v-xlm" className="field num" value={v.stellarAccount} onChange={set("stellarAccount")} maxLength={56} placeholder="G..." spellCheck={false} {...fieldA11y("v-xlm", errorFor("v-xlm"))} />
               </Field>
@@ -318,10 +320,10 @@ export function VendorForm({ mode, initial: given = EMPTY_VENDOR, vendorId, toke
                 <li key={i}>
                   {p.field ? (
                     <a href={`#${p.field}`} className="link">
-                      {t.errors[p.code]}
+                      {errorText(t, p.code, showStellar)}
                     </a>
                   ) : (
-                    t.errors[p.code]
+                    errorText(t, p.code, showStellar)
                   )}
                 </li>
               ))}

@@ -105,3 +105,13 @@ export function checkStatement(i: { rules: Rule[]; reader?: ReaderView | null; m
           : plural(warnings, "warning", "warnings");
   return { kind, text, chip };
 }
+
+/**
+ * The line on a request that autopilot will send. "Every check passed" only when the statement is clear; otherwise the
+ * concern is said first, and the line still says the agent will send it unless a person cancels, because that is true.
+ */
+export function autopilotSentence(statement: CheckStatement): string {
+  const policy = "Policy runs once more at that moment.";
+  if (statement.kind === "clear") return `Every check passed and this is within your caps, so the agent will send it when the cancel window ends. ${policy}`;
+  return `${statement.text} It is within your caps, so the agent will send it when the cancel window ends unless you cancel it. ${policy}`;
+}

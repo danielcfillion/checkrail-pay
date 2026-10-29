@@ -102,7 +102,7 @@ export function ActionBar(p: Props) {
                   {busy === "reject" ? "Rejecting" : "Reject"}
                 </button>
               </div>
-              <p className="text-xs text-ink-soft">{inCard ? "The note goes with Approve above or Reject here. " : ""}Approving does not pay. Policy checks again, then the request is ready to pay.</p>
+              <p className="text-xs text-ink-soft">{inCard ? "Add a note before Approve or Reject. " : ""}Approving does not pay. Policy checks again, then the request is ready to pay.</p>
             </>
           ) : (
             <>

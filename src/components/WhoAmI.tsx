@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { setPersonaAction } from "@/app/actions";
 import { useToast } from "./Toast";
+import { personaLabel } from "./persona-label";
 
 export type Persona = { username: string; name: string; role: string };
 
@@ -66,7 +67,7 @@ export function RoleSwitch({ personas, username, className = "" }: { personas: r
       >
         {personas.map((p) => (
           <option key={p.username} value={p.username}>
-            {p.name}
+            {personaLabel(p.name)}
           </option>
         ))}
       </select>

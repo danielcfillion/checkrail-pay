@@ -171,6 +171,11 @@ export function stateLabel(state: string | null | undefined): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
+/** Engine text names a state in brackets ("... used by obl_x (awaiting_approval)"); people read its label, not the code. */
+export function humaniseStates(text: string): string {
+  return text.replace(/\((drafted|needs_evidence|verified|awaiting_approval|approved|blocked|execution_pending|sent|settled|failed|refunded|disputed|cancelled)\)/g, (_m, st: string) => `(${stateLabel(st).toLowerCase()})`);
+}
+
 /**
  * What each audit action did, as a verb phrase with no subject, so it reads after the actor ("The rule-based reader read the
  * request", "Policy held it for approval") and on its own in a column. Never repeat the actor here.

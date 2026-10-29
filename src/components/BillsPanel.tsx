@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { applyCreditAction, createBillAction, payBillAction, settleAdvanceAction } from "@/app/actions";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, stateLabel } from "@/lib/format";
 import { useToast } from "./Toast";
 import { DateField } from "./DateField";
 
@@ -108,7 +108,7 @@ function BillItem({ r, credits, canIngest, canAmend }: { r: BillRow; credits: Bi
             <span key={p.id}>
               {i ? ", " : ""}
               <Link href={`/obligations/${p.id}`} className="link">
-                {p.paymentKind ?? "payment"} {formatMoney(p.amountMinor, r.currency)} ({p.state.replace(/_/g, " ")})
+                {p.paymentKind ?? "payment"} {formatMoney(p.amountMinor, r.currency)} ({stateLabel(p.state).toLowerCase()})
               </Link>
             </span>
           ))}

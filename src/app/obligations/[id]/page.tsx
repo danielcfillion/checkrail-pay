@@ -23,7 +23,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
 import { DecisionCard } from "@/components/DecisionCard";
-import { DEFAULT_MIN_CONFIDENCE, type ReaderView } from "@/components/check-statement";
+import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE, type ReaderView } from "@/components/check-statement";
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
 import { amountAsRead, correctionLine, RECORDED_LABEL, selectRecordedReading, summaryWithoutCount } from "@/components/agent-reading";
@@ -317,7 +317,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           ) : null}
           {o.state === "approved" && o.releaseAt ? (
             <WorkingPanel className={ord("exception")} title="Autopilot">
-              <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>
+              <p className="text-ink-soft">{autopilotSentence(checkStatement({ rules: d.policyRules, reader }))}</p>
               <div className="mt-2">
                 <ScheduledReleases compact rows={[{ id: o.id, vendorName: o.vendorName, amountText: formatMoney(o.amountMinor, o.currency), releaseAt: o.releaseAt }]} />
               </div>
