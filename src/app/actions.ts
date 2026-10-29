@@ -361,7 +361,7 @@ export async function setAutonomyAction(change: AutonomyChange): Promise<ActionR
     await runAutopilot(db, { businessId: biz.id }); // picks up anything already approved and clean
     done();
     const level = next.autonomy ?? "assist";
-    return { ok: true, message: level === "autopilot" ? "Autopilot is on. Clean payments within your caps are sent after the cancel window." : level === "review" ? "Every payment now waits for a person." : "Clean small payments are pre-approved. A person sends them." };
+    return { ok: true, message: level === "autopilot" ? "Autopilot is on. Payments the rules pass, within your caps, are sent after the cancel window." : level === "review" ? "Every payment now waits for a person." : "Small payments the rules pass are pre-approved. A person sends them." };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

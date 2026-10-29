@@ -11,7 +11,7 @@ import { allowedAction, type Decision, type DecisionTone, type PrimaryAction } f
 
 type Perms = { approve: boolean; pay: boolean; amend: boolean };
 
-const TONE: Record<DecisionTone, { rule: string; text: string; soft: string; icon: "x" | "clock" | "tick" | "dot" }> = {
+const TONE: Record<DecisionTone, { rule: string; text: string; soft: string; icon: "x" | "clock" | "tick" | "dot" | "warn" }> = {
   blocked: { rule: "var(--blocked)", text: "var(--blocked)", soft: "var(--blocked-soft)", icon: "x" },
   attention: { rule: "var(--attention)", text: "var(--attention)", soft: "var(--attention-soft)", icon: "clock" },
   settled: { rule: "var(--settled)", text: "var(--settled)", soft: "var(--settled-soft)", icon: "tick" },
@@ -21,11 +21,12 @@ const TONE: Record<DecisionTone, { rule: string; text: string; soft: string; ico
 function ToneIcon({ icon }: { icon: (typeof TONE)[DecisionTone]["icon"] }) {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
-      <circle cx="9" cy="9" r="7.25" />
+      {icon === "warn" ? <path d="M9 2.5L16.25 15H1.75L9 2.5z" /> : <circle cx="9" cy="9" r="7.25" />}
       {icon === "x" ? <path d="M6.5 6.5l5 5M11.5 6.5l-5 5" /> : null}
       {icon === "clock" ? <path d="M9 5.5V9l2.25 1.5" /> : null}
       {icon === "tick" ? <path d="M5.75 9.25l2.25 2.25 4.25-4.75" /> : null}
       {icon === "dot" ? <circle cx="9" cy="9" r="1.5" fill="currentColor" stroke="none" /> : null}
+      {icon === "warn" ? <path d="M9 7v3.5M9 12.75v.01" /> : null}
     </svg>
   );
 }
@@ -138,7 +139,7 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
         <div className="min-w-0">
           <h2 className="flex items-start gap-2 text-lg font-semibold leading-6" style={{ color: tone.text }}>
             <span className="mt-[3px]">
-              <ToneIcon icon={tone.icon} />
+              <ToneIcon icon={decision.icon ?? tone.icon} />
             </span>
             <span className="min-w-0">
               {decision.title}

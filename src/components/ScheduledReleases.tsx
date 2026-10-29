@@ -7,7 +7,8 @@ import { cancelReleaseAction, tickAutopilotAction } from "@/app/actions";
 import { formatMoney, railLabel, timeAgo } from "@/lib/format";
 import { useToast } from "./Toast";
 
-export type ScheduledRow = { id: string; vendorName: string | null; amountText: string; releaseAt: string };
+/** `concern` is what the request page says about its reading when that is not clear (see readerNotesFor); null when clear. */
+export type ScheduledRow = { id: string; vendorName: string | null; amountText: string; releaseAt: string; concern?: { chip: string; line: string } | null };
 export type ReleasedRow = { id: string; vendorName: string | null; amountMinor: number | null; currency: string | null; rail: string | null; state: string; at: string };
 
 /** How long a payment the agent sent stays on screen in settled style. */
@@ -95,6 +96,15 @@ export function ScheduledReleases({ rows, released = [], windowSeconds = 0, comp
                 <Link href={`/obligations/${r.id}`} className="hover:underline">
                   <span className="font-medium">{r.vendorName ?? "Unknown vendor"}</span> <span className="num whitespace-nowrap">{r.amountText}</span>
                 </Link>
+                {r.concern ? (
+                  <>
+                    {" "}
+                    <span className="dense inline-block whitespace-nowrap rounded-sm px-1.5 text-attention" style={{ boxShadow: "inset 0 0 0 1px var(--attention)" }}>
+                      {r.concern.chip}
+                    </span>
+                    <p className="text-xs text-attention">{r.concern.line}</p>
+                  </>
+                ) : null}
                 <p className="text-xs text-ink-soft">Autopilot sends it when the timer runs out. Cancel keeps it for a person.</p>
               </div>
               <div className="flex items-center gap-3">

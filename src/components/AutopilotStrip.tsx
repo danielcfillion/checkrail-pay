@@ -5,11 +5,14 @@ import { formatMoney, formatMoneyShort } from "@/lib/format";
 import { ScheduledReleases } from "./ScheduledReleases";
 import { recentAgentReleases } from "@/lib/queries";
 import { PauseButton } from "./PauseButton";
+import { readerNotesFor } from "@/lib/reading";
 
 /** Autonomy at a glance on the overview: the level, what is used of today's cap, what is about to go out, and the stop control. */
 export function AutopilotStrip({ businessId, currency, can = { stop: true, settings: true } }: { businessId: string; currency: string; can?: { stop: boolean; settings: boolean } }) {
   const ap = autopilotStatus(getDb(), businessId);
   const released = recentAgentReleases();
+  // A countdown is where a person can stop an automatic payment, so it carries what the request page says about the reading.
+  const notes = readerNotesFor(ap.scheduled.map((s) => s.id));
   const on = ap.level === "autopilot" && !ap.paused;
   const name = ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot on") : ap.level === "review" ? "Review everything" : "Assist";
   const line =
@@ -17,10 +20,10 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
       ? ap.paused
         ? "Nothing is sent without a person until you resume."
         : // The daily cap counts every payment sent or scheduled in the last 24 hours, people's as well as the agent's (policy, autopilot daily cap).
-          `The agent sends clean payments up to ${formatMoneyShort(ap.perPaymentCapMinor, currency)} each. ${formatMoneyShort(ap.committed24hMinor, currency)} of ${formatMoneyShort(ap.dailyCapMinor, currency)} daily cap used (all payments, last 24 hours).`
+          `The agent sends payments the rules pass, up to ${formatMoneyShort(ap.perPaymentCapMinor, currency)} each. ${formatMoneyShort(ap.committed24hMinor, currency)} of ${formatMoneyShort(ap.dailyCapMinor, currency)} daily cap used (all payments, last 24 hours).`
       : ap.level === "review"
         ? "A person approves and sends every payment."
-        : "Clean small requests are approved for you. A person sends them.";
+        : "Small requests the rules pass are approved for you. A person sends them.";
   return (
     <section className="panel mb-6" aria-label="Autonomy">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
@@ -48,7 +51,7 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
         canCancel={can.stop}
         windowSeconds={ap.cancelWindowSeconds}
         released={released}
-        rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))}
+        rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt, concern: notes[s.id] ?? null }))}
       />
     </section>
   );

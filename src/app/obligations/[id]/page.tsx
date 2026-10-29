@@ -27,7 +27,7 @@ import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE } from "@/com
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
 import { correctionLine, RECORDED_LABEL, summaryWithoutCount } from "@/components/agent-reading";
-import { readingFor } from "@/components/reader-view";
+import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
 
@@ -77,8 +77,8 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
   const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
   const caption = o.state === "blocked" && o.blockedReason ? checkLineCaption(o.blockedReason, earlier) : undefined;
-  // The reading the page shows under "What the agent read" is the one the band has to agree with; it is chosen below.
-  const { recorded, reader } = readingFor(d, getDb());
+  // The reading the page shows under "What the agent read" is the one the band has to agree with.
+  const { recorded, reader } = readingFor(d);
   const decision: Decision = decide({
     state: o.state,
     vendorName: o.vendorName,

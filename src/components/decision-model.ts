@@ -62,6 +62,8 @@ export type Decision = {
   chip?: string | null;
   /** One line under the button saying what it will and will not do. */
   actionHint?: string | null;
+  /** A warning triangle in place of the tone's own icon, for a green-by-state band that still carries something to read. */
+  icon?: "warn";
   /** What the phone bar says in place of the title: who and how much, so the bar is enough to decide from. */
   barText?: string | null;
 };
@@ -306,7 +308,9 @@ export function decide(i: DecisionInput): Decision {
       const readerOpen = st.kind === "reader" || st.kind === "low_confidence" || st.kind === "blocked";
       const checks = readerOpen ? st.text : i.rules.length ? (passed === i.rules.length ? `All ${passed} checks passed.` : `${passed} of ${i.rules.length} checks passed; the rest were approved.`) : "";
       const scheduled = i.releaseAt ? " Autopilot sends it when the cancel window ends." : "";
-      return { tone: "settled", title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null, chip: readerOpen ? st.chip : null };
+      // Green only when nothing is open: a statement that is not clear (a reader concern, low confidence, an approved warning) makes the band amber, with a warning icon and the chip.
+      const open = st.kind !== "clear";
+      return { tone: open ? "attention" : "settled", icon: open ? "warn" : undefined, title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null, chip: open ? st.chip : null };
     }
     case "settled": {
       const s = i.settlement;

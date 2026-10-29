@@ -16,7 +16,7 @@ import { paidSummary } from "../queries";
 import { attentionIds, getDailyClose, signOffDailyClose } from "./dailyClose";
 import { markReturnedByHand } from "./books";
 import { getObligationDetail, waitingIdsFor } from "../queries";
-import { readingFor } from "../../components/reader-view";
+import { readingFor } from "../reading";
 import { runLineStatement } from "../../components/check-statement";
 import { resetRails } from "../rails";
 

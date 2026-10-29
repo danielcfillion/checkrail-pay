@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autopilotSentence, checkStatement, type ReaderView } from "./check-statement";
+import { autopilotSentence, checkStatement, concernNote, type ReaderView } from "./check-statement";
 import { decide, type DecisionInput } from "./decision-model";
 
 /** Any sentence that tells a person the request is in the clear. */
@@ -55,6 +55,24 @@ describe("no state tells a person the request is clear over an open reader conce
     expect(d.action).toMatchObject({ kind: "pay", label: "Pay with PayPal" });
   });
 
+  it("approved: green only when clear; amber with a warning icon and the chip for anything else", () => {
+    const clear = decide({ ...base, state: "approved", reader: clean });
+    expect(clear).toMatchObject({ tone: "settled" });
+    expect(clear.icon).toBeUndefined();
+    expect(clear.chip ?? null).toBeNull();
+    const withConcern = decide({ ...base, state: "approved", reader: concern });
+    expect(withConcern).toMatchObject({ tone: "attention", icon: "warn", chip: "1 reader concern" });
+    const low = decide({ ...base, state: "approved", reader: { confidence: 60, concerns: [], missing: [], recorded: false } });
+    expect(low).toMatchObject({ tone: "attention", icon: "warn", chip: "Low confidence 60%" });
+    const missing = decide({ ...base, state: "approved", reader: { confidence: 90, concerns: [], missing: ["Invoice"], recorded: false } });
+    expect(missing).toMatchObject({ tone: "attention", icon: "warn" });
+    const warned = decide({ ...base, state: "approved", rules: [pass("a"), { ruleId: "vendor_new", passed: false, severity: "warn", message: "First payment to this vendor" }], reader: clean });
+    expect(warned).toMatchObject({ tone: "attention", icon: "warn", chip: "1 warning" });
+    // States other than approved keep their own tone.
+    expect(decide({ ...base, state: "settled", reader: concern }).tone).toBe("settled");
+    expect(decide({ ...base, state: "blocked", blockedReason: "Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 800.00 (+USD 160.00)", reader: concern }).tone).toBe("blocked");
+  });
+
   it("approved: still says all checks passed when the reading is clean, or when nobody has read it", () => {
     for (const reader of [clean, null, undefined]) {
       const d = decide({ ...base, state: "approved", reader });
@@ -84,6 +102,18 @@ describe("no state tells a person the request is clear over an open reader conce
     for (const state of ["drafted", "needs_evidence", "execution_pending", "sent", "settled", "failed", "refunded", "cancelled"]) {
       for (const reader of [clean, concern]) expect(said(decide({ ...base, state, reader })), state).not.toMatch(CLAIM);
     }
+  });
+});
+
+describe("concernNote", () => {
+  it("is null when clear, and otherwise the chip and the statement without its 'Rules passed, but'", () => {
+    expect(concernNote(checkStatement({ rules: [pass("a")], reader: clean }))).toBeNull();
+    expect(concernNote(checkStatement({ rules: [pass("a")], reader: concern }))).toEqual({
+      chip: "1 reader concern",
+      line: "The recorded Claude run raised 1 concern: Possible duplicate. Confidence 25%. The rules did not see this run.",
+    });
+    const low = concernNote(checkStatement({ rules: [pass("a")], reader: { confidence: 60, concerns: [], missing: [], recorded: false } }));
+    expect(low).toEqual({ chip: "Low confidence 60%", line: "The reader's confidence is 60%, below the 75% threshold." });
   });
 });
 

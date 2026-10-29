@@ -1,6 +1,6 @@
 import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
-import { listObligations, waitingIdsFor } from "@/lib/queries";
+import { isScheduled, listObligations, waitingIdsFor } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import type { ObligationState } from "@/lib/domain/types";
 import { ObligationTable } from "@/components/ObligationList";
@@ -13,7 +13,7 @@ export const metadata = { title: "Inbox" };
 
 const FILTERS: Array<{ key: string; label: string; states?: ObligationState[] }> = [
   { key: "all", label: "All" },
-  { key: "needs_action", label: "Needs action", states: ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"] },
+  { key: "needs_action", label: "Needs someone", states: ["needs_evidence", "awaiting_approval", "approved", "blocked", "failed"] },
   { key: "in_flight", label: "In flight", states: ["execution_pending", "sent"] },
   { key: "settled", label: "Settled", states: ["settled"] },
   { key: "blocked", label: "Blocked", states: ["blocked", "failed"] },
@@ -27,8 +27,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   // An approver with requests waiting lands on them; everyone else, and any link that names a tab, gets what it asked for.
   const filter = defaultInboxFilter(asked, mineIds ? mineIds.size : null);
   const active = filters.find((f) => f.key === filter) ?? FILTERS[0];
-  const rows = active.key === "mine" && mineIds ? listObligations({ limit: 1000 }).filter((r) => mineIds.has(r.id)) : listObligations({ states: active.states, limit: 500 });
-  const counts: Record<string, number> = Object.fromEntries(FILTERS.map((f) => [f.key, listObligations({ states: f.states, limit: 1000 }).length]));
+  // "Needs someone" leaves out what autopilot has scheduled (the agent sends it), the same as the overview's figure.
+  const inTab = (key: string) => (r: { state: string; releaseAt: string | null }) => key !== "needs_action" || !isScheduled(r);
+  const rows = active.key === "mine" && mineIds ? listObligations({ limit: 1000 }).filter((r) => mineIds.has(r.id)) : listObligations({ states: active.states, limit: 500 }).filter(inTab(active.key));
+  const counts: Record<string, number> = Object.fromEntries(FILTERS.map((f) => [f.key, listObligations({ states: f.states, limit: 1000 }).filter(inTab(f.key)).length]));
   if (mineIds) counts.mine = mineIds.size;
 
   return (

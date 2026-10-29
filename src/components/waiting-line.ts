@@ -2,24 +2,25 @@ import { pluralise } from "@/lib/format";
 
 /**
  * The overview's headline about what needs a person. Two different numbers, each named for what it is:
- *  - "waiting on you": what this viewer's role lets them do next (waitingIdsFor, the same number as the sidebar, the
+ *  - "wait on you": what this viewer's role lets them do next (waitingIdsFor, the same number as the sidebar, the
  *    Inbox tab and Daily close);
- *  - "need action": every request in a state that needs somebody (the Needs action list), whoever that is.
+ *  - "need someone": every request in a state that needs somebody (the Needs someone list and Inbox tab), whoever
+ *    that is: an approver, a clerk, the vendor.
  * `mine` is null when nobody is signed in, and then only the second is said.
  */
 export type WaitingLine = { lead: string; leadHref: string | null; rest: string | null; restHref: string | null };
 
-const NEEDS_ACTION = "/obligations?filter=needs_action";
+const NEEDS_SOMEONE = "/obligations?filter=needs_action";
 const MINE = "/obligations?filter=mine";
 
-export function waitingLine({ mine, needsAction }: { mine: number | null; needsAction: number }): WaitingLine {
+export function waitingLine({ mine, needsSomeone }: { mine: number | null; needsSomeone: number }): WaitingLine {
   if (mine === null) {
-    return needsAction === 0
-      ? { lead: "Nothing needs action right now.", leadHref: null, rest: null, restHref: null }
-      : { lead: `${pluralise(needsAction, "request")} need${needsAction === 1 ? "s" : ""} action.`, leadHref: NEEDS_ACTION, rest: null, restHref: null };
+    return needsSomeone === 0
+      ? { lead: "Nothing needs anyone right now.", leadHref: null, rest: null, restHref: null }
+      : { lead: `${pluralise(needsSomeone, "request")} need${needsSomeone === 1 ? "s" : ""} someone.`, leadHref: NEEDS_SOMEONE, rest: null, restHref: null };
   }
-  const all = needsAction > mine ? `${needsAction} need action in all.` : null;
+  const all = needsSomeone > mine ? `${needsSomeone} in all need someone.` : null;
   return mine === 0
-    ? { lead: "Nothing waits on you right now.", leadHref: null, rest: needsAction > 0 ? `${needsAction} need action in all.` : null, restHref: needsAction > 0 ? NEEDS_ACTION : null }
-    : { lead: `${pluralise(mine, "request")} wait${mine === 1 ? "s" : ""} on you.`, leadHref: MINE, rest: all, restHref: all ? NEEDS_ACTION : null };
+    ? { lead: "Nothing waits on you right now.", leadHref: null, rest: needsSomeone > 0 ? `${needsSomeone} in all need someone.` : null, restHref: needsSomeone > 0 ? NEEDS_SOMEONE : null }
+    : { lead: `${pluralise(mine, "request")} wait${mine === 1 ? "s" : ""} on you.`, leadHref: MINE, rest: all, restHref: all ? NEEDS_SOMEONE : null };
 }

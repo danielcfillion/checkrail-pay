@@ -131,3 +131,12 @@ export function runLineStatement(i: { rules: Rule[]; reader?: ReaderView | null 
   if (low && readerOnly.kind === "reader") chips.push(`Low confidence ${reader.confidence}%`);
   return { note: checkStatement({ rules: i.rules, reader, minConfidence: min }).text, chips: chips.filter(Boolean) };
 }
+
+/** The statement as a chip and one line for a place that shows less than the request page (a countdown, a list row); null when clear. */
+export type ConcernNote = { chip: string; line: string };
+
+export function concernNote(statement: CheckStatement): ConcernNote | null {
+  if (statement.kind === "clear" || !statement.chip) return null;
+  const line = statement.text.replace(/^Rules passed, but /, "").replace(/^./, (c) => c.toUpperCase());
+  return { chip: statement.chip, line };
+}

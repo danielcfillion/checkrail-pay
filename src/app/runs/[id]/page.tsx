@@ -10,7 +10,7 @@ import { PageHeader, Panel, RailTag } from "@/components/ui";
 import { ApproveItem, CancelRun, ReleaseRun, RemoveItem } from "@/components/RunActions";
 import { RunRemittances } from "@/components/RunRemittances";
 import { runLineStatement } from "@/components/check-statement";
-import { readingFor } from "@/components/reader-view";
+import { readingFor } from "@/lib/reading";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Payment run" };

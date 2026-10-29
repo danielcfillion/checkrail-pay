@@ -98,7 +98,7 @@ export default async function SettingsPage() {
               />
             ) : (
               <p className="text-ink-soft">
-                {ap.level === "autopilot" ? `Autopilot${ap.paused ? " (paused)" : ""}: up to ${formatMoney(ap.perPaymentCapMinor, cur)} a payment and ${formatMoney(ap.dailyCapMinor, cur)} a day, with a ${Math.round(ap.cancelWindowSeconds / 60)} minute cancel window.` : ap.level === "review" ? "Review: a person approves and sends every payment." : "Assist: clean small requests are approved for you. A person sends them."} Only the owner changes this.
+                {ap.level === "autopilot" ? `Autopilot${ap.paused ? " (paused)" : ""}: up to ${formatMoney(ap.perPaymentCapMinor, cur)} a payment and ${formatMoney(ap.dailyCapMinor, cur)} a day, with a ${Math.round(ap.cancelWindowSeconds / 60)} minute cancel window.` : ap.level === "review" ? "Review: a person approves and sends every payment." : "Assist: small requests the rules pass are approved for you. A person sends them."} Only the owner changes this.
               </p>
             )}
             {ap.level === "autopilot" ? (
