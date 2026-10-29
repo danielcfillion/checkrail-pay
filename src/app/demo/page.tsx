@@ -91,9 +91,9 @@ export default function DemoPage() {
       done: dupe ? dupe.state === "cancelled" : false,
     },
     {
-      title: "A clean one, paid over PayPal",
+      title: "One the rules pass, paid over PayPal",
       doThis: "Open Maria's JOB-HG4D-0921 request and press Pay with PayPal.",
-      happens: "It cleared on its own: USD 180 is under the USD 250 line and matches its trip sheet. The marker travels to Paid, then Reconciled, on simulated PayPal.",
+      happens: "The rules pass it on their own: USD 180 is under the USD 250 line and matches its trip sheet. The recorded Claude reading shows a possible duplicate (a PayPal sandbox payment on 12 Oct) that the rules in this demo do not use, and the card says so before the button. The marker travels to Paid, then Reconciled, on simulated PayPal.",
       row: maria,
       done: maria ? ["sent", "settled"].includes(maria.state) : false,
     },

@@ -14,7 +14,7 @@ describe("live activity", () => {
     expect(line("Dao Mountain Lodge", "INV-DML-1010")).toBe("held for approval: above USD 250");
     expect(line("Phuong Transport", "INV-2026-0152")).toBe("blocked: asks USD 960, Trip sheet HG-4D-0927 says USD 800");
     expect(line("Maria Santos", "JOB-HG4D-0914")).toBe("blocked: JOB-HG4D-0914 was already paid");
-    expect(line("Maria Santos", "JOB-HG4D-0921")).toBe("cleared to pay, nobody needed to approve");
+    expect(line("Maria Santos", "JOB-HG4D-0921")).toBe("passed the rules, nobody needed to approve");
     // No system noise: reading, rule checks and rail choice stay in the audit log.
     expect(feed.every((r) => !/rail selected|rules evaluated|read the request/i.test(r.text))).toBe(true);
     // One row per event: each audit entry appears at most once.

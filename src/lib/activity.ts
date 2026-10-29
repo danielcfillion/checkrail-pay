@@ -116,7 +116,7 @@ export function activityFeed(entries: AuditLike[], limit = 10): ActivityRow[] {
         break;
       case "policy.auto_execute":
         if (approvedPending.has(e.obligationId!)) approvedPending.delete(e.obligationId!);
-        else row("cleared", "cleared to pay, nobody needed to approve", "neutral");
+        else row("cleared", "passed the rules, nobody needed to approve", "neutral");
         break;
       case "approval.granted":
         approvedPending.add(e.obligationId!);

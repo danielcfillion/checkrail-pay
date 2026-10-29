@@ -59,7 +59,7 @@ export default async function DailyClosePage() {
       />
 
       <dl className="grid grid-cols-2 gap-y-4 border-y hairline py-4 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
-        <Figure label="Needs a look" value={String(c.attention.length)} note={c.attention.length ? "listed below, most serious first" : "nothing unusual"} tone={c.attention.length ? "attention" : undefined} />
+        <Figure label="Needs a look" value={String(c.attention.length)} note={c.attention.length ? "listed below, most serious first" : "nothing flagged by the rules"} tone={c.attention.length ? "attention" : undefined} />
         <Figure label="Waiting on you" value={String(c.waitingOnYou.length)} note={c.waitingOnYou.length ? "approvals and sends" : "nothing waiting"} tone={c.waitingOnYou.length ? "attention" : undefined} />
         <Figure label="Sent by autopilot" value={formatMoneySymbol(c.totals.agentMinor, cur)} note={pluralise(c.totals.agentCount, "payment")} tone={c.totals.agentCount ? "settled" : undefined} />
         <Figure label="Sent by people" value={formatMoneySymbol(c.totals.peopleMinor, cur)} note={pluralise(c.totals.peopleCount, "payment")} />
