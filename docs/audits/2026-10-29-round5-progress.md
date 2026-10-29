@@ -22,4 +22,4 @@ Working note, updated as work lands. Status as of 29 Oct 2026.
 
 - Still open: a per-username progressive delay and CSV-refund hardening for real money, the Render client-address header (needs the diagnostic run on the deployed demo), PR8-4, PR7-7, PR7-8, and the three held-back product decisions (PR6-8, PR6-10, PR6-11).
 - A person reads the money-path files listed in the response file before merge.
-- Round 6 with a fresh reviewer. Stop this track when a reviewer is satisfied with no Must-fix items outstanding.
+- Nothing else is queued. The next review is for the owner to call after the open items above, for example once the hosted demo is deployed and the Render diagnostic has been run.
