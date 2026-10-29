@@ -40,7 +40,7 @@ function tooMany(retryMs: number) {
 
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  const ip = clientIp(req.headers);
+  const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
   const headers = new Headers(req.headers);
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
 
