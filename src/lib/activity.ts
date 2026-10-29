@@ -66,6 +66,31 @@ export function shortReason(reason: string | null): string | null {
 }
 
 /**
+ * A policy reason as a full, plain sentence for the Needs you list and the Daily close (DS2-16): what the rule found
+ * and who acts, without engine wording ("auto-execute threshold") or internal ids.
+ */
+export function plainReason(reason: string | null | undefined): string {
+  if (!reason) return "";
+  const fresh = /^New since approval: /.test(reason);
+  const r = reason.replace(/^New since approval: /, "");
+  let m: RegExpMatchArray | null;
+  let out: string;
+  if ((m = r.match(/^Amount exceeds auto-execute threshold ([A-Z]{3} [\d,.]+)/))) out = `Above ${money(m[1])}: a person approves`;
+  else if ((m = r.match(/^Amount exceeds dual-approval threshold ([A-Z]{3} [\d,.]+)/))) out = `Above ${money(m[1])}: two people approve`;
+  else if ((m = r.match(/^Amount exceeds the autopilot per-payment cap ([A-Z]{3} [\d,.]+)/))) out = `Above the ${money(m[1])} autopilot cap: a person approves`;
+  else if ((m = r.match(/above the ([A-Z]{3} [\d,.]+) autopilot daily cap/))) out = `Over the ${money(m[1])} autopilot daily cap: a person approves`;
+  else if (/^Only the vendor's own documents/.test(r)) out = "Only the vendor's own invoice supports the amount: a person approves";
+  else if (/^First payment to this vendor/.test(r)) out = "First payment to this vendor: a person approves";
+  else if (/times this vendor's usual/.test(r)) out = `${r.split(":")[0]}: a person approves`;
+  else if (/review everything/.test(r)) out = "You review every payment";
+  else out = r.replace(/\b(?:obligation|payment request) obl_[a-z0-9]+ \((\w+)\)/gi, "an earlier request ($1)").replace(/\b(?:obligation|payment request) obl_[a-z0-9]+/gi, "an earlier request").replace(/\bobl_[a-z0-9]+/gi, "an earlier request");
+  return fresh ? `New since approval: ${out.charAt(0).toLowerCase()}${out.slice(1)}` : out;
+}
+
+/** How close together the agent's send and its settlement must be to read as one moment. */
+const MOMENT_MS = 2 * 60_000;
+
+/**
  * Newest first, at most `limit` rows. `entries` is the audit log newest first (as listAudit returns it).
  * A policy clearance right after a person's approval is the same moment, so only the approval is shown.
  */
@@ -130,5 +155,21 @@ export function activityFeed(entries: AuditLike[], limit = 10): ActivityRow[] {
         break;
     }
   }
-  return rows.reverse().slice(0, limit);
+  return storyOrder(rows).slice(0, limit);
+}
+
+/**
+ * Newest first, except that the agent's send and its outcome read as one story, in audit sequence: "sent by
+ * autopilot" above "paid over PayPal", not below it with the same "just now" (DS2-28). `rows` is in audit order.
+ */
+function storyOrder(rows: ActivityRow[]): ActivityRow[] {
+  const OUTCOME = new Set<ActivityKind>(["paid", "failed", "came_back"]);
+  const groups: ActivityRow[][] = [];
+  for (const r of rows) {
+    const g = groups[groups.length - 1];
+    const head = g?.[0];
+    if (head && head.kind === "sent_by_agent" && head.obligationId === r.obligationId && OUTCOME.has(r.kind) && Math.abs(new Date(r.at).getTime() - new Date(head.at).getTime()) <= MOMENT_MS) g.push(r);
+    else groups.push([r]);
+  }
+  return groups.reverse().flat();
 }

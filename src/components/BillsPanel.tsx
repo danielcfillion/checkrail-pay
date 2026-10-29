@@ -6,6 +6,7 @@ import Link from "next/link";
 import { applyCreditAction, createBillAction, payBillAction, settleAdvanceAction } from "@/app/actions";
 import { formatMoney } from "@/lib/format";
 import { useToast } from "./Toast";
+import { DateField } from "./DateField";
 
 export type BillRow = {
   id: string;
@@ -100,7 +101,7 @@ function BillItem({ r, credits, canIngest, canAmend }: { r: BillRow; credits: Bi
           {r.kind === "credit_note" ? `${formatMoney(r.balance.openMinor, r.currency)} left of ${formatMoney(r.totalMinor, r.currency)}` : r.kind === "advance" ? `${formatMoney(r.balance.paidMinor, r.currency)} paid out of ${formatMoney(r.totalMinor, r.currency)}` : `${formatMoney(r.balance.openMinor, r.currency)} open of ${formatMoney(r.totalMinor, r.currency)}`}
         </p>
       </div>
-      {r.note ? <p className="text-xs text-ink-soft">{r.note}</p> : null}
+      {r.note ? <p className="text-xs text-ink-soft">{r.note.replace(/\s*\((?:obligation |payment request )?obl_[a-z0-9]+\)/gi, "").replace(/\bobligation\b/gi, "request")}</p> : null}
       {r.payments.length ? (
         <p className="mt-1 text-xs text-ink-soft">
           {r.payments.map((p, i) => (
@@ -240,7 +241,7 @@ function AddBill({ vendorId, defaultCurrency, onDone }: { vendorId: string; defa
         <label className="lbl" htmlFor="b-due">
           Due (optional)
         </label>
-        <input id="b-due" type="date" className="field" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        <DateField id="b-due" value={dueDate} onChange={setDueDate} style={{ width: "100%" }} />
       </div>
       <div className="sm:col-span-2">
         <label className="lbl" htmlFor="b-note">

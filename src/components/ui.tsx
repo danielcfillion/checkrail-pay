@@ -71,6 +71,11 @@ export function StatePill({ state, className = "" }: { state: string | null | un
   );
 }
 
+/** A pill in the same tones as StatePill, for statuses that are not a request's state (payment runs). */
+export function TonePill({ tone, children, className = "" }: { tone: "neutral" | "muted" | "attention" | "blocked" | "settled"; children: ReactNode; className?: string }) {
+  return <span className={`inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 text-xs font-medium leading-4 ${TONE_CLASS[tone]} ${className}`}>{children}</span>;
+}
+
 export function StationLabel({ station, active = false }: { station: Station; active?: boolean }) {
   return <span className={`dense ${active ? "text-ink" : "text-ink-soft"}`}>{STATION_LABELS[station]}</span>;
 }
@@ -158,13 +163,12 @@ export function RowLink({ href, children, className = "" }: { href: string; chil
   );
 }
 
-/** Turns "obligation obl_xxx (settled)" in a policy message into a link to that obligation. */
 /** Turns "obligation obl_abc123" in a policy message into a link that reads "an earlier payment": people do not read ids. */
 export function Linkified({ text }: { text: string }): ReactNode {
   const parts = text.replace(/\bobligation (obl_[a-z0-9]+)/gi, "$1").split(/(obl_[a-z0-9]+)/i);
   return parts.map((p, i) =>
     /^obl_[a-z0-9]+$/i.test(p) ? (
-      <Link key={i} href={`/obligations/${p}`} className="link" title={p}>
+      <Link key={i} href={`/obligations/${p}`} className="link">
         an earlier payment
       </Link>
     ) : (

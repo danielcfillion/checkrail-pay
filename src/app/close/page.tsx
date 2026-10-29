@@ -5,6 +5,7 @@ import { getBusiness } from "@/lib/queries";
 import { getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
 import { formatDateTime, formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise, stateLabel } from "@/lib/format";
 import { CapMeter } from "@/components/CapMeter";
+import { plainReason } from "@/lib/activity";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { SignOffButton } from "@/components/SignOffButton";
 import { EmptyState, Linkified, PageHeader, Panel, RailTag, RelativeTime } from "@/components/ui";
@@ -128,7 +129,7 @@ export default async function DailyClosePage() {
 
           {c.scheduled.length ? (
             <Panel title="About to go out" aside={`${c.scheduled.length} scheduled`} padded={false}>
-              <ScheduledReleases canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
+              <ScheduledReleases compact windowSeconds={c.autopilot.cancelWindowSeconds} canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
             </Panel>
           ) : null}
 
@@ -142,7 +143,7 @@ export default async function DailyClosePage() {
                         <span className="font-medium">{w.vendorName ?? "Unknown vendor"}</span>
                         <span className="num">{formatMoney(w.amountMinor, w.currency)}</span>
                       </span>
-                      <span className="line-clamp-2 text-xs text-ink-soft">{w.note ?? stateLabel(w.state)}</span>
+                      <span className="line-clamp-2 text-xs text-ink-soft">{w.note ? plainReason(w.note) : stateLabel(w.state)}</span>
                     </Link>
                   </li>
                 ))}

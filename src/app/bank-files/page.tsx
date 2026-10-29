@@ -68,7 +68,11 @@ export default async function BankFilesPage() {
                       <th scope="col" className="hidden md:table-cell">Content</th>
                       <th scope="col">Status</th>
                       <th scope="col" className="r">Amount</th>
-                      {canConfirm && b.status === "downloaded" ? <th scope="col" /> : null}
+                      {canConfirm && b.status === "downloaded" ? (
+                        <th scope="col">
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>

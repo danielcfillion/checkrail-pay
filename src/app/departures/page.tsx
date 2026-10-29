@@ -4,6 +4,7 @@ import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { listDepartures, UNIT_LABEL, type Unit } from "@/lib/engine/rates";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
+import { formatDateRange } from "@/lib/format";
 import { ImportDepartures } from "@/components/RatesPanel";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export default async function DeparturesPage() {
   return (
     <>
       <nav className="mb-3 text-xs text-ink-soft" aria-label="Breadcrumb">
-        <Link href="/vendors" className="hover:text-ink">
+        <Link href="/vendors" className="tap inline-block hover:text-ink">
           Vendors
         </Link>
         <span aria-hidden> / </span>
@@ -49,9 +50,7 @@ export default async function DeparturesPage() {
               {deps.map((d) => (
                 <tr key={d.id}>
                   <td className="num font-medium">{d.code}</td>
-                  <td className="num text-ink-soft">
-                    {d.startDate} to {d.endDate}
-                  </td>
+                  <td className="num whitespace-nowrap text-ink-soft">{formatDateRange(d.startDate, d.endDate)}</td>
                   <td className="r num">{d.guests}</td>
                   <td>
                     {d.services.map((s) => (

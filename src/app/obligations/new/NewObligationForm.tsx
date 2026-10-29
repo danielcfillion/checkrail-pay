@@ -243,7 +243,7 @@ export function NewObligationForm() {
         </div>
       </div>
 
-      <aside className="space-y-4">
+      <aside className="space-y-4" aria-label="Examples and what happens next">
         <section className="panel p-4">
           <h2 className="font-medium">Try an example</h2>
           <p className="mt-1 text-ink-soft">Two requests built from the Ridgeline roster. Load one, then create it.</p>

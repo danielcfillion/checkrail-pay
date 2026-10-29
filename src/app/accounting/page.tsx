@@ -3,6 +3,7 @@ import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
 import { formatDate, formatDateTime, pluralise } from "@/lib/format";
 import { EmptyState, PageHeader, RailTag } from "@/components/ui";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { DemoVisit } from "@/components/DemoProgress";
 import { ExportXeroBills } from "@/components/ExportXeroBills";
 import { xeroBillRows } from "@/lib/accounting/xeroBills";
 import { getDb } from "@/lib/db";
@@ -35,6 +36,7 @@ export default function AccountingPage() {
 
   return (
     <>
+      <DemoVisit page="accounting" />
       <PageHeader
         title="Accounting"
         lede={
@@ -73,7 +75,34 @@ export default function AccountingPage() {
       {rows.length === 0 ? (
         <EmptyState title="No accounting records yet" body="A record is queued the moment a payment settles." action={<Link href="/ledger" className="btn">Open ledger</Link>} />
       ) : (
-        <div className="panel overflow-x-auto">
+        <>
+        {/* Under 640px: two-line rows, the Inbox pattern (DS2-15). Vendor and gross, then reference, account code and status. */}
+        <ul className="panel divide-y hairline sm:hidden">
+          {rows.map((r) => {
+            const p = r.payload;
+            const cur = p.grossCurrency ?? "USD";
+            const status = r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status;
+            const tone = r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled";
+            return (
+              <li key={r.id}>
+                <Link href={`/obligations/${r.obligationId}`} className="block min-h-11 px-4 py-3 active:bg-paper">
+                  <span className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 truncate font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</span>
+                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${p.grossAmount}`}</span>
+                  </span>
+                  <span className="mt-1 flex items-center gap-2 text-xs">
+                    <span className="num min-w-0 truncate text-ink-soft">
+                      {p.reference ?? r.obligation.sourceRef ?? "no reference"}
+                      {p.accountCode ? `, ${p.accountCode}` : ""}
+                    </span>
+                    <span className={`dense ml-auto shrink-0 ${tone}`}>{status}</span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="panel overflow-x-auto max-sm:hidden">
           <table className="ledger">
             <thead>
               <tr>
@@ -141,6 +170,7 @@ export default function AccountingPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </>
   );

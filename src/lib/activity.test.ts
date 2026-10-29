@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openTestDb } from "./db";
 import { seedDemo } from "./demo/seed";
 import { listAudit } from "./queries";
-import { activityFeed, shortReason } from "./activity";
+import { activityFeed, plainReason, shortReason } from "./activity";
 import { entryParts, humaniseEntry } from "./format";
 
 describe("live activity", () => {
@@ -39,9 +39,31 @@ describe("live activity", () => {
 describe("audit humaniser", () => {
   it("never says the actor twice", () => {
     expect(humaniseEntry("policy", "policy.evaluated")).toBe("Policy checked the rules");
-    expect(humaniseEntry("ai:rules", "ai.interpreted")).toBe("Agent (rules) read the request");
-    expect(humaniseEntry("system:email-ingest", "obligation.created")).toBe("System (email ingest) created the request");
+    expect(humaniseEntry("ai:rules", "ai.interpreted")).toBe("The rule-based reader read the request");
+    expect(humaniseEntry("system:email-ingest", "obligation.created")).toBe("Created from the invoice inbox");
     expect(humaniseEntry("router", "router.something_new")).toBe("Router something new");
     expect(entryParts("policy", "policy.require_approval")).toEqual({ who: "Policy", what: "held it for approval" });
+  });
+});
+
+describe("round 2 wording and order", () => {
+  it("reads the agent's send before its result (DS2-28)", () => {
+    const feed = activityFeed;
+    const at = "2026-10-29T10:00:00.000Z";
+    const later = "2026-10-29T10:00:02.000Z";
+    const base = { obligationId: "o1", vendorName: "Rosa Villanueva", sourceRef: "JOB-CEB2D-1024", detail: null };
+    const rows = feed([
+      { ...base, id: "c", seq: 3, actor: "rail:paypal", action: "settlement.confirmed", createdAt: later },
+      { ...base, id: "b", seq: 2, actor: "agent:autopilot", action: "autopilot.releasing", createdAt: at },
+      { ...base, id: "a", seq: 1, actor: "agent:autopilot", action: "autopilot.scheduled", createdAt: "2026-10-29T09:59:00.000Z" },
+    ]);
+    expect(rows.map((r) => r.text)).toEqual(["sent by autopilot", "paid over PayPal", "scheduled by autopilot, can be cancelled until it sends"]);
+  });
+
+  it("says policy reasons in plain words (DS2-16)", () => {
+    expect(plainReason("Amount exceeds auto-execute threshold USD 250.00")).toBe("Above USD 250: a person approves");
+    expect(plainReason("Amount exceeds the autopilot per-payment cap USD 500.00")).toBe("Above the USD 500 autopilot cap: a person approves");
+    expect(plainReason("Same job as obligation obl_4fbc2b0094b54704 (settled): both name INV-TAM-0834")).toBe("Same job as an earlier request (settled): both name INV-TAM-0834");
+    expect(plainReason("New since approval: Amount exceeds auto-execute threshold USD 250.00")).toBe("New since approval: above USD 250: a person approves");
   });
 });

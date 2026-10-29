@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { updateTeamAction } from "@/app/actions";
 import { useToast } from "./Toast";
 import { formatDate } from "@/lib/format";
+import { DateField } from "./DateField";
 
 export type TeamRow = { username: string; displayName: string; role: string; roleLabel: string; approvalLimitMinor: number | null; delegateTo: string | null; delegateUntil: string | null; active: boolean; canApprove: boolean };
 
@@ -26,7 +27,9 @@ export function TeamPanel({ rows, editable, symbol, me }: { rows: TeamRow[]; edi
             <th className="py-2 pr-3 font-normal">Approves up to</th>
             <th className="py-2 pr-3 font-normal">Away: covered by</th>
             <th className="py-2 pr-3 font-normal">Access</th>
-            <th className="py-2 font-normal" />
+            <th className="py-2 font-normal">
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -98,7 +101,7 @@ function Row({ r, rows, editable, symbol, me, card = false }: { r: TeamRow; rows
             </option>
           ))}
       </select>
-      {delegate ? <input aria-label="Cover ends" type="date" className="field" style={{ width: "9.5rem" }} value={until} onChange={(e) => setUntil(e.target.value)} /> : null}
+      {delegate ? <DateField aria-label="Cover ends" value={until} onChange={setUntil} /> : null}
     </div>
   ) : r.delegateTo ? (
     `${r.delegateTo} until ${formatDate(r.delegateUntil)}`
@@ -107,8 +110,8 @@ function Row({ r, rows, editable, symbol, me, card = false }: { r: TeamRow; rows
   );
   const accessCell =
     editable && me !== r.username ? (
-      <label className="flex items-center gap-1.5">
-        <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+      <label className="flex cursor-pointer items-center gap-2">
+        <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="h-4 w-4" />
         {active ? "Active" : "Off"}
       </label>
     ) : active ? (

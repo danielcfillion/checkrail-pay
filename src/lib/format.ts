@@ -109,6 +109,39 @@ export function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: iso.length === 10 ? "UTC" : TIMEZONE });
 }
 
+/** "24 to 25 Oct 2026", "30 Sep to 3 Oct 2026", "28 Dec 2026 to 2 Jan 2027". Accepts date-only strings. */
+export function formatDateRange(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start) return formatDate(end);
+  if (!end || end === start) return formatDate(start);
+  const parts = (iso: string) => {
+    const d = new Date(iso.length === 10 ? iso + "T00:00:00Z" : iso);
+    const tz = iso.length === 10 ? "UTC" : TIMEZONE;
+    const f = (o: Intl.DateTimeFormatOptions) => d.toLocaleDateString("en-GB", { ...o, timeZone: tz });
+    return { day: f({ day: "numeric" }), month: f({ month: "short" }), year: f({ year: "numeric" }) };
+  };
+  const a = parts(start);
+  const b = parts(end);
+  if (a.year !== b.year) return `${formatDate(start)} to ${formatDate(end)}`;
+  if (a.month !== b.month) return `${a.day} ${a.month} to ${b.day} ${b.month} ${b.year}`;
+  return `${a.day} to ${b.day} ${b.month} ${b.year}`;
+}
+
+/** "just now", "3 min", "5 h", "8 d", "2 mo": for narrow table columns. The full date goes in the title. */
+export function timeAgoShort(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const s = Math.round(Math.abs(now - t) / 1000);
+  const future = now - t < 0;
+  let out: string;
+  if (s < 45) return "just now";
+  else if (s < 3600) out = `${Math.max(1, Math.round(s / 60))} min`;
+  else if (s < 86400) out = `${Math.round(s / 3600)} h`;
+  else if (s < 60 * 86400) out = `${Math.round(s / 86400)} d`;
+  else out = `${Math.round(s / (30 * 86400))} mo`;
+  return future ? `in ${out}` : out;
+}
+
 /** "10:15" for timelines within one obligation. */
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -139,7 +172,7 @@ export function stateLabel(state: string | null | undefined): string {
 }
 
 /**
- * What each audit action did, as a verb phrase with no subject, so it reads after the actor ("Agent (rules) read the
+ * What each audit action did, as a verb phrase with no subject, so it reads after the actor ("The rule-based reader read the
  * request", "Policy held it for approval") and on its own in a column. Never repeat the actor here.
  */
 const ACTION_LABELS: Record<string, string> = {
@@ -230,7 +263,10 @@ export function humaniseAction(action: string | null | undefined): string {
   return qualifier ? `${label} (${qualifier.replace(/-/g, " ")})` : label;
 }
 
-/** "user:daniel" -> "Daniel", "ai:rules" -> "Agent (rules)", "rail:paypal" -> "PayPal". */
+/** Where an automatic intake came from, as people name it. */
+const SYSTEM_SOURCES: Record<string, string> = { "booking-webhook": "The booking system", "email-ingest": "The invoice inbox", seed: "Demo setup" };
+
+/** "user:daniel" -> "Daniel", "ai:rules" -> "The rule-based reader", "rail:paypal" -> "PayPal". */
 export function humaniseActor(actor: string | null | undefined): string {
   if (!actor) return "";
   const [kind, rest] = actor.split(":");
@@ -239,11 +275,11 @@ export function humaniseActor(actor: string | null | undefined): string {
     case "user":
       return cap(rest ?? "operator");
     case "ai":
-      return rest === "rules" ? "Agent (rules)" : "Agent";
+      return rest === "rules" ? "The rule-based reader" : "The agent";
     case "rail":
       return railLabel(rest);
     case "system":
-      return rest ? `System (${rest.replace(/-/g, " ")})` : "System";
+      return SYSTEM_SOURCES[rest ?? ""] ?? "System";
     case "agent":
       return rest === "autopilot" ? "Autopilot" : "Agent";
     case "policy":
@@ -324,10 +360,15 @@ export function truncateMiddle(s: string | null | undefined, keep = 6): string {
 }
 
 /**
- * An audit entry as subject and verb phrase: "Agent (rules)" + "read the request". If a label still starts with the
+ * An audit entry as subject and verb phrase: "The rule-based reader" + "read the request". If a label still starts with the
  * actor's own word (an unknown action named after its actor, "policy.foo" by Policy), the word is not said twice.
  */
 export function entryParts(actor: string | null | undefined, action: string | null | undefined): { who: string; what: string } {
+  // A request that arrived on its own says where from: "Created from the booking system".
+  if (action === "obligation.created" && actor?.startsWith("system:")) {
+    const src = humaniseActor(actor);
+    return { who: "", what: src === "System" ? "Created automatically" : `Created from ${src.charAt(0).toLowerCase()}${src.slice(1)}` };
+  }
   const who = humaniseActor(actor);
   let what = humaniseAction(action);
   const first = who.split(" ")[0]?.toLowerCase();
@@ -335,7 +376,7 @@ export function entryParts(actor: string | null | undefined, action: string | nu
   return { who, what: who ? `${what.charAt(0).toLowerCase()}${what.slice(1)}` : what };
 }
 
-/** One line for an audit entry: "Agent (rules) read the request", "Policy held it for approval". */
+/** One line for an audit entry: "The rule-based reader read the request", "Policy held it for approval". */
 export function humaniseEntry(actor: string | null | undefined, action: string | null | undefined): string {
   const { who, what } = entryParts(actor, action);
   return who ? `${who} ${what}` : what;
@@ -354,4 +395,31 @@ export function pluralise(n: number, one: string, many = one + "s"): string {
 /** Today's date (YYYY-MM-DD) in the display time zone, for default names and filenames. */
 export function localDateString(at: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+}
+
+const MONTH_INDEX: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+
+/**
+ * What a person types into a date field, as an ISO date: "29 Oct 2026", "29 October 2026", "Oct 29 2026",
+ * "2026-10-29" and "29/10/2026" (day first). Null when it is not a real date.
+ */
+export function parseDateInput(text: string): string | null {
+  const s = text.trim().replace(/,/g, " ").replace(/\s+/g, " ");
+  if (!s) return null;
+  const ymd = (y: number, m: number, d: number): string | null => {
+    if (y < 1900 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+    const t = new Date(Date.UTC(y, m - 1, d));
+    if (t.getUTCMonth() !== m - 1) return null;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  const mon = (w: string) => MONTH_INDEX[w.slice(0, 4).toLowerCase()] ?? MONTH_INDEX[w.slice(0, 3).toLowerCase()];
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return ymd(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})\s?([A-Za-z]{3,9})\.?\s(\d{4})$/);
+  if (m && mon(m[2])) return ymd(+m[3], mon(m[2]), +m[1]);
+  m = s.match(/^([A-Za-z]{3,9})\.?\s(\d{1,2})\s(\d{4})$/);
+  if (m && mon(m[1])) return ymd(+m[3], mon(m[1]), +m[2]);
+  m = s.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
+  if (m) return ymd(+m[3], +m[2], +m[1]);
+  return null;
 }

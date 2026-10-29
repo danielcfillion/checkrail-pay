@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { reconcilePayPalAction, reconcilePayPalLiveAction, setPeriodLockAction } from "@/app/actions";
 import { useToast } from "./Toast";
+import { DateField } from "./DateField";
 
 export function ReconcileUpload({ primary = true }: { primary?: boolean }) {
   const [pending, start] = useTransition();
@@ -56,13 +57,13 @@ export function ReconcileFromPayPal({ live, defaultFrom, defaultTo }: { live: bo
         <label className="lbl" htmlFor="recon-from">
           From
         </label>
-        <input id="recon-from" type="date" className="field" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!live} />
+        <DateField id="recon-from" value={from} onChange={setFrom} disabled={!live} />
       </div>
       <div>
         <label className="lbl" htmlFor="recon-to">
           To
         </label>
-        <input id="recon-to" type="date" className="field" value={to} onChange={(e) => setTo(e.target.value)} disabled={!live} />
+        <DateField id="recon-to" value={to} onChange={setTo} disabled={!live} />
       </div>
       <button type="submit" className="btn btn-primary" disabled={!live || pending || !from || !to}>
         {pending ? "Reading PayPal" : "Read from PayPal"}
@@ -96,7 +97,7 @@ export function PeriodLock({ current, canLock, canReopen }: { current: string | 
         <label className="lbl" htmlFor="lock-date">
           Closed through
         </label>
-        <input id="lock-date" type="date" className="field" value={date} onChange={(e) => setDate(e.target.value)} />
+        <DateField id="lock-date" value={date} onChange={setDate} />
       </div>
       <button type="submit" className="btn btn-primary" disabled={pending || !date || date === current}>
         {pending ? "Saving" : "Close the books"}

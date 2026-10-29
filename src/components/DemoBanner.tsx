@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ResetDemoButton } from "./ResetDemoButton";
 
@@ -8,9 +8,10 @@ const KEY = "checkrail.demoBanner.dismissed";
 
 /**
  * First thing a judge sees on the hosted demo: what the business is, what the product does, and where to click.
- * Dismissing it is remembered in this browser only; Reset demo and the guide stay one click away.
+ * Dismissing it is remembered in this browser only. Once dismissed it folds into a one-line chip beside the page
+ * title (DS2-25), with the guide and Reset demo still one click away. `heading` is the page's own title block.
  */
-export function DemoBanner({ startHref, canReset }: { startHref: string; canReset: boolean }) {
+export function DemoBanner({ startHref, canReset, heading }: { startHref: string; canReset: boolean; heading: ReactNode }) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     try {
@@ -29,24 +30,29 @@ export function DemoBanner({ startHref, canReset }: { startHref: string; canRese
     }
   };
 
-  if (dismissed) {
-    return (
-      <section aria-label="Demo" className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
-        <p className="text-ink-soft">Demo data, shared by everyone using it.</p>
-        <div className="flex flex-wrap items-center gap-2">
+  const header = (chip: boolean) => (
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+      <div className="min-w-0">{heading}</div>
+      {chip ? (
+        <section aria-label="Demo" className="flex flex-wrap items-center gap-1.5 rounded-full border bg-sheet py-1 pl-3 pr-1 text-sm hairline">
+          <span className="dense text-attention">Demo</span>
           <Link href="/demo" className="btn btn-sm">
             Demo guide
           </Link>
           {canReset ? <ResetDemoButton size="sm" /> : null}
-          <button type="button" className="btn btn-sm" onClick={() => set(false)}>
+          <button type="button" className="btn btn-sm" onClick={() => set(false)} aria-label="Show the demo introduction again">
             Show intro
           </button>
-        </div>
-      </section>
-    );
-  }
+        </section>
+      ) : null}
+    </header>
+  );
+
+  if (dismissed) return header(true);
 
   return (
+    <>
+    {header(false)}
     <section aria-label="Demo" className="panel mb-6 border-l-4 px-4 py-4 sm:px-5" style={{ borderLeftColor: "var(--ink)" }}>
       <div className="flex items-start justify-between gap-4">
         <p className="max-w-3xl text-base">
@@ -69,5 +75,6 @@ export function DemoBanner({ startHref, canReset }: { startHref: string; canRese
         {canReset ? <ResetDemoButton size="sm" /> : null}
       </div>
     </section>
+    </>
   );
 }
