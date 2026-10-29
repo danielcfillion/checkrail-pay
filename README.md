@@ -128,6 +128,17 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - The autopilot heartbeat assumes one server process. SQLite, logins in an environment variable.
 - The agent shares a PayPal app that has Payouts scope. Use a separate read-only app before real money.
 
+## The two files for the bookkeeper
+
+- **Xero bills file** (Accounting, "Export new bills"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill.
+- **Settlement CSV** (Accounting, "Export CSV"): one row per settled payment, for matching to the bank feed.
+
+They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (310 guides and drivers, 320 homestays and hotels, 400 creators, 429 other), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` starts with the same code the bills file carries and adds the usual name.
+
+`netPaid` is what left the bank account, on every rail: the amount sent plus the fee for PayPal, Wise and the bank file, which charge their fee on top. Only Stellar takes its fee out of the amount, so its net is the amount. A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
+
+Changed in practitioner round six (PR6-4): `netPaid` was the amount alone for Wise and the bank file, so it did not equal the money that left the account; an advance was classed as 310 in the CSV and 620 in the bills file; `description` was the reader's one-line summary of the request, cut at 120 characters; VND carried `.00`. If you already import the settlement CSV, `netPaid` for Wise and bank-file payments is now larger by the fee, and `description` and `accountCode` for advances differ from earlier rows.
+
 ## Switching to live mode
 
 Everything runs with zero credentials on simulated rails. To move a rail or the agent to live, copy `.env.example` to `.env`, set the variables below and restart. In live mode a rail with missing or invalid credentials refuses to start instead of falling back to a mock, and the app refuses to open without logins.

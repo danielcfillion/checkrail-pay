@@ -9,6 +9,7 @@ import { xeroBillRows } from "@/lib/accounting/xeroBills";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { auditEntries, obligations } from "@/lib/db/schema";
+import { ZERO_DECIMAL_CURRENCIES } from "@/lib/domain/money";
 import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,9 @@ export default function AccountingPage() {
   // One currency across every record: say it once in the column headers, not in every cell.
   const currencies = [...new Set(rows.map((r) => r.payload.grossCurrency ?? "USD"))];
   const single = currencies.length === 1 ? currencies[0] : null;
-  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? String(v) : `${cur} ${v}`);
+  // A currency without decimals shows whole units with thousands separators, whatever the record stored.
+  const shown = (v: string | number, cur: string) => (ZERO_DECIMAL_CURRENCIES.has(cur) && Number.isFinite(Number(v)) ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 }) : String(v));
+  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? shown(v, cur) : `${cur} ${shown(v, cur)}`);
   // Bills changed here after they went to Xero: the accountant makes the same change there.
   const changed = getDb()
     .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
@@ -41,7 +44,7 @@ export default function AccountingPage() {
         title="Accounting"
         lede={
           <>
-            One record per settled payment: gross, fee, net and the account code. {pending.length ? `${pluralise(pending.length, "record")} waiting to be exported.` : "Everything exported."} Destination today is {system.accounting === "xero" ? "Xero" : "CSV"}.
+            One record per settled payment: gross, fee, net (what left the bank account) and the account code. {pending.length ? `${pluralise(pending.length, "record")} waiting to be exported.` : "Everything exported."} Destination today is {system.accounting === "xero" ? "Xero" : "CSV"}.
           </>
         }
         actions={
@@ -88,7 +91,7 @@ export default function AccountingPage() {
                 <Link href={`/obligations/${r.obligationId}`} className="block min-h-11 px-4 py-3 active:bg-paper">
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</span>
-                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${p.grossAmount}`}</span>
+                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${shown(p.grossAmount, cur)}`}</span>
                   </span>
                   <span className="mt-1 flex items-center gap-2 text-xs">
                     <span className="num min-w-0 truncate text-ink-soft">

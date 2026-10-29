@@ -10,6 +10,10 @@ import { billRecordOf, createBill, payBill } from "./bills";
 import { getDailyClose, signOffDailyClose } from "./dailyClose";
 import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remittance } from "./vendorLinks";
 import { BankFileRail } from "../rails/bankFile";
+import { buildAccountingRecord, toCsv } from "../accounting/record";
+import { xeroBillRows } from "../accounting/xeroBills";
+import { toXeroFeeTransaction, toXeroPayment } from "../accounting/xero";
+import { settlements } from "../db/schema";
 import { resetRails, setRailsForTest } from "../rails";
 
 /** Practitioner round six (PR6-n): fixes to the outputs around the money path. */
@@ -106,5 +110,56 @@ describe("PR6-3: the remittance message names the rail each payment went by", ()
     await confirmSettlement(db, hs27.id);
     const r = viewRemittance(db, createRemittanceLink(db, DEMO_BUSINESS_ID, as("lan"), hs27.id))!;
     expect(r).toMatchObject({ language: "vi", status: "paid", rail: "chuyển khoản ngân hàng" });
+  });
+});
+
+describe("PR6-4: the settlement CSV and the Xero bills file agree", () => {
+  async function paid(id: string, actor = "user:minh") {
+    approveObligation(db, id, "user:minh");
+    await executeObligation(db, id, { actor });
+    await confirmSettlement(db, id);
+  }
+  const xeroRow = (ref: string) => xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows.find((r) => r["*InvoiceNumber"] === ref)!;
+
+  it("net is what left the account on a Wise payment, in whole dong, with the bill's description", async () => {
+    const hs27 = db.select().from(obligations).where(eq(obligations.sourceRef, "HS-1027")).get()!;
+    await paid(hs27.id);
+    const st = db.select().from(settlements).where(eq(settlements.obligationId, hs27.id)).get()!;
+    expect(st.rail).toBe("wise");
+    expect(st.feeMinor).toBeGreaterThan(0);
+    const p = buildAccountingRecord(db, hs27.id)!.payload;
+    expect(p.grossAmount).toBe("10800000");
+    expect(p.netPaid).toBe(String(Math.round((st.grossMinor + st.feeMinor) / 100)));
+    expect(Number(p.netPaid)).toBeGreaterThan(Number(p.grossAmount));
+    expect(p.feeAmount).toMatch(/^\d+$/);
+    expect(p.recipientReceived).toMatch(/^\d+$/);
+    const row = xeroRow("HS-1027");
+    expect(p.description).toBe(row.Description);
+    expect(p.description).not.toMatch(/Hoa don|tong cong/);
+    expect(p.accountCode.split(" ")[0]).toBe(String(row["*AccountCode"]));
+    expect(toCsv([p])).not.toMatch(/\d+\.00/);
+  });
+
+  it("a cash advance is the prepayment account in both files, described as a cash advance, not the request text", async () => {
+    const lan = as("lan");
+    const adv = createBill(db, DEMO_BUSINESS_ID, lan, "ven_maria", { kind: "advance", reference: "ADV-HG4D-1101", totalMinor: 31_000, currency: "USD" });
+    const pay = await payBill(db, DEMO_BUSINESS_ID, lan, adv, 31_000);
+    await paid(pay);
+    const p = buildAccountingRecord(db, pay)!.payload;
+    const row = xeroRow("ADV-HG4D-1101");
+    expect(row["*AccountCode"]).toBe("620");
+    expect(p.accountCode.split(" ")[0]).toBe("620");
+    expect(p.description).toBe(row.Description);
+    expect(p.description).toMatch(/^Cash advance ADV-HG4D-1101/);
+    expect(p.reference).toBe("ADV-HG4D-1101");
+  });
+
+  it("the Xero payment plus the fee spend equals net on every rail but Stellar", () => {
+    const base = { reference: "R", vendorName: "V", vendorCountry: "VN", description: "d", billDate: "2026-10-01", paymentDate: "2026-10-02", grossAmount: "10800000", grossCurrency: "VND", feeAmount: "91090", feeCurrency: "VND", netPaid: "10891090", recipientReceived: null, recipientCurrency: null, fxRate: null, externalTransactionId: "X", explorerUrl: null, accountCode: "320", obligationId: "o" };
+    for (const rail of ["wise", "bank_file"]) {
+      const r = { ...base, rail };
+      expect(Number(toXeroPayment(r, "090").Amount) + Number(toXeroFeeTransaction(r, "090")!.LineItems[0].UnitAmount)).toBe(Number(r.netPaid));
+    }
+    expect(toXeroFeeTransaction({ ...base, rail: "stellar", netPaid: "10800000" }, "091")).toBeNull();
   });
 });
