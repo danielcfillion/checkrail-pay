@@ -63,8 +63,9 @@ export default async function DailyClosePage() {
         <Figure label="Held back" value={formatMoneySymbol(c.totals.stoppedMinor, cur)} note={`requested in ${pluralise(c.totals.stoppedCount, "request")} blocked or refused`} tone={c.totals.stoppedCount ? "blocked" : undefined} />
       </dl>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-6">
+      {/* minmax(0, 1fr) below lg: a bare grid column is as wide as its widest content, which pushed the page past a phone's edge once a payment table was listed. */}
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-6">
           <Panel title="Needs a look" aside={c.attention.length ? `${c.attention.length}` : "clear"} padded={false}>
             {c.attention.length ? (
               <ul className="divide-y hairline">
@@ -120,7 +121,7 @@ export default async function DailyClosePage() {
           {quiet ? <p className="text-center text-ink-soft">A quiet period. Sign off to start the next one from here.</p> : null}
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {c.autopilot.level === "autopilot" ? (
             <Panel title="Autopilot cap" aside={c.autopilot.paused ? "paused" : "on"}>
               <CapMeter label="Last 24 hours" usedMinor={c.autopilot.committed24hMinor} capMinor={c.autopilot.dailyCapMinor} currency={cur} />
@@ -184,38 +185,58 @@ function PaidPanel({ title, rows, empty }: { title: string; rows: CloseItem[]; e
   return (
     <Panel title={title} aside={rows.length ? pluralise(rows.length, "payment") : "none"} padded={false}>
       {rows.length ? (
-        <div className="overflow-x-auto">
-          <table className="ledger">
-            <thead>
-              <tr>
-                <th>Paid to</th>
-                <th>Reference</th>
-                <th>Rail</th>
-                <th>Status</th>
-                <th className="r">Fee</th>
-                <th className="r">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} className="row-link">
-                  <td>
-                    <Link href={`/obligations/${r.id}`} className="font-medium hover:underline">
-                      {r.vendorName ?? "Unknown vendor"}
-                    </Link>
-                  </td>
-                  <td className="num text-ink-soft">{r.sourceRef ?? ""}</td>
-                  <td>
-                    <RailTag rail={r.rail} />
-                  </td>
-                  <td className={r.state === "settled" ? "text-settled" : ""}>{r.state === "settled" ? "Settled" : "Sent, settling"}</td>
-                  <td className="r num text-ink-soft">{r.feeMinor !== null && r.feeMinor !== undefined ? formatMoney(r.feeMinor, r.currency, { code: false }) : ""}</td>
-                  <td className="r num font-medium">{formatMoney(r.amountMinor, r.currency)}</td>
+        <>
+          {/* Phones: two lines per payment, the whole row a link, so no column is cut off. */}
+          <ul className="divide-y hairline sm:hidden">
+            {rows.map((r) => (
+              <li key={r.id}>
+                <Link href={`/obligations/${r.id}`} className="block min-h-11 px-4 py-3 active:bg-paper">
+                  <span className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 truncate font-medium">{r.vendorName ?? "Unknown vendor"}</span>
+                    <span className="num shrink-0 whitespace-nowrap font-medium">{formatMoney(r.amountMinor, r.currency)}</span>
+                  </span>
+                  <span className="mt-1 flex items-center gap-2">
+                    <span className="num min-w-0 truncate text-xs text-ink-soft">{r.sourceRef ?? "no reference"}</span>
+                    <span className={`shrink-0 text-xs ${r.state === "settled" ? "text-settled" : "text-ink-soft"}`}>{r.state === "settled" ? "Settled" : "Sent, settling"}</span>
+                    <RailTag rail={r.rail} className="ml-auto shrink-0" />
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <div className="overflow-x-auto max-sm:hidden">
+            <table className="ledger">
+              <thead>
+                <tr>
+                  <th>Paid to</th>
+                  <th>Reference</th>
+                  <th>Rail</th>
+                  <th>Status</th>
+                  <th className="r">Fee</th>
+                  <th className="r">Amount</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="row-link">
+                    <td>
+                      <Link href={`/obligations/${r.id}`} className="font-medium hover:underline">
+                        {r.vendorName ?? "Unknown vendor"}
+                      </Link>
+                    </td>
+                    <td className="num text-ink-soft">{r.sourceRef ?? ""}</td>
+                    <td>
+                      <RailTag rail={r.rail} />
+                    </td>
+                    <td className={r.state === "settled" ? "text-settled" : ""}>{r.state === "settled" ? "Settled" : "Sent, settling"}</td>
+                    <td className="r num text-ink-soft">{r.feeMinor !== null && r.feeMinor !== undefined ? formatMoney(r.feeMinor, r.currency, { code: false }) : ""}</td>
+                    <td className="r num font-medium">{formatMoney(r.amountMinor, r.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <p className="px-4 py-5 text-center text-ink-soft">{empty}</p>
       )}
