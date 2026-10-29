@@ -234,7 +234,9 @@ function blockedDecision(i: DecisionInput): Decision {
 function approvalDecision(i: DecisionInput): Decision {
   const reasons = i.policyReasons.map((r) => r.replace(/^New since approval: /, ""));
   const reason = reasons[0] ?? null;
-  const warnings = i.rules.filter((r) => !r.passed && r.severity === "warn");
+  // The boilerplate "evidence supplied by operator" warning goes last, so a specific reason (a unit price above the
+  // contract rate, a payee not named in full) is what the headline says.
+  const warnings = i.rules.filter((r) => !r.passed && r.severity === "warn").sort((a, b) => Number(a.ruleId === "evidence_provenance") - Number(b.ruleId === "evidence_provenance"));
   const action: PrimaryAction = { kind: "approve", label: "Approve" };
   const matched = i.rules.find((r) => r.ruleId === "amount_matches_evidence" && r.passed);
   const route = i.quote && i.quote.receiveAmountMinor !== null ? `${railLabel(i.quote.rail)} delivers ${formatMoney(i.quote.receiveAmountMinor, i.quote.receiveCurrency)}.` : "";

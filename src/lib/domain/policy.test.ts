@@ -294,6 +294,12 @@ describe("a unit price the invoice states against the contract rate (PR6-2)", ()
     expect(out.reasons.join(" ")).toMatch(/contract rate is USD 200.00/);
   });
 
+  it("heads the reasons, ahead of the boilerplate warning about who typed the evidence", () => {
+    const out = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880", { evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-2026-0152 from Phuong Transport", amountMinor: 88_000, currency: "USD", reference: "INV-2026-0152", excerpt: "Phuong Transport. 4 days at USD 220 = USD 880", provenance: "operator" }] }));
+    expect(out.reasons[0]).toMatch(/^The invoice charges USD 220.00 per day/);
+    expect(out.reasons[1]).toMatch(/^Evidence supplied by operator/);
+  });
+
   it("is only a warning: it never blocks, and leaves every other rule's result as it was", () => {
     const without = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880", { vendorRates: undefined }));
     const withRule = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880"));

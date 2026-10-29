@@ -42,6 +42,19 @@ describe("decide", () => {
     expect(d.action).toMatchObject({ kind: "approve", label: "Approve" });
   });
 
+  it("leads with the specific warning, not the boilerplate one about who typed the evidence (PR6-2)", () => {
+    const warn = (ruleId: string, message: string) => ({ ruleId, passed: false, severity: "warn", message });
+    const d = decide({
+      ...base,
+      state: "awaiting_approval",
+      amountMinor: 88000,
+      policyReasons: ["Evidence supplied by operator, not system; check it against the source documents"],
+      rules: [warn("evidence_provenance", "Evidence supplied by operator, not system; check it against the source documents"), warn("stated_unit_rate", "The invoice charges USD 220.00 per day; the contract rate is USD 200.00 per vehicle-day (USD 80.00 more over 4 vehicle-days). Check it against the contract before approving")],
+    });
+    expect(d.title).toBe("Needs your approval: 2 warnings on USD 880.00");
+    expect(d.evidence).toMatch(/^The invoice charges USD 220.00 per day; the contract rate is USD 200.00 per vehicle-day/);
+  });
+
   it("offers the router's rail when ready to pay", () => {
     const d = decide({ ...base, state: "approved", amountMinor: 18000, rules: [pass("a", "x"), pass("b", "y")], quote: { rail: "paypal", receiveAmountMinor: 1093131, receiveCurrency: "PHP", feeMinor: 360, sendCurrency: "USD" } });
     expect(d.tone).toBe("settled");

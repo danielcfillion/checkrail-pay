@@ -203,7 +203,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     if (f) {
       const stated = UNIT_NAME[f.statedUnit];
       const card = UNIT_NAME[f.rateUnit];
-      rules.push(warn("stated_unit_rate", `The invoice charges ${fmt(f.statedMinor, f.currency)} per ${stated}; the contract rate is ${fmt(f.rateMinor, f.currency)} per ${card} (${fmt(f.overMinor, f.currency)} more over ${f.quantity} ${card}${f.quantity === 1 ? "" : "s"}). Check it against the contract before approving`));
+      // Ahead of the boilerplate "evidence supplied by operator" warning, so the specific reason heads the list and the Inbox.
+      const at = rules.findIndex((r) => r.ruleId === "evidence_provenance");
+      rules.splice(at < 0 ? rules.length : at, 0, warn("stated_unit_rate", `The invoice charges ${fmt(f.statedMinor, f.currency)} per ${stated}; the contract rate is ${fmt(f.rateMinor, f.currency)} per ${card} (${fmt(f.overMinor, f.currency)} more over ${f.quantity} ${card}${f.quantity === 1 ? "" : "s"}). Check it against the contract before approving`));
     }
   }
 
