@@ -128,6 +128,41 @@ describe("returned payouts", () => {
     }
   });
 
+  describe("a reversal dated before its payout is refused on every upload, not only the first (PR7-4)", () => {
+    /** The reversal line dated `days` before the payment's settlement day, as the app shows it (local time). */
+    const earlier = (reversal: string, settledAt: string, days: number) => {
+      const d = new Date(Date.parse(`${localDateString(new Date(settledAt))}T00:00:00Z`) - days * 86_400_000);
+      const us = `${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}/${d.getUTCFullYear()}`;
+      return reversal.replace(/^"\d+\/\d+\/\d+"/, `"${us}"`);
+    };
+
+    it("the same file a second time still refuses it", async () => {
+      const { db2, s2, head, payout, reversal } = await paid();
+      const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+      const settledAt = db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!.settledAt;
+      const file = parsePayPalCsv([head, payout, earlier(reversal("9AB1"), settledAt, 3)].join("\n"));
+      const first = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, file).result;
+      expect(first.returnedUnmatched?.[0].why).toMatch(/before the payout/);
+      const second = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, file).result;
+      expect(second.returned).toHaveLength(0);
+      expect(second.returnedUnmatched?.[0].why).toMatch(/before the payout/);
+      expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
+    });
+
+    it("a payout tied by an earlier upload is checked against the payment's own settlement date, with a day of tolerance", async () => {
+      for (const [days, applied] of [[3, false], [2, false], [1, true], [0, true]] as const) {
+        const { db2, s2, head, payout, reversal } = await paid();
+        const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+        reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout].join("\n")));
+        const settledAt = db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!.settledAt;
+        const r = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, earlier(reversal("9AB1"), settledAt, days)].join("\n"))).result;
+        expect(r.returned, `${days} days early`).toHaveLength(applied ? 1 : 0);
+        if (!applied) expect(r.returnedUnmatched?.[0].why).toMatch(/before the payout/);
+        expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe(applied ? "refunded" : "settled");
+      }
+    });
+  });
+
   it("a clerk's upload of a payout and its reversal in one file lists the reversal and applies nothing", async () => {
     const { db2, s2, head, payout, reversal } = await paid();
     const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");

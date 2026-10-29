@@ -106,6 +106,10 @@ function parseCsv(text: string): string[][] {
   return out;
 }
 
+function dayBefore(d: string): string {
+  return new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+}
+
 export interface ReconResult {
   matched: Array<{ settlementId: string; obligationId: string; vendorName: string; amountMinor: number; currency: string; statementRef: string; date: string }>;
   /** Money that left PayPal with no payment in the app: the line to look at first. */
@@ -203,8 +207,12 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : inThisFile ? "the payout it reverses is only in this same file; confirm in PayPal, then record it on the payment page" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
       continue;
     }
-    const payoutDate = passPayoutDate.get(l.referenceTxnId ?? "");
-    if (payoutDate && /^\d{4}-\d{2}-\d{2}$/.test(payoutDate) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < payoutDate) {
+    // A reversal cannot come before the payout it reverses. For a payout matched in this pass the earliest date is the
+    // statement's own date for it. For every other anchor (a payout tied by an earlier upload, or this same file again)
+    // it is the payment's own settlement date less one day: the app shows Vietnam time and a PayPal statement is in the
+    // account's time zone, so the same moment can fall on different dates.
+    const earliest = passPayoutDate.get(l.referenceTxnId ?? "") ?? dayBefore(localDateString(new Date(r.s.settledAt)));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(earliest) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < earliest) {
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "it is dated before the payout it reverses" });
       continue;
     }
