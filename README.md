@@ -191,7 +191,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-592 tests in 67 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+604 tests in 68 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 

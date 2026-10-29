@@ -16,10 +16,10 @@ Working note, updated as work lands. Status as of 29 Oct 2026.
 - `npm audit` decision recorded in `2026-10-29-response.md`: 0 production vulnerabilities, 4 moderate dev-only, accepted.
 - Final checks: 56 files, 438 tests passed and 1 skipped; typecheck, lint and build clean; replay unchanged; contract 16 tests pass.
 - Pull request opened into `mac-import-2026-10-29`.
-- Round 6 (same security reviewer): satisfied with no Must-fix outstanding; ratings 8, 8 and 6. Its four conditions (SEC6-2, SEC2-7, SEC2-8, SEC6-1) are fixed. The business and design reviews are running; their findings go in the next response.
+- Each reviewer has had three cycles and is satisfied with no Must-fix outstanding: security 8, 8 and 7; design 8.5 and 9.0; practitioner clerk 7.5, owner 8.5, completeness 7.5, pilot 6.5, hackathon 8.5. Their findings and what each led to are in `2026-10-29-response.md`.
 
 ## Left to do
 
-- Still open: SEC5-4, SEC5-5, SEC5-6, the throttle key (SEC5-3), contract scheduled-payment expiry and storage time-to-live, and the undiagnosed upload result (SEC5-10).
+- Still open: a per-username progressive delay and CSV-refund hardening for real money, the Render client-address header (needs the diagnostic run on the deployed demo), PR8-4, PR7-7, PR7-8, and the three held-back product decisions (PR6-8, PR6-10, PR6-11).
 - A person reads the money-path files listed in the response file before merge.
 - Round 6 with a fresh reviewer. Stop this track when a reviewer is satisfied with no Must-fix items outstanding.
