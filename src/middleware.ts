@@ -62,7 +62,12 @@ export function middleware(req: NextRequest) {
     if (overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS, Date.now(), false)) return tooMany(FAIL_WINDOW_MS);
     const who = authenticate(req.headers.get("authorization"), users);
     // A missing header is the browser asking for the password prompt, not a guess; only wrong passwords count.
-    if (!who && req.headers.get("authorization")) overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);
+    if (!who && req.headers.get("authorization")) {
+      overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);
+      // Opt-in, off by default: one wrong password on the deployed service shows which header really carries the
+      // visitor's address behind the host's proxies, so CHECKRAIL_CLIENT_IP_HEADER can be set from evidence (render.yaml).
+      if (process.env.CHECKRAIL_LOG_CLIENT_IP === "1") console.warn("[checkrail] failed login", { key: ip, xForwardedFor: req.headers.get("x-forwarded-for"), cfConnectingIp: req.headers.get("cf-connecting-ip"), trueClientIp: req.headers.get("true-client-ip"), xRealIp: req.headers.get("x-real-ip") });
+    }
     if (!who) return new NextResponse("Authentication required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"' } });
     actor = who.user;
     role = who.role;

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, configuredUsers, parseCredential, safeEqual } from "./basicAuth";
 import { middleware } from "../middleware";
@@ -53,7 +53,7 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV"] as const;
+  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP"] as const;
   const saved: Record<string, string | undefined> = {};
   const env = process.env as Record<string, string | undefined>;
   beforeEach(() => {
@@ -69,6 +69,22 @@ describe("middleware", () => {
   });
   const req = (headers: Record<string, string> = {}, path = "/obligations") => new NextRequest(`http://localhost${path}`, { headers });
   const fwd = (res: Response, h: string) => res.headers.get(`x-middleware-request-${h}`);
+
+  it("logs which header carries the client address on a failed login, only when asked (SEC5-3)", () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrong = { authorization: basic("judge", "wrong"), "x-forwarded-for": "6.6.6.6, 203.0.113.77", "cf-connecting-ip": "8.8.8.8" };
+    expect(middleware(req(wrong)).status).toBe(401);
+    expect(warn).not.toHaveBeenCalled();
+    env.CHECKRAIL_LOG_CLIENT_IP = "1";
+    expect(middleware(req(wrong)).status).toBe(401);
+    expect(warn).toHaveBeenCalledWith("[checkrail] failed login", expect.objectContaining({ key: "203.0.113.77", xForwardedFor: "6.6.6.6, 203.0.113.77", cfConnectingIp: "8.8.8.8" }));
+    // A right password logs nothing, and the Authorization header is never logged.
+    warn.mockClear();
+    expect(middleware(req({ authorization: basic("judge", "a-long-enough-pass") })).status).toBe(200);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
 
   it("open in development: acts as the demo owner and ignores forged identity headers", () => {
     const res = middleware(req({ [ACTOR_HEADER]: "forged", [ROLE_HEADER]: "admin" }));
