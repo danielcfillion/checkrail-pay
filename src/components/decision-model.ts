@@ -23,6 +23,8 @@ export type EarlierPayment = { id: string; vendorName: string | null; sourceRef:
 
 export type DecisionInput = {
   state: string;
+  /** Who is being paid, for the Approve button and the phone bar. */
+  vendorName?: string | null;
   amountMinor: number | null;
   currency: string | null;
   blockedReason: string | null;
@@ -58,7 +60,14 @@ export type Decision = {
   alsoStated?: string[];
   /** A short label for the card's corner when something besides the rules is open ("1 reader concern"). */
   chip?: string | null;
+  /** One line under the button saying what it will and will not do. */
+  actionHint?: string | null;
+  /** What the phone bar says in place of the title: who and how much, so the bar is enough to decide from. */
+  barText?: string | null;
 };
+
+/** A payee name short enough for a button: the first 28 characters, then an ellipsis. */
+const shortName = (n: string) => (n.length > 28 ? `${n.slice(0, 27).trimEnd()}…` : n);
 
 /** Whether this viewer may take the card's action. The server checks again. */
 export function allowedAction(a: PrimaryAction, perms: { approve: boolean; pay: boolean; amend: boolean }, approveRefusal: string | null | undefined): boolean {
@@ -246,8 +255,11 @@ function approvalDecision(i: DecisionInput): Decision {
   // What the checks may claim: "Every check passed." only when the rules and the reading both are clean.
   const checks = checkStatement({ rules: i.rules, reader: i.reader });
   const chip = checks.chip;
-  const action: PrimaryAction = { kind: "approve", label: "Approve" };
-  const base = { tone: "attention" as const, statedReason: reason, action, chip };
+  // The button names what it does: who is paid and how much. Approving does not send anything.
+  const who = i.vendorName ? shortName(i.vendorName) : null;
+  const money = i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : null;
+  const action: PrimaryAction = { kind: "approve", label: money && who ? `Approve ${money} to ${who}` : "Approve" };
+  const base = { tone: "attention" as const, statedReason: reason, action, chip, actionHint: "Does not send money. Policy checks again, then it is ready to pay.", barText: money && who ? `${who}, ${money}` : null };
   // Only a clear result is silent on the other branches; anything open is said first.
   const lead = (line: string) => (checks.kind === "clear" ? line : `${checks.text} ${line}`);
 

@@ -42,6 +42,18 @@ describe("decide", () => {
     expect(d.action).toMatchObject({ kind: "approve", label: "Approve" });
   });
 
+  it("names who is paid and how much on the Approve button, and says it does not send money", () => {
+    const awaiting = { ...base, state: "awaiting_approval", amountMinor: 75000, policyReasons: ["Amount exceeds auto-execute threshold USD 250.00"], rules: [pass("amount_matches_evidence", "Amount matches Trip sheet PAL-3D-0927")] };
+    const d = decide({ ...awaiting, vendorName: "Ana Reyes" });
+    expect(d.action).toMatchObject({ kind: "approve", label: "Approve USD 750.00 to Ana Reyes" });
+    expect(d.actionHint).toBe("Does not send money. Policy checks again, then it is ready to pay.");
+    expect(d.barText).toBe("Ana Reyes, USD 750.00");
+    // A long name is cut for the button; with no payee the label stays plain.
+    expect(decide({ ...awaiting, vendorName: "Cong ty Du lich Ha Giang Phieu Luu Tho Phuong" }).action).toMatchObject({ label: "Approve USD 750.00 to Cong ty Du lich Ha Giang Ph…" });
+    expect(decide(awaiting).action).toMatchObject({ label: "Approve" });
+    expect(decide(awaiting).barText).toBeNull();
+  });
+
   it("offers the router's rail when ready to pay", () => {
     const d = decide({ ...base, state: "approved", amountMinor: 18000, rules: [pass("a", "x"), pass("b", "y")], quote: { rail: "paypal", receiveAmountMinor: 1093131, receiveCurrency: "PHP", feeMinor: 360, sendCurrency: "USD" } });
     expect(d.tone).toBe("settled");

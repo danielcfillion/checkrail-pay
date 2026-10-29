@@ -87,6 +87,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
       : null;
   const decision: Decision = decide({
     state: o.state,
+    vendorName: o.vendorName,
     amountMinor: o.amountMinor,
     currency: o.currency,
     blockedReason: o.blockedReason,
