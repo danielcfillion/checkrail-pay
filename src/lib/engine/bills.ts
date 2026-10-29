@@ -112,6 +112,8 @@ export async function payBill(db: Db, businessId: string, by: Actor, billId: str
     rawInput: `Please pay ${fmt(amountMinor, b.currency)} to ${vendor.name}: ${what} on ${b.kind === "advance" ? "advance" : "invoice"} ${b.reference} (bill total ${fmt(b.totalMinor, b.currency)}).${note ? ` ${note.slice(0, 200)}` : ""}`,
     evidence: [{ kind: b.kind === "advance" ? "purchase_order" : "invoice", label: `${b.kind === "advance" ? "Advance" : "Invoice"} ${b.reference} (${vendor.name})`, amountMinor: b.totalMinor, currency: b.currency, reference: b.reference, excerpt: `${vendor.name}, ${b.reference}, total ${fmt(b.totalMinor, b.currency)}${b.note ? `. ${b.note}` : ""}` }],
     actor: by.id,
+    // The bill was typed by a person here: its record is the operator's word, never independent "system" evidence.
+    evidenceSource: "operator",
     billId,
     paymentKind,
   });

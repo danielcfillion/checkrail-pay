@@ -345,6 +345,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // rate card. This holds at every autonomy level.
   const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
   const selfAttested = (): PolicyOutcome => ({ decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"], rules });
+  // A cash advance is money out before anything is delivered, backed only by the record the business typed itself:
+  // a person approves every one, at every autonomy level (and never the person who prepared it, while someone else can).
+  if (input.paymentKind === "advance" && input.approvalsCount < 1) {
+    return { decision: "require_approval", reasons: ["A cash advance is paid before anything is delivered, so a person approves every advance"], rules };
+  }
   // Autonomy only removes the approval step. Everything above (blocks, holds, warnings, dual approval, vendor cap) has already applied.
   const level = effectiveAutonomy(policy);
   if (level === "review" && input.approvalsCount < 1) {

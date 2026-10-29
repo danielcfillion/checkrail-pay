@@ -81,6 +81,18 @@ describe("deposits and balances", () => {
     expect(vendorBills(db, "ven_dao").position[0]).toMatchObject({ currency: "USD", creditMinor: 0 });
   });
 
+  it("a clerk cannot pay an advance alone: the bill they typed is their own word, and every advance needs a different person", async () => {
+    const adv = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_kalaw", { kind: "advance", reference: "ADV-KAL-1101", totalMinor: 9_000, currency: "USD", note: "Porter meals" });
+    const id = await payBill(db, DEMO_BUSINESS_ID, as("lan"), adv, 9_000);
+    expect(ob(id).state).toBe("awaiting_approval");
+    expect(() => approveObligation(db, id, "user:lan")).toThrow();
+    await expect(executeObligation(db, id, { actor: "user:lan" })).rejects.toThrow(/must be approved/);
+    // A plain bill payment the clerk typed waits for a person too.
+    const inv = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_kalaw", { kind: "invoice", reference: "INV-KAL-1102", totalMinor: 9_000, currency: "USD" });
+    const p = await payBill(db, DEMO_BUSINESS_ID, as("lan"), inv, 9_000);
+    expect(ob(p).state).toBe("awaiting_approval");
+  });
+
   it("settles a guide's cash advance against receipts: overspend becomes owed, underspend a credit", async () => {
     const adv = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "advance", reference: "ADV-HG-1004", totalMinor: 20_000, currency: "USD", note: "Fuel, tickets and meals for HG-4D-1004" });
     const id = await payBill(db, DEMO_BUSINESS_ID, as("lan"), adv, 20_000);

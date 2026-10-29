@@ -83,11 +83,31 @@ describe("returned payouts", () => {
   it("ties a reversal to the payout it names, marks it refunded and flags a fee that differs", async () => {
     const { db2, s2, head, payout, reversal } = await paid();
     const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
-    const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n")));
+    // The payout and its reversal in one uploaded file: the reversal is listed for a person, not applied.
+    const same = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, payout, reversal("9AB1")].join("\n"))).result;
+    expect(same.returned).toHaveLength(0);
+    expect(same.returnedUnmatched?.[0].why).toMatch(/only in this same file/);
+    expect(same.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
+    // Next month's statement names the payout an earlier reconciliation tied: now it is applied.
+    const { result } = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, reversal("9AB1")].join("\n")));
     expect(result.returned).toHaveLength(1);
     expect(result.statementOnly).toHaveLength(0);
-    expect(result.feeDiffs?.[0]).toMatchObject({ statementFeeMinor: 250 });
     expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("refunded");
+  });
+
+  it("a hand-made payout line with no recipient, plus a reversal naming it, reopens nothing and overwrites nothing (security round 2)", async () => {
+    const { db2, s2, head } = await paid();
+    const st = db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!;
+    const [y, m, d] = st.settledAt.slice(0, 10).split("-");
+    const fake = `"${m}/${d}/${y}","Maria Santos","Mass Pay Payment","Completed","USD","-180.00","0.00","","","FAKEPAYOUT0001","","",""`;
+    const back = `"${m}/${d}/${y}","Maria Santos","Payout Reversal","Completed","USD","180.00","0.00","","","FAKEBACK0001","FAKEPAYOUT0001","",""`;
+    const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
+    const r = reconcilePayPal(db2, DEMO_BUSINESS_ID, thu, parsePayPalCsv([head, fake, back].join("\n"))).result;
+    expect(r.matched).toHaveLength(0);
+    expect(r.returned).toHaveLength(0);
+    expect(db2.select().from(obligations).where(eq(obligations.id, s2.paypal)).get()!.state).toBe("settled");
+    expect(db2.select().from(settlements).where(eq(settlements.obligationId, s2.paypal)).get()!.statementRef ?? null).toBeNull();
   });
 
   it("does not refund on a line that names no payout of ours, and a clerk's upload only lists it", async () => {

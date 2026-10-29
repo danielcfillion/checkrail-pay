@@ -148,7 +148,11 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     const amount = -l.grossMinor;
     result.feesMinor[l.currency] = (result.feesMinor[l.currency] ?? 0) + Math.abs(l.feeMinor);
     const lineDay = Date.parse(`${l.date}T00:00:00Z`);
-    const m = rows.find((r) => !used.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === amount && (!l.toEmail || (r.email ?? "").toLowerCase() === l.toEmail) && Math.abs(Date.parse(r.s.settledAt) - lineDay) <= 4 * 86_400_000);
+    // A payout line must name its recipient, and a settlement already tied to a different statement line is not
+    // re-tied: a blank email is not a wildcard, and a matched line never overwrites an earlier match.
+    const m = l.toEmail
+      ? rows.find((r) => !used.has(r.s.id) && (!r.s.statementRef || r.s.statementRef === l.transactionId) && r.s.grossCurrency === l.currency && r.s.grossMinor === amount && (r.email ?? "").toLowerCase() === l.toEmail && Math.abs(Date.parse(r.s.settledAt) - lineDay) <= 4 * 86_400_000)
+      : undefined;
     if (m) {
       used.add(m.s.id);
       result.matched.push({ settlementId: m.s.id, obligationId: m.s.obligationId, vendorName: m.vendorName, amountMinor: amount, currency: l.currency, statementRef: l.transactionId, date: l.date });
@@ -157,23 +161,29 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     } else result.statementOnly.push({ date: l.date, name: l.name, toEmail: l.toEmail, amountMinor: amount, currency: l.currency, transactionId: l.transactionId, type: l.type });
   }
   // Money coming back: an unclaimed payout returned after 30 days, a reversal. It is tied to a payment only through
-  // the transaction it reverses (PayPal's "Reference Txn ID"), and only to a payout line this business already matched
-  // to one of its own settlements. An amount and an email are not enough: two payouts of the same amount to the same
-  // vendor would be indistinguishable, and a hand-made line could reopen a paid invoice.
+  // the transaction it reverses (PayPal's "Reference Txn ID"), only to a payout line already tied to one of this
+  // business's settlements, and only when it names the vendor as sender. An amount and an email are not enough: two
+  // payouts of the same amount to the same vendor would be indistinguishable.
   const backs = lines.filter((l) => l.grossMinor > 0 && RETURN_TYPE.test(`${l.type} ${l.status} ${l.note}`));
+  // Anchors a reversal may point at: statement lines tied to a payment by an earlier reconciliation, and, when the
+  // lines come straight from PayPal's API, payouts matched in this same read. A payout line in an uploaded file is
+  // not trusted as an anchor in that same file: a hand-made payout plus a reversal naming it would reopen a paid
+  // invoice. Such a reversal is listed for a person to confirm in PayPal instead.
   const byTxn = new Map<string, (typeof rows)[number]>();
   for (const r of rows) if (r.s.statementRef) byTxn.set(r.s.statementRef, r);
+  const sameFile = new Map<string, (typeof rows)[number]>();
   for (const m of result.matched) {
     const r = rows.find((x) => x.s.id === m.settlementId);
-    if (r) byTxn.set(m.statementRef, r);
+    if (r && !r.s.statementRef) (source === "paypal_api" ? byTxn : sameFile).set(m.statementRef, r);
   }
   const returnedIds = new Set<string>();
   const canRefund = actorCan(by, "reconcile");
   for (const l of backs) {
     const r = l.referenceTxnId ? byTxn.get(l.referenceTxnId) : undefined;
-    const fits = r && !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && (!l.fromEmail || !r.email || r.email.toLowerCase() === l.fromEmail);
+    const fits = r && !returnedIds.has(r.s.id) && r.s.grossCurrency === l.currency && r.s.grossMinor === l.grossMinor && !!l.fromEmail && !!r.email && r.email.toLowerCase() === l.fromEmail;
     if (!r || !fits) {
-      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
+      const inThisFile = l.referenceTxnId && sameFile.has(l.referenceTxnId);
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : inThisFile ? "the payout it reverses is only in this same file; confirm in PayPal, then record it on the payment page" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
       continue;
     }
     returnedIds.add(r.s.id);
