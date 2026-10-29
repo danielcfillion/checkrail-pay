@@ -60,6 +60,18 @@ describe("duplicate requests (practitioner round 6)", () => {
     expect(runPolicy(db, earlier).decision).toBe("block");
   });
 
+  it("a request still waiting for evidence is not the original of a re-sent invoice with its evidence (PR7-5)", async () => {
+    const unsupported = await request("INV-MS-7005");
+    db.update(obligations).set({ state: "needs_evidence" }).where(eq(obligations.id, unsupported)).run();
+    await sleep(5);
+    const resent = await request("INV-MS-7005");
+    expect(ob(resent).state).not.toBe("blocked");
+    expect(duplicateRule(resent).passed).toBe(true);
+    // If the resent one is paid, the earlier unsupported request can no longer be paid too.
+    db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, resent)).run();
+    expect(duplicateRule(unsupported).passed).toBe(false);
+  });
+
   it("a cancelled copy never counts", async () => {
     const original = await request("INV-MS-7004");
     await sleep(5);

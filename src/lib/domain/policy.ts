@@ -233,9 +233,11 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     // does, in any order, so a later payment still stops an earlier request paying the same job twice. A request still
     // open counts only if it is earlier than this one, so the original is never blocked by its own duplicate. A blocked,
     // cancelled, failed or refunded request never counts: it will not pay, so it must not stop the one it duplicates.
+    // Nor does one still drafted or waiting for evidence: it cannot be paid yet, so a vendor's re-sent invoice with its
+    // evidence is the real request. If the unsupported one later gains evidence, any committed payment on the job blocks it.
     const committed = ["approved", "execution_pending", "sent", "settled", "disputed"];
     const earlier = (p: { obligationId: string; createdAt?: string }) => !p.createdAt || !obligation.createdAt || p.createdAt < obligation.createdAt || (p.createdAt === obligation.createdAt && p.obligationId < obligation.id);
-    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && !["cancelled", "failed", "refunded", "blocked"].includes(p.state) && !(bill && p.billId === bill.id) && (committed.includes(p.state) || earlier(p)));
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && !["cancelled", "failed", "refunded", "blocked"].includes(p.state) && !(bill && p.billId === bill.id) && (committed.includes(p.state) || (!["drafted", "needs_evidence"].includes(p.state) && earlier(p))));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;
