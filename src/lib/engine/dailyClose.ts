@@ -260,6 +260,11 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   };
 }
 
+/** Every request the "Needs a look" lines stand for, folded ones included: what "Still waiting on you" tags as also listed above. */
+export function attentionIds(attention: Array<{ id: string; ids?: string[] }>): Set<string> {
+  return new Set(attention.flatMap((a) => a.ids ?? [a.id]));
+}
+
 const OPERATOR_EVIDENCE = /^Evidence supplied by operator/;
 
 /**

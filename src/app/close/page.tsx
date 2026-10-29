@@ -5,7 +5,7 @@ import { getDb } from "@/lib/db";
 import { runAs } from "@/lib/engine/requestContext";
 import { getBusiness, listObligations, waitingIdsFor } from "@/lib/queries";
 import { reasonFor } from "@/components/ObligationList";
-import { getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
+import { attentionIds, getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
 import { formatDateTime, formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise, stateLabel } from "@/lib/format";
 import { CapMeter } from "@/components/CapMeter";
 import { plainReason } from "@/lib/activity";
@@ -47,13 +47,16 @@ export default async function DailyClosePage() {
   const past = listSignOffs(db, 5);
   // One meaning of "waiting on you" everywhere (the sidebar, the Inbox tab, the overview): what this viewer's role lets them do next.
   // Requests that wait on somebody else (evidence from the vendor, an approval above their limit) are listed under their own name.
+  // A request that is both a problem of this period and still waiting is said so in both places, not left to look like two.
+  const above = attentionIds(c.attention);
+  const tagged = (id: string, note: string) => (above.has(id) ? `Also under Needs a look. ${note}` : note);
   const mineIds = viewer ? new Set(runAs(viewer.login, () => waitingIdsFor(viewer.actor))) : null;
   const mineRows = mineIds
     ? listObligations({ limit: 1000 })
         .filter((r) => mineIds.has(r.id))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .map((r) => ({ id: r.id, vendorName: r.vendorName, amountMinor: r.amountMinor, currency: r.currency, note: reasonFor(r) || stateLabel(r.state) }))
-    : c.waitingOnYou.map((w) => ({ id: w.id, vendorName: w.vendorName, amountMinor: w.amountMinor, currency: w.currency, note: w.note ? plainReason(w.note) : stateLabel(w.state) }));
+        .map((r) => ({ id: r.id, vendorName: r.vendorName, amountMinor: r.amountMinor, currency: r.currency, note: tagged(r.id, reasonFor(r) || stateLabel(r.state)) }))
+    : c.waitingOnYou.map((w) => ({ id: w.id, vendorName: w.vendorName, amountMinor: w.amountMinor, currency: w.currency, note: tagged(w.id, w.note ? plainReason(w.note) : stateLabel(w.state)) }));
   const others = mineIds ? c.waitingOnYou.filter((w) => !mineIds.has(w.id)) : [];
   const quiet = !c.attention.length && !c.paidByAgent.length && !c.paidByPeople.length && !c.settingsChanges.length;
 

@@ -13,9 +13,9 @@ import { confirmSettlement, executeObligation } from "./orchestrator";
 import { agedPayables } from "./books";
 import { xeroBillRows } from "../accounting/xeroBills";
 import { paidSummary } from "../queries";
-import { getDailyClose, signOffDailyClose } from "./dailyClose";
+import { attentionIds, getDailyClose, signOffDailyClose } from "./dailyClose";
 import { markReturnedByHand } from "./books";
-import { getObligationDetail } from "../queries";
+import { getObligationDetail, waitingIdsFor } from "../queries";
 import { readingFor } from "../../components/reader-view";
 import { runLineStatement } from "../../components/check-statement";
 import { resetRails } from "../rails";
@@ -173,6 +173,17 @@ describe("PR7-6: the Daily close shows one line for one job and one line for one
     // The two requests are both money held back: the totals are not folded.
     const seedBlocked = before.attention.filter((a) => a.kind === "blocked" && a.sourceRef !== "JOB-CEB2D-1024").length;
     expect(before.totals.stoppedCount).toBe(seedBlocked + 2);
+  });
+
+  it("names every request a folded line stands for, so a request waiting on someone can be tagged as also above (NEW-12)", async () => {
+    const original = await rosaSheet();
+    const copy1 = await rosaSheet();
+    const copy2 = await rosaSheet();
+    const above = attentionIds(close().attention);
+    expect([copy1, copy2].every((id) => above.has(id))).toBe(true);
+    expect(above.has(original)).toBe(false);
+    // The blocked copies are also waiting on the clerk: the Daily close tags them rather than listing them twice unmarked.
+    expect(waitingIdsFor(as("lan"), db).filter((id) => above.has(id))).toEqual(expect.arrayContaining([copy1, copy2]));
   });
 
   it("folds payouts that came back for one vendor into one line, and keeps another vendor's apart", async () => {
