@@ -5,7 +5,7 @@ import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./user
 import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField, keyedDigest } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
-import { expectedAmount } from "./rates";
+import { expectedAmount, rateCardsForPolicy } from "./rates";
 import { assertOpenPeriod } from "./books";
 import { taxFormWarning, withholdingFor } from "./taxes";
 import { currentLogin, humanOf } from "./requestContext";
@@ -582,6 +582,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     paypalHistory: ob.paypalHistoryJson ? (JSON.parse(ob.paypalHistoryJson) as PayPalHistoryCheck) : null,
     returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? (cameBackOnItsOwn(db, obligationId, vendorRow.verifiedAt) ? obligationId : null)) : null,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
+    vendorRates: vendor ? rateCardsForPolicy(db, vendor.id) : undefined,
     withholding,
     taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,
     jobKeys: myJobKeys,

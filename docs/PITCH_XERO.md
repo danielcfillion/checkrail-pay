@@ -22,8 +22,8 @@ For every settled payment the mapping produces four records that reconcile to th
 
 - **Contact**: the vendor, with country on the address.
 - **Bill (ACCPAY)**: reference, bill date, description, gross amount and currency, account code.
-- **Payment**: payment date and net paid, against the bank account for the rail (PayPal clearing or Stellar treasury).
-- **Bank fee line**: the rail fee on a bank fees account, so gross, fee and net tie out.
+- **Payment**: payment date and the amount sent, against the bank account for the rail (PayPal clearing or Stellar treasury).
+- **Bank fee line**: the rail fee on a bank fees account, so gross, fee and net tie out. Net is what left the bank account on every rail: the amount plus the fee for PayPal, Wise and the bank file; for Stellar the fee is inside the amount.
 
 The mapping is covered by tests and the CSV exporter today. It is an import file, not a live push: OAuth to a live tenant is the remaining step.
 

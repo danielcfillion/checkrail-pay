@@ -1,4 +1,5 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
+import { statedRateAboveContract, statedRatesFor, UNIT_NAME } from "./statedRate";
 import { localDateString } from "../format";
 import { foldConfusables, hasConfusables, lookalikeWords, mixesScripts } from "./ids";
 
@@ -190,6 +191,21 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       if (exp.endDate && input.today && exp.endDate > input.today) rateCardNotYet = exp.endDate;
       else rateCardMatch = true;
       rules.push(pass("expected_amount", `Within the rate card for ${exp.departureCode}: ${exp.basis} = ${fmt(exp.expectedMinor, exp.currency)}`));
+    }
+  }
+
+  // R4d: a unit price the invoice or request states ("4 days at USD 220") against the vendor's own rate card. It needs no
+  // departure on file, which is when an inflated rate is easiest to miss: many invoices arrive before the manifest does.
+  // A warning only: the card may be stale. Skipped when the departure's rate card already blocked this payment.
+  if (vendor && input.vendorRates?.length && input.paymentKind !== "advance" && !rules.some((r) => r.ruleId === "expected_amount" && !r.passed)) {
+    const texts = [input.requestText ?? "", ...evidence.flatMap((e) => [e.label, e.excerpt ?? ""])];
+    const f = statedRateAboveContract(statedRatesFor(texts, vendor.name, otherNames), input.vendorRates, input.invoiceDate ?? input.today ?? null, policy.amountToleranceBps);
+    if (f) {
+      const stated = UNIT_NAME[f.statedUnit];
+      const card = UNIT_NAME[f.rateUnit];
+      // Ahead of the boilerplate "evidence supplied by operator" warning, so the specific reason heads the list and the Inbox.
+      const at = rules.findIndex((r) => r.ruleId === "evidence_provenance");
+      rules.splice(at < 0 ? rules.length : at, 0, warn("stated_unit_rate", `The invoice charges ${fmt(f.statedMinor, f.currency)} per ${stated}; the contract rate is ${fmt(f.rateMinor, f.currency)} per ${card} (${fmt(f.overMinor, f.currency)} more over ${f.quantity} ${card}${f.quantity === 1 ? "" : "s"}). Check it against the contract before approving`));
     }
   }
 

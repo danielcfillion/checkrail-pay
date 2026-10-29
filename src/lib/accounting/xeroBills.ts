@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db";
 import { bills, businesses, obligations, vendors } from "../db/schema";
 import { csvCell } from "./record";
+import { accountCodeFor, advancesAccount, describeBill, majorText } from "./billLine";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { audit } from "../domain/stateMachine";
@@ -24,27 +25,13 @@ const AGREED = ["approved", "execution_pending", "sent", "settled"];
 
 type Row = Record<(typeof XERO_BILL_COLUMNS)[number], string | number | null>;
 
-/** A short, clean line for the accountant: what it was, for which departure. Never the raw chat text. */
-function describe(role: string, reference: string, departure: string | null, kind?: string): string {
-  const what = kind === "advance" ? "Cash advance" : kind === "credit_note" ? "Credit note" : `${ROLE_WORD[role] ?? "Supplier"} services`;
-  return `${what} ${reference}${departure ? `, departure ${departure}` : ""}`;
-}
-const ROLE_WORD: Record<string, string> = { guide: "Guiding", driver: "Transport", homestay: "Accommodation", hotel: "Accommodation", creator: "Content", restaurant: "Meals" };
-
-function accountFor(role: string, override: string | null): string {
-  if (override) return override;
-  return role === "homestay" || role === "hotel" ? "320" : role === "creator" ? "400" : role === "guide" || role === "driver" ? "310" : "429";
-}
-
-const major = (minor: number, currency: string) => (currency === "VND" ? String(Math.round(minor / 100)) : (minor / 100).toFixed(2));
+const major = majorText;
 
 export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolean }): { rows: Row[]; obligationIds: string[]; billIds: string[] } {
   const tracking = process.env.XERO_TRACKING_NAME || "Departure";
   const taxType = process.env.XERO_TAX_TYPE || "Tax Exempt";
   // Tax kept back is owed to the tax office, not the vendor: a negative line on the bill to a liability account.
   const withholdingAccount = process.env.XERO_WITHHOLDING_ACCOUNT || "825";
-  // An advance is money the guide holds until receipts come in: a prepayment, not an expense.
-  const advancesAccount = process.env.XERO_ADVANCES_ACCOUNT || "620";
   const obs = db
     .select({ o: obligations, v: vendors })
     .from(obligations)
@@ -65,7 +52,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     const departure = departureCodeFor(db, businessId, [o.rawInput, o.sourceRef, o.description]);
     const withholdingLine = (invoiceNumber: string, date: string, due: string, withheld: number, currency: string, note: string | null) =>
       withheld > 0 ? { ...base, "*InvoiceNumber": invoiceNumber, "*InvoiceDate": date, "*DueDate": due, Description: `Tax withheld${note ? `: ${note.split(":")[0]}` : ""}`, "*UnitAmount": `-${major(withheld, currency)}`, "*AccountCode": withholdingAccount, Currency: currency } : null;
-    const base = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*Quantity": 1, "*AccountCode": accountFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: departure ? tracking : null, TrackingOption1: departure, Currency: o.currency };
+    const base = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*Quantity": 1, "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: departure ? tracking : null, TrackingOption1: departure, Currency: o.currency };
     if (o.billId) {
       // The invoice once, at its total, the first time any part of it is agreed.
       if (billIds.has(o.billId)) continue;
@@ -75,7 +62,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
       const docDate = b.billDate ?? o.invoiceDate ?? localDateString(new Date(b.createdAt));
       const date = posting(docDate);
       const due = [b.dueDate ?? o.dueDate ?? date, date].sort()[1];
-      rows.push({ ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": b.kind === "advance" ? advancesAccount : base["*AccountCode"], Currency: b.currency });
+      rows.push({ ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode, b.kind), Currency: b.currency });
       const w = withholdingLine(b.reference, date, due, o.withheldMinor ?? 0, b.currency, o.withholdingNote);
       if (w) rows.push(w);
       continue;
@@ -84,7 +71,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     const date = posting(docDate);
     const due = [o.dueDate ?? date, date].sort()[1];
     const ref = o.sourceRef ?? o.id;
-    rows.push({ ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describe(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) });
+    rows.push({ ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) });
     const w = withholdingLine(ref, date, due, o.withheldMinor ?? 0, o.currency, o.withholdingNote);
     if (w) rows.push(w);
   }
@@ -99,7 +86,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
   for (const { b, v } of credits) {
     billIds.add(b.id);
     const date = posting(b.billDate ?? localDateString(new Date(b.createdAt)));
-    rows.push({ "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describe(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount : accountFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency });
+    rows.push({ "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describeBill(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount() : accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency });
   }
   return { rows, obligationIds, billIds: [...billIds] };
 }

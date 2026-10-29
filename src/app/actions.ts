@@ -25,7 +25,8 @@ import { signOffDailyClose } from "@/lib/engine/dailyClose";
 import { cancelRun, createRun, releaseRun, removeRunItem } from "@/lib/engine/runs";
 import { confirmBatch, returnLine } from "@/lib/engine/bankFiles";
 import { applyCredit, createBill, payBill, settleAdvance, voidBill } from "@/lib/engine/bills";
-import { importDepartures, setRate } from "@/lib/engine/rates";
+import { setRate } from "@/lib/engine/rates";
+import { importDeparturesAndRecheck } from "@/lib/engine/manifest";
 import { markReturnedByHand, parsePayPalCsv, reconcilePayPal, setPeriodLock } from "@/lib/engine/books";
 import { createEvidenceRequest, createRemittanceLink, remittanceMessage, remittanceMessageFor, viewRemittance } from "@/lib/engine/vendorLinks";
 import { createInvite, createVendor, proposePayoutChange, rejectVendorChange, setVendorStatus, updateVendorProfile, verifyVendorChange } from "@/lib/engine/vendors";
@@ -746,9 +747,9 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
   return inRequest(async () => {
   try {
     if (typeof csv !== "string") throw new Error("Choose a CSV file");
-    const r = await withBusiness((db, b, who) => importDepartures(db, b, who, csv));
-    done(["/departures"]);
-    return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}.`, errors: r.errors };
+    const r = await withBusiness((db, b, who) => importDeparturesAndRecheck(db, b, who, csv));
+    done();
+    return { ok: true, message: `Imported ${r.departures} departure${r.departures === 1 ? "" : "s"} with ${r.services} service${r.services === 1 ? "" : "s"}${r.errors.length ? `; ${r.errors.length} line${r.errors.length === 1 ? "" : "s"} skipped` : ""}${r.rechecked ? `. ${r.rechecked} waiting payment${r.rechecked === 1 ? " was" : "s were"} checked again${r.nowBlocked ? `, ${r.nowBlocked} now blocked by the rate card` : ""}` : ""}.`, errors: r.errors };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

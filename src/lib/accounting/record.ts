@@ -4,6 +4,9 @@ import { obligations, settlements, vendors, accountingSyncs, bills } from "../db
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { config } from "../config";
+import { senderOutlayMinor } from "../domain/routing";
+import type { Rail } from "../domain/types";
+import { accountCodeFor, accountLabel, describeBill, majorText } from "./billLine";
 
 /**
  * Accounting output. Checkrail Pay is not a ledger; it produces clean, complete
@@ -25,14 +28,16 @@ export interface AccountingPayload {
   /** Tax kept back from the vendor and owed to the tax office (a liability line in the books). */
   withheldAmount?: string;
   feeCurrency: string;
-  netPaid: string; // cash out in gross currency: gross + fee for PayPal, gross for Stellar (fee is inside it)
+  /** What left the bank account, in the gross currency, on every rail: gross + fee, except Stellar where the fee is inside the gross. */
+  netPaid: string;
   recipientReceived: string | null;
   recipientCurrency: string | null;
   fxRate: string | null;
   rail: string;
   externalTransactionId: string;
   explorerUrl: string | null;
-  accountCode: string; // suggested expense account
+  /** The account the bill is posted to: the same code the Xero bills file carries (a prepayment for an advance), with its usual name. */
+  accountCode: string;
   /** Departure code, for a Xero tracking category ("Departure") so cost per trip can be reported. */
   departure?: string | null;
   /** Xero tax type for the bill line (XERO_TAX_TYPE, default "Tax Exempt"); tax profiles refine it. */
@@ -46,16 +51,20 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
   if (!ob || !st || !ob.vendorId) return null;
   const v = db.select().from(vendors).where(eq(vendors.id, ob.vendorId)).get();
   if (!v) return null;
-  const major = (minor: number) => (minor / 100).toFixed(2);
   const bill = ob.billId ? db.select().from(bills).where(eq(bills.id, ob.billId)).get() : null;
   const billDate = bill?.billDate ?? localDateString(new Date(ob.createdAt));
+  // The bill is what the Xero file carries: its reference is the invoice number, its description and account are the bill's.
+  const reference = bill?.reference ?? ob.sourceRef ?? ob.id;
+  const departure = departureCodeFor(db, ob.businessId, [ob.rawInput, ob.sourceRef, ob.description]);
+  const cur = st.grossCurrency;
+  const major = (minor: number) => majorText(minor, cur);
   return {
     destination: config.accounting.destination,
     payload: {
-      reference: ob.sourceRef ?? ob.id,
+      reference,
       vendorName: v.name,
       vendorCountry: v.country,
-      description: ob.description ?? "",
+      description: describeBill(v.role, reference, departure, bill?.kind),
       // The bill date is when the obligation was raised (or the bill's own date), never the due date; dates are local.
       billDate: billDate,
       dueDate: ob.dueDate ?? bill?.dueDate ?? billDate,
@@ -63,39 +72,23 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       // The bill is the full amount owed; the vendor was sent that less any tax withheld.
       grossAmount: major(ob.amountMinor ?? st.grossMinor),
       withheldAmount: major(ob.withheldMinor ?? 0),
-      grossCurrency: st.grossCurrency,
+      grossCurrency: cur,
       feeAmount: major(st.feeMinor),
-      feeCurrency: st.grossCurrency,
-      // Cash out of the bank account: PayPal charges its fee on top; the Stellar anchor path takes its fee out of the amount.
-      netPaid: major(st.rail === "paypal" ? st.grossMinor + st.feeMinor : st.grossMinor),
-      recipientReceived: st.receivedMinor != null ? major(st.receivedMinor) : null,
+      feeCurrency: cur,
+      // Cash out of the bank account, whichever rail: PayPal, Wise and the bank file charge their fee on top; the Stellar anchor path takes its fee out of the amount.
+      netPaid: major(senderOutlayMinor({ rail: st.rail as Rail, sendAmountMinor: st.grossMinor, feeMinor: st.feeMinor })),
+      recipientReceived: st.receivedMinor != null ? majorText(st.receivedMinor, st.receivedCurrency ?? cur) : null,
       recipientCurrency: st.receivedCurrency,
       fxRate: st.fxRate,
       rail: st.rail,
       externalTransactionId: st.externalId ?? "",
       explorerUrl: st.explorerUrl,
-      accountCode: v.defaultAccountCode ? v.defaultAccountCode : accountCodeFor(v.role),
-      departure: departureCodeFor(db, ob.businessId, [ob.rawInput, ob.sourceRef, ob.description]),
+      accountCode: accountLabel(accountCodeFor(v.role, v.defaultAccountCode, bill?.kind)),
+      departure,
       taxType: process.env.XERO_TAX_TYPE || "Tax Exempt",
       obligationId: ob.id,
     },
   };
-}
-
-/** Suggested Xero-style expense codes by vendor role. Configurable later. */
-function accountCodeFor(role: string): string {
-  switch (role) {
-    case "guide":
-    case "driver":
-      return "310 Cost of Goods Sold: Contract labour";
-    case "homestay":
-    case "hotel":
-      return "320 Cost of Goods Sold: Accommodation";
-    case "creator":
-      return "400 Advertising and marketing";
-    default:
-      return "429 General expenses";
-  }
 }
 
 export const CSV_COLUMNS: Array<keyof AccountingPayload> = [

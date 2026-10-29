@@ -35,6 +35,10 @@ Declared deviations and decisions from the first design pass. Presentation only:
 - **Daily close (DES-2, DES-6).** Below 1024 px the two columns dissolve and the panels are ordered (needs a look, waiting on you, about to go out, then what was sent). Sent payments are two-line rows on a phone. Sign off is at the end of the page on a phone and top right on desktop.
 - **Not done:** DES-20 (the overview hero labels at 14 px needs a layout pass on the five stations at 1024 px) and the demo role select that truncates "Minh (operations mana" (the persona names are shared copy).
 
+## Vietnamese strings
+
+Vietnamese text in the app (the remittance message in `src/lib/engine/vendorLinks.ts`, the remittance advice page in `src/app/remit/[token]/page.tsx`, the vendor onboarding and evidence pages) was written by an AI agent and has not been read by a native speaker. A Vietnamese reader should check it before a vendor sees it, in particular the polite register ("Chào ...", "bạn"), "đã thanh toán" against "đang chuyển" for money that has arrived against money on its way, and "chuyển khoản ngân hàng" as the one name for a bank file and a Wise transfer. The remittance message groups a vendor's payments by rail and by arrived or on its way, one sentence each, and writes the date day first (27/10/2026).
+
 ## Verification
 
 - `npm run typecheck`: passes.

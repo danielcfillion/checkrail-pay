@@ -4,6 +4,7 @@ import { auditEntries, businesses, obligations, reconciliations, settlements, ve
 import { audit, transition } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { localDateString } from "../format";
+import { fmt } from "../domain/policy";
 import { toBaseOrZero } from "../fx";
 import { actorCan, requirePermission, type Actor } from "./users";
 import { openBills, reopenBill } from "./bills";
@@ -171,16 +172,26 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
   // business's settlements, and only when it names the vendor as sender. An amount and an email are not enough: two
   // payouts of the same amount to the same vendor would be indistinguishable.
   const backs = lines.filter((l) => l.grossMinor > 0 && RETURN_TYPE.test(`${l.type} ${l.status} ${l.note}`));
-  // Anchors a reversal may point at: statement lines tied to a payment by an earlier reconciliation, and, when the
-  // lines come straight from PayPal's API, payouts matched in this same read. A payout line in an uploaded file is
-  // not trusted as an anchor in that same file: a hand-made payout plus a reversal naming it would reopen a paid
-  // invoice. Such a reversal is listed for a person to confirm in PayPal instead.
+  // Anchors a reversal may point at: statement lines tied to a payment by an earlier reconciliation, and payouts
+  // matched in this same pass, so a payout and its reversal in one file are tied in one upload (a short payout or a
+  // same-month return puts both in the same statement). Payouts come first, reversals second.
+  //
+  // A same-pass payout is trusted only when the upload is recorded, that is a reconciler's, or when the lines come
+  // straight from PayPal's API. A clerk's upload records and applies nothing, so for a clerk such a reversal is listed
+  // for a person to confirm. This trusts nothing a reconciler cannot already do: markReturnedByHand takes any
+  // transaction id they name. The reversal must still name the payout's id, come from the vendor's own PayPal address,
+  // match the payout's amount and currency (see `fits`), and not be dated before the payout.
   const byTxn = new Map<string, (typeof rows)[number]>();
   for (const r of rows) if (r.s.statementRef) byTxn.set(r.s.statementRef, r);
   const sameFile = new Map<string, (typeof rows)[number]>();
+  const passPayoutDate = new Map<string, string>();
   for (const m of result.matched) {
     const r = rows.find((x) => x.s.id === m.settlementId);
-    if (r && !r.s.statementRef) (source === "paypal_api" ? byTxn : sameFile).set(m.statementRef, r);
+    if (r && !r.s.statementRef) {
+      const trusted = source === "paypal_api" || canRecord;
+      (trusted ? byTxn : sameFile).set(m.statementRef, r);
+      if (trusted) passPayoutDate.set(m.statementRef, m.date);
+    }
   }
   const returnedIds = new Set<string>();
   const canRefund = canRecord;
@@ -190,6 +201,11 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
     if (!r || !fits) {
       const inThisFile = l.referenceTxnId && sameFile.has(l.referenceTxnId);
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : inThisFile ? "the payout it reverses is only in this same file; confirm in PayPal, then record it on the payment page" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
+      continue;
+    }
+    const payoutDate = passPayoutDate.get(l.referenceTxnId ?? "");
+    if (payoutDate && /^\d{4}-\d{2}-\d{2}$/.test(payoutDate) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < payoutDate) {
+      result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "it is dated before the payout it reverses" });
       continue;
     }
     returnedIds.add(r.s.id);
@@ -273,16 +289,24 @@ export interface PayableRow {
   daysOverdue: number;
   bucket: (typeof AGE_BUCKETS)[number];
   state: string;
+  /** Where it stands, in words for the Status column: "bill, USD 425.00 on its way", "in the bank file, not confirmed". */
+  detail: string;
 }
 
 function bucketOf(days: number): (typeof AGE_BUCKETS)[number] {
   return days <= 0 ? AGE_BUCKETS[0] : days <= 30 ? AGE_BUCKETS[1] : days <= 60 ? AGE_BUCKETS[2] : days <= 90 ? AGE_BUCKETS[3] : AGE_BUCKETS[4];
 }
 
+/** A payment in these states is in the books as a bill (Xero gets it at approval) and is still owed: nothing has arrived yet. */
+const OWED_STATES = ["approved", "execution_pending", "sent", "failed", "refunded"];
+
 /**
- * What the business owes and how late it is: open bills at their open amount, and payments not tied to a bill that
- * are agreed or waiting but not yet paid. Blocked requests are left out until fixed: a duplicate is not owed, and a
- * mismatched amount is not owed as asked. Overdue counts from the due date, or the date raised when there is none.
+ * What the business owes and how late it is, as the bookkeeper's payables will show it. Recorded invoices count for
+ * what is left after settled payments and credits: a payment that is only approved or on its way does not reduce what
+ * is owed, because the bank has not confirmed it. Payments not tied to a bill count once they are approved, and stay in
+ * until they settle (a payment in a bank file that is not yet confirmed is still owed). A request waiting for evidence
+ * or for approval is not a bill yet, and a blocked one is not owed as asked, so neither is listed. Overdue counts from
+ * the due date, or the date raised when there is none.
  */
 export function agedPayables(db: Db, businessId: string, today = localDateString()): { rows: PayableRow[]; totals: Record<string, number>; baseCurrency: string } {
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get()!;
@@ -291,15 +315,17 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
   const days = (d: string) => Math.floor((t0 - Date.parse(`${d}T00:00:00Z`)) / 86_400_000);
   const rows: PayableRow[] = [];
   for (const b of openBills(db, businessId)) {
-    if (b.kind !== "invoice" || b.balance.openMinor <= 0) continue;
+    const owed = b.totalMinor - b.balance.paidMinor - b.balance.creditedMinor;
+    if (b.kind !== "invoice" || owed <= 0) continue;
     const due = b.dueDate ?? b.billDate ?? localDateString(new Date(b.createdAt));
-    rows.push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: b.balance.openMinor, currency: b.currency, baseMinor: toBaseOrZero(b.balance.openMinor, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open" });
+    const detail = b.balance.pendingMinor > 0 ? `bill, ${fmt(b.balance.pendingMinor, b.currency)} on its way` : b.balance.paidMinor + b.balance.creditedMinor > 0 ? "bill, part paid" : "bill, unpaid";
+    rows.push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: owed, currency: b.currency, baseMinor: toBaseOrZero(owed, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open", detail });
   }
   const obs = db
     .select({ o: obligations, vendorName: vendors.name })
     .from(obligations)
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
-    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence", "refunded"])))
+    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, OWED_STATES)))
     .all();
   // A payment that came back is owed again until it has been requested again.
   const repaid = new Set(db.select({ d: auditEntries.detailJson }).from(auditEntries).where(eq(auditEntries.action, "obligation.repays")).all().map((r) => (JSON.parse(r.d ?? "{}") as { refunded?: string }).refunded));
@@ -307,7 +333,10 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
     if (o.billId || !o.amountMinor || !o.currency) continue;
     if (o.state === "refunded" && repaid.has(o.id)) continue;
     const due = o.dueDate ?? localDateString(new Date(o.createdAt));
-    rows.push({ kind: "payment", id: o.id, vendorId: o.vendorId!, vendorName, reference: o.sourceRef ?? o.id, amountMinor: o.amountMinor, currency: o.currency, baseMinor: toBaseOrZero(o.amountMinor, o.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: o.state });
+    // Never the internal id: the reference, else the first words of what was asked.
+    const reference = o.sourceRef ?? (o.rawInput.trim().split(/\s+/).slice(0, 6).join(" ").slice(0, 40) || "no reference");
+    const detail = o.state === "approved" ? "approved, not paid yet" : o.state === "execution_pending" ? "being sent" : o.state === "sent" ? (o.selectedRail === "bank_file" ? "in the bank file, not confirmed" : "sent, not confirmed") : o.state === "failed" ? "payment failed, still owed" : "came back, owed again";
+    rows.push({ kind: "payment", id: o.id, vendorId: o.vendorId!, vendorName, reference, amountMinor: o.amountMinor, currency: o.currency, baseMinor: toBaseOrZero(o.amountMinor, o.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: o.state, detail });
   }
   rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
   const totals = Object.fromEntries(AGE_BUCKETS.map((k) => [k, rows.filter((r) => r.bucket === k).reduce((a, r) => a + r.baseMinor, 0)]));
