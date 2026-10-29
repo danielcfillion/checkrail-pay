@@ -52,7 +52,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   if (await isPublicPage()) {
     // The skip link and <main> come from PublicFrame, which each of these pages renders in its own language.
     return (
-      <html lang="en" className={archivo.variable}>
+      <html lang="en" className={archivo.variable} suppressHydrationWarning>
         <body>
           <ToastProvider>{children}</ToastProvider>
         </body>
