@@ -7,6 +7,9 @@ import { approveObligation, ingestObligation } from "./orchestrator";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { createRun, releaseRun, viewRun } from "./runs";
+import { createBill, payBill } from "./bills";
+import { agedPayables } from "./books";
+import { xeroBillRows } from "../accounting/xeroBills";
 import { resetRails } from "../rails";
 
 /** Practitioner round seven (PR7-n): fixes to what round six left. */
@@ -79,5 +82,28 @@ describe("PR7-1: the run confirmation says what will be paid, and a waiting item
     const over = (await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh")));
     expect(over.items[0]).toMatchObject({ canApprove: false, leftWhy: "limit" });
     expect(over.payNow).toMatchObject({ count: 0, left: 1 });
+  });
+});
+
+describe("PR7-2: a bill nobody approved is not in the ageing or its total", () => {
+  it("lists a clerk-recorded bill apart, with vendor and reference, until a payment on it is approved", async () => {
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_kalaw", { kind: "invoice", reference: "INV-KAL-1030", totalMinor: 50_000, currency: "USD" });
+    const before = agedPayables(db, DEMO_BUSINESS_ID);
+    expect(before.rows.some((r) => r.reference === "INV-KAL-1030")).toBe(false);
+    expect(before.recordedNotApproved.find((r) => r.reference === "INV-KAL-1030")).toMatchObject({ vendorName: "Kalaw Trekking Collective", amountMinor: 50_000, detail: "recorded, not approved" });
+    expect(before.recordedNotApproved.some((r) => /^(bil|obl)_/.test(r.reference))).toBe(false);
+    // The total is the ageing of the rows only: the recorded bill adds nothing to it.
+    const total = (a: typeof before) => Object.values(a.totals).reduce((x, y) => x + y, 0);
+    expect(total(before)).toBe(before.rows.reduce((x, r) => x + r.baseMinor, 0));
+    // It is not in Xero either, so the two agree.
+    expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows.some((r) => r["*InvoiceNumber"] === "INV-KAL-1030")).toBe(false);
+    // A payment is requested and approved: now Xero has it, and so does the ageing.
+    const pay = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 50_000);
+    expect(agedPayables(db, DEMO_BUSINESS_ID).rows.some((r) => r.reference === "INV-KAL-1030")).toBe(false);
+    approveObligation(db, pay, "user:minh");
+    const after = agedPayables(db, DEMO_BUSINESS_ID);
+    expect(after.rows.find((r) => r.reference === "INV-KAL-1030")).toMatchObject({ kind: "bill", amountMinor: 50_000 });
+    expect(after.recordedNotApproved.some((r) => r.reference === "INV-KAL-1030")).toBe(false);
+    expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows.some((r) => r["*InvoiceNumber"] === "INV-KAL-1030")).toBe(true);
   });
 });
