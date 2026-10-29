@@ -16,6 +16,7 @@ Working note, updated as work lands. Status as of 29 Oct 2026.
 - `npm audit` decision recorded in `2026-10-29-response.md`: 0 production vulnerabilities, 4 moderate dev-only, accepted.
 - Final checks: 56 files, 438 tests passed and 1 skipped; typecheck, lint and build clean; replay unchanged; contract 16 tests pass.
 - Pull request opened into `mac-import-2026-10-29`.
+- Round 6 (same security reviewer): satisfied with no Must-fix outstanding; ratings 8, 8 and 6. Its four conditions (SEC6-2, SEC2-7, SEC2-8, SEC6-1) are fixed. The business and design reviews are running; their findings go in the next response.
 
 ## Left to do
 
