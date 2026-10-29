@@ -258,7 +258,9 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else if (h.matches.length) {
       for (const m of h.matches.slice(0, 3)) rules.push(block("paypal_history", `PayPal transaction ${m.transactionId} on ${m.date} already paid ${fmt(m.amountMinor, m.currency)} for ${m.matched} to ${m.email}`));
     } else if (h.ok) rules.push(pass("paypal_history", "PayPal's own records show no payment for this job in the last 31 days"));
-    else rules.push(pass("paypal_history", `PayPal's records could not be read (${h.error ?? "no answer"}); this app's own payment history was checked`));
+    // A read that failed, or that was cut short, is not a clean bill: only this app's own history was checked, so a person
+    // confirms the vendor was not already paid from PayPal directly.
+    else rules.push(warn("paypal_history", `PayPal's records could not be read (${h.error ?? "no answer"}); only this app's own payment history was checked, so confirm the vendor was not already paid from PayPal`));
   }
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
   else if (mixesScripts(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} mixes letters from different scripts, so it could not be compared with earlier references; check it is not a re-issue of a job already paid`));
