@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { obligations, paymentAttempts, paymentRunItems, paymentRuns, users } from "../db/schema";
+import { evidence, obligations, paymentAttempts, paymentRunItems, paymentRuns, users } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
@@ -50,6 +50,19 @@ describe("payment runs", () => {
     await expect(releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId)).rejects.toThrow(/Not enough money/);
     expect(state(story.paypal)).toBe("approved");
     expect(db.select().from(paymentRuns).where(eq(paymentRuns.id, runId)).get()!.status).toBe("draft");
+  });
+
+  it("leaves an item that carries a warning for its own page instead of approving it in bulk (SEC2-8)", async () => {
+    db.insert(evidence).values({ id: "evd_vendorclaim", obligationId: story.stellar, kind: "receipt", label: "Invoice from the vendor", provenance: "vendor", createdAt: new Date().toISOString() }).run();
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { name: "Friday", obligationIds: [story.paypal, story.stellar] });
+    // The releaser sees the warning before pressing Release.
+    const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
+    expect(view.items.find((i) => i.obligationId === story.stellar)!.warnings.join(" ")).toMatch(/vendor uploaded a document/);
+    expect(view.items.find((i) => i.obligationId === story.paypal)!.warnings).toEqual([]);
+    const r = await releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId);
+    expect(r).toMatchObject({ paid: 1, skipped: 1 });
+    expect(state(story.stellar)).toBe("awaiting_approval");
+    expect(items(runId).map((i) => i.message ?? "").some((m) => /warning a person must read first.*vendor uploaded a document/.test(m))).toBe(true);
   });
 
   it("skips an item whose amount changed after it was added, and one the releaser may not approve", async () => {

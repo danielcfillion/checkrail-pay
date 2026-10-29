@@ -105,8 +105,9 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                       </Link>
                     </td>
                     <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{i.sourceRef ?? "none"}</td>
-                    <td className={draft ? (i.changed || i.approvalNote ? "text-attention" : "text-ink-soft") : ITEM_TONE[i.status]}>
+                    <td className={draft ? (i.changed || i.approvalNote || i.warnings.length ? "text-attention" : "text-ink-soft") : ITEM_TONE[i.status]}>
                       {draft ? (i.changed ? "amount changed since added; will be skipped" : i.approvalNote ? i.approvalNote : stateLabel(i.state ?? "")) : ITEM_LABEL[i.status] ?? i.status}
+                      {draft && !i.changed && !i.approvalNote && i.warnings.length ? <span className="block text-xs text-attention">Has {i.warnings.length === 1 ? "a warning" : `${i.warnings.length} warnings`}; release leaves it for its own page: {i.warnings.join("; ")}</span> : null}
                       {!draft && i.message ? <span className="block text-xs text-ink-soft">{i.message}</span> : null}
                     </td>
                     <td className="hidden sm:table-cell">{i.rail ? <RailTag rail={i.rail} /> : <span className="text-ink-soft">none</span>}</td>

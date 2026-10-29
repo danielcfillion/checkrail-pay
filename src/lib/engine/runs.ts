@@ -9,7 +9,7 @@ import { getRails } from "../rails";
 import { localDateString } from "../format";
 import { actorCan, otherPeopleWith, requirePermission, whoIs, type Actor } from "./users";
 import { currentLogin, humanOf } from "./requestContext";
-import { approvalGate, approveObligation, executeObligation } from "./orchestrator";
+import { approvalGate, approveObligation, executeObligation, runPolicy } from "./orchestrator";
 
 /**
  * Payment runs: the clerk gathers what is due into one list, the approver reviews the total and the funding, and
@@ -86,11 +86,16 @@ export function cancelRun(db: Db, businessId: string, by: Actor, runId: string):
 
 export interface RunView {
   run: typeof paymentRuns.$inferSelect;
-  items: Array<typeof paymentRunItems.$inferSelect & { state: string | null; vendorName: string | null; sourceRef: string | null; dueDate: string | null; changed: boolean; approvalNote: string | null }>;
+  items: Array<typeof paymentRunItems.$inferSelect & { state: string | null; vendorName: string | null; sourceRef: string | null; dueDate: string | null; changed: boolean; approvalNote: string | null; /** Warnings a person must read before approving; a release leaves such an item for its own page. */ warnings: string[] }>;
   /** totalMinor is what the payees are sent; feeMinor is charged on top (Stellar's fee comes out of the amount). */
   totals: Array<{ currency: string; rail: string; totalMinor: number; feeMinor: number; count: number; balance: { availableMinor: number; source: string } | null; short: boolean }>;
   /** Why this viewer cannot release the run, when they cannot. */
   releaseRefusal: string | null;
+}
+
+/** What policy would ask a person to read before approving this one: the warnings on a fresh evaluation. */
+function approvalWarnings(db: Db, obligationId: string): string[] {
+  return runPolicy(db, obligationId).rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => r.message);
 }
 
 /** The run as the releaser sees it: each item's current state, totals per rail and currency, and what is in the account. */
@@ -103,7 +108,8 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     const o = byId.get(r.obligationId);
     const changed = !!o && (o.amountMinor !== r.amountMinor || o.currency !== r.currency);
     const approvalNote = viewer && actorCan(viewer, "release_run") && o?.state === "awaiting_approval" ? approvalGate(db, r.obligationId, viewer.id).refusal : null;
-    return { ...r, state: o?.state ?? null, vendorName: o?.vendorName ?? null, sourceRef: o?.sourceRef ?? null, dueDate: o?.dueDate ?? null, changed, approvalNote };
+    const warnings = o?.state === "awaiting_approval" ? approvalWarnings(db, r.obligationId) : [];
+    return { ...r, state: o?.state ?? null, vendorName: o?.vendorName ?? null, sourceRef: o?.sourceRef ?? null, dueDate: o?.dueDate ?? null, changed, approvalNote, warnings };
   });
   const groups = new Map<string, { currency: string; rail: string; totalMinor: number; feeMinor: number; count: number }>();
   const quotes = rows.length ? db.select({ obligationId: routeQuotes.obligationId, rail: routeQuotes.rail, feeMinor: routeQuotes.feeMinor, sendCurrency: routeQuotes.sendCurrency }).from(routeQuotes).where(inArray(routeQuotes.obligationId, rows.map((r) => r.obligationId))).all() : [];
@@ -182,6 +188,14 @@ export async function releaseRun(db: Db, businessId: string, by: Actor, runId: s
         const gate = approvalGate(db, ob.id, by.id);
         if (gate.refusal) {
           finish(it.id, "skipped", gate.refusal);
+          continue;
+        }
+        // Approving in bulk must not sign off a warning nobody read ("the vendor uploaded this through their link",
+        // "same payout account as another vendor"). An item that carries one is left for its own page, where the
+        // approver sees the reasons and approves it knowingly.
+        const warnings = approvalWarnings(db, ob.id);
+        if (warnings.length) {
+          finish(it.id, "skipped", `Has ${warnings.length === 1 ? "a warning" : `${warnings.length} warnings`} a person must read first: ${warnings.join("; ").slice(0, 240)}. Open it and approve it there`);
           continue;
         }
         approveObligation(db, ob.id, by.id, `Approved in payment run ${run.name}`);
