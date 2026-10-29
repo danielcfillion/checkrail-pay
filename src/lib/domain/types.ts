@@ -209,6 +209,8 @@ export interface PolicyInput {
   taxFormWarning?: string | null;
   /** What the business's own rate card and departure records say this job should cost (see engine/rates.ts). */
   expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string; endDate?: string } | null;
+  /** The vendor's rate cards, for checking a unit price the invoice states ("4 days at USD 220") against the contract whether or not the departure is on file (see engine/rates.ts). */
+  vendorRates?: Array<{ unit: string; rateMinor: number; currency: string; validFrom: string; validTo: string | null }>;
   /** The bill this payment settles all or part of, with what other payments and credits already cover. */
   bill?: { id: string; vendorId: string; reference: string; kind: string; status: string; totalMinor: number; currency: string; coveredMinor: number } | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */

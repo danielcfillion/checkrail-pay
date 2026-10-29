@@ -270,3 +270,48 @@ describe("autopilot holds what a person should see first", () => {
     expect(evaluatePolicy({ ...DEFAULT_POLICY, autonomy: "assist" }, base({ vendorSettledMinors: [] })).decision).toBe("auto_execute");
   });
 });
+
+describe("a unit price the invoice states against the contract rate (PR6-2)", () => {
+  const phuong: VendorPayoutProfile = { ...vendor, id: "v2", name: "Phuong Transport", country: "VN" };
+  const card = [{ unit: "vehicle_day", rateMinor: 20_000, currency: "USD", validFrom: "2026-01-01", validTo: null }];
+  const invoice = (excerpt: string, over: Partial<PolicyInput> = {}) =>
+    base({
+      vendor: phuong,
+      obligation: { id: "o1", amountMinor: 88_000, currency: "USD", sourceRef: "INV-2026-0152", vendorId: "v2" },
+      evidence: [{ id: "e1", kind: "invoice", label: "Invoice INV-2026-0152 from Phuong Transport", amountMinor: 88_000, currency: "USD", reference: "INV-2026-0152", excerpt, provenance: "system" }],
+      requestText: "Phuong Transport invoice INV-2026-0152 for USD 880",
+      vendorRates: card,
+      today: "2026-10-29",
+      ...over,
+    });
+  const rule = (out: ReturnType<typeof evaluatePolicy>) => out.rules.find((r) => r.ruleId === "stated_unit_rate");
+
+  it("warns when the invoice's unit price is above the rate card, with no departure on file", () => {
+    const out = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880"));
+    expect(rule(out)).toMatchObject({ passed: false, severity: "warn" });
+    expect(rule(out)!.message).toBe("The invoice charges USD 220.00 per day; the contract rate is USD 200.00 per vehicle-day (USD 80.00 more over 4 vehicle-days). Check it against the contract before approving");
+    expect(out.decision).toBe("require_approval");
+    expect(out.reasons.join(" ")).toMatch(/contract rate is USD 200.00/);
+  });
+
+  it("is only a warning: it never blocks, and leaves every other rule's result as it was", () => {
+    const without = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880", { vendorRates: undefined }));
+    const withRule = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880"));
+    expect(withRule.rules.filter((r) => r.ruleId !== "stated_unit_rate")).toEqual(without.rules);
+    expect(withRule.rules.filter((r) => r.ruleId === "stated_unit_rate")).toHaveLength(1);
+    expect(withRule.decision).not.toBe("block");
+  });
+
+  it("says nothing at the contract rate, for ordinary text, with no rate card, or for an advance", () => {
+    expect(rule(evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 vehicle-days x USD 200 = USD 800")))).toBeUndefined();
+    expect(rule(evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. Van hire for the Ha Giang loop, total USD 880")))).toBeUndefined();
+    expect(rule(evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220", { vendorRates: [] })))).toBeUndefined();
+    expect(rule(evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220", { paymentKind: "advance" })))).toBeUndefined();
+  });
+
+  it("does not repeat what the departure's rate card already blocked", () => {
+    const out = evaluatePolicy(DEFAULT_POLICY, invoice("Phuong Transport. 4 days at USD 220 = USD 880", { expectation: { departureCode: "HG-4D-1004", expectedMinor: 80_000, currency: "USD", basis: "4 vehicle-days x USD 200.00" } }));
+    expect(out.decision).toBe("block");
+    expect(rule(out)).toBeUndefined();
+  });
+});

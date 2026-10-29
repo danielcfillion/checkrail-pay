@@ -9,6 +9,8 @@ import type { Role } from "../auth/roles";
 import { billRecordOf, createBill, payBill } from "./bills";
 import { getDailyClose, signOffDailyClose } from "./dailyClose";
 import { agedPayables, markReturnedByHand } from "./books";
+import { importDeparturesAndRecheck } from "./manifest";
+import { importDepartures } from "./rates";
 import { listSettlements, listVendors, paidSummary } from "../queries";
 import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remittance } from "./vendorLinks";
 import { BankFileRail } from "../rails/bankFile";
@@ -233,5 +235,38 @@ describe("PR6-6: paid to date on the vendor page does not count money that came 
     expect(after.feesMinor).toBe(before.feesMinor - fee);
     expect(after.refundedMinor).toBe(18_000);
     expect(listVendors(db).find((v) => v.id === "ven_maria")!.paidMinor).toBe(after.paidMinor);
+  });
+});
+
+describe("PR6-2: the invoice's own unit rate against the contract rate", () => {
+  const phuongInvoice = (ref: string, text: string, amountMinor: number) =>
+    ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", rawInput: `Invoice ${ref} from Phuong Transport for HG-4D-1004: ${text}.`, evidence: [{ kind: "invoice", label: `Invoice ${ref} from Phuong Transport`, amountMinor, currency: "USD", reference: ref, excerpt: `Phuong Transport, HG-4D-1004. ${text}` }], actor: "user:lan", evidenceSource: "operator" });
+  const MANIFEST = "code,start,end,guests,vendor,unit,quantity\nHG-4D-1004,2026-10-04,2026-10-07,12,Linh Family Homestay,guest_night,24\nHG-4D-1004,2026-10-04,2026-10-07,12,Phuong Transport,vehicle_day,4";
+
+  it("warns on a unit price above the contract before the departure has a Phuong line, and the reason is on the request", async () => {
+    const id = await phuongInvoice("INV-PH-1004", "4 days at USD 220 = USD 880", 88_000);
+    expect(ob(id).state).toBe("awaiting_approval");
+    expect(JSON.parse(ob(id).policyReasonsJson ?? "[]").join(" ")).toMatch(/The invoice charges USD 220.00 per day; the contract rate is USD 200.00 per vehicle-day/);
+    const ok = await phuongInvoice("INV-PH-1005", "4 vehicle-days x USD 200 = USD 800", 80_000);
+    expect(JSON.parse(ob(ok).policyReasonsJson ?? "[]").join(" ")).not.toMatch(/contract rate/);
+  });
+
+  it("a manifest import checks the vendors' waiting requests again and blocks the one that breaks the rate card", async () => {
+    const id = await phuongInvoice("INV-PH-1004", "4 days at USD 220 = USD 880", 88_000);
+    const clean = await phuongInvoice("INV-PH-1006", "4 vehicle-days x USD 200 = USD 800", 80_000);
+    expect(ob(id).state).toBe("awaiting_approval");
+    await expect(importDeparturesAndRecheck(db, DEMO_BUSINESS_ID, as("lan"), MANIFEST)).rejects.toThrow(/cannot import departures/);
+    const r = await importDeparturesAndRecheck(db, DEMO_BUSINESS_ID, as("minh"), MANIFEST);
+    expect(r).toMatchObject({ departures: 1, services: 2, nowBlocked: 1 });
+    expect(r.vendorIds.sort()).toEqual(["ven_linh", "ven_phuong"]);
+    expect(ob(id).state).toBe("blocked");
+    expect(ob(id).blockedReason).toMatch(/Rate card and departure HG-4D-1004 say USD 800.00/);
+    expect(ob(clean).state).not.toBe("blocked");
+  });
+
+  it("importing the manifest alone leaves a waiting request as it was", async () => {
+    const id = await phuongInvoice("INV-PH-1004", "4 days at USD 220 = USD 880", 88_000);
+    importDepartures(db, DEMO_BUSINESS_ID, as("minh"), MANIFEST);
+    expect(ob(id).state).toBe("awaiting_approval");
   });
 });
