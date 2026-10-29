@@ -83,7 +83,7 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 
 - Autonomy removes the approval step and nothing else. A mismatched amount, an already-paid job, changed payout details, missing evidence, a disabled corridor, the two-person rule above USD 5,000 and the per-vendor daily cap stop a payment at every level (`src/lib/engine/autopilot.test.ts`).
 - Autopilot limits: USD 500 per payment, USD 2,000 per rolling 24 hours across the business, a 10-minute cancel window and a pause that applies at once (defaults; the owner changes them).
-- Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents.
+- Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents. What counts as support that is not the vendor's (a job sheet, booking or purchase order from a connected system, or the rate card and departures) can be set or changed only by an approver or the owner, never by the clerk who prepares the payment.
 - Policy runs again at release. If anything changed in the cancel window, no rail is called and the refusal shows in the Daily close.
 - The Daily close (`/close`) lists what needs a look first, then what autopilot sent, what people sent and spend against the cap. Sign off writes an audit entry of exactly what was on the page.
 

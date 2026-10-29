@@ -54,9 +54,13 @@ export function ratesFor(db: Db, vendorId: string) {
  *   code,start,end,guests,vendor,unit,quantity
  *   HG-4D-1004,2026-10-04,2026-10-07,12,Phuong Transport,vehicle_day,4
  * Vendors are matched by exact name. A departure already on file is updated (dates, guests, its services replaced).
+ * Only an approver or the owner imports: the manifest decides what a job may cost without a person looking.
  */
 export function importDepartures(db: Db, businessId: string, by: Actor, csv: string): { departures: number; services: number; errors: string[] } {
-  requirePermission(by, "ingest", "import departures");
+  // A departure and its services set the expected amount that Autopilot and Assist accept without a person, exactly as
+  // a rate does, so the same people may change them. A clerk who could import one could write the "independent
+  // support" for their own payment request, or raise the quantities on a real departure to lift its ceiling.
+  requirePermission(by, "verify_vendor", "import departures");
   if (csv.length > 500_000) throw new Error("File too large (500 KB at most)");
   const lines = csv.replace(/^﻿/, "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!lines.length) throw new Error("The file is empty");

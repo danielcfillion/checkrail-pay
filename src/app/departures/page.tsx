@@ -27,13 +27,13 @@ export default async function DeparturesPage() {
       <PageHeader
         title="Departures"
         lede="Each departure from the booking system, with who serves it and how much. With each vendor's rate card, this is what a job should cost: an invoice above it is stopped, and one that matches can be paid by Autopilot."
-        actions={!viewer || viewer.can("ingest") ? <ImportDepartures /> : undefined}
+        actions={!viewer || viewer.can("verify_vendor") ? <ImportDepartures /> : undefined}
       />
       <Panel title="Manifest format" className="mb-6">
         <pre className="num overflow-auto rounded bg-paper p-3 text-xs leading-5" style={{ fontFamily: "inherit" }}>
           {"code,start,end,guests,vendor,unit,quantity\nHG-4D-1004,2026-10-04,2026-10-07,12,Phuong Transport,vehicle_day,4\nHG-4D-1004,2026-10-04,2026-10-07,12,Linh Family Homestay,guest_night,24"}
         </pre>
-        <p className="mt-2 text-xs text-ink-soft">One row per service. Units: {Object.values(UNIT_LABEL).join(", ")}. Importing a departure again replaces its services. Most booking systems (Bokun, Rezdy, a Google Sheet) export this shape.</p>
+        <p className="mt-2 text-xs text-ink-soft">One row per service. Units: {Object.values(UNIT_LABEL).join(", ")}. Importing a departure again replaces its services. Most booking systems (Bokun, Rezdy, a Google Sheet) export this shape. An approver or the owner imports it, because it sets what a job may cost without a person looking.</p>
       </Panel>
       {deps.length ? (
         <div className="panel overflow-x-auto">
