@@ -115,3 +115,19 @@ export function autopilotSentence(statement: CheckStatement): string {
   if (statement.kind === "clear") return `Every check passed and this is within your caps, so the agent will send it when the cancel window ends. ${policy}`;
   return `${statement.text} It is within your caps, so the agent will send it when the cancel window ends unless you cancel it. ${policy}`;
 }
+
+/**
+ * What a payment run's line says about the reader, from the same statement the request page makes: null when the reader has
+ * nothing open. The note is the request page's own sentence (it keeps "the rules did not see this run" for a recorded run);
+ * the chips are the reader's concern count, and the confidence when it is low. Display only: a release does not read this.
+ */
+export function runLineStatement(i: { rules: Rule[]; reader?: ReaderView | null }): { note: string; chips: string[] } | null {
+  const reader = i.reader ?? null;
+  const min = thresholdFrom(i.rules);
+  const low = reader !== null && reader.confidence !== null && reader.confidence < min;
+  if (reader === null || (reader.concerns.length + reader.missing.length === 0 && !low)) return null;
+  const readerOnly = checkStatement({ rules: [], reader, minConfidence: min });
+  const chips = [readerOnly.chip ?? ""];
+  if (low && readerOnly.kind === "reader") chips.push(`Low confidence ${reader.confidence}%`);
+  return { note: checkStatement({ rules: i.rules, reader, minConfidence: min }).text, chips: chips.filter(Boolean) };
+}

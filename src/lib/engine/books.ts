@@ -106,6 +106,10 @@ function parseCsv(text: string): string[][] {
   return out;
 }
 
+function dayBefore(d: string): string {
+  return new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+}
+
 export interface ReconResult {
   matched: Array<{ settlementId: string; obligationId: string; vendorName: string; amountMinor: number; currency: string; statementRef: string; date: string }>;
   /** Money that left PayPal with no payment in the app: the line to look at first. */
@@ -203,8 +207,12 @@ export function reconcilePayPal(db: Db, businessId: string, by: Actor, lines: St
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: !l.referenceTxnId ? "the line names no original transaction" : inThisFile ? "the payout it reverses is only in this same file; confirm in PayPal, then record it on the payment page" : !r ? "it reverses a transaction not matched to a payment here" : "the amount, currency or sender does not match that payment" });
       continue;
     }
-    const payoutDate = passPayoutDate.get(l.referenceTxnId ?? "");
-    if (payoutDate && /^\d{4}-\d{2}-\d{2}$/.test(payoutDate) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < payoutDate) {
+    // A reversal cannot come before the payout it reverses. For a payout matched in this pass the earliest date is the
+    // statement's own date for it. For every other anchor (a payout tied by an earlier upload, or this same file again)
+    // it is the payment's own settlement date less one day: the app shows Vietnam time and a PayPal statement is in the
+    // account's time zone, so the same moment can fall on different dates.
+    const earliest = passPayoutDate.get(l.referenceTxnId ?? "") ?? dayBefore(localDateString(new Date(r.s.settledAt)));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(earliest) && /^\d{4}-\d{2}-\d{2}$/.test(l.date) && l.date < earliest) {
       result.returnedUnmatched!.push({ date: l.date, name: l.name, amountMinor: l.grossMinor, currency: l.currency, transactionId: l.transactionId, referenceTxnId: l.referenceTxnId ?? "", type: l.type, why: "it is dated before the payout it reverses" });
       continue;
     }
@@ -304,22 +312,27 @@ const OWED_STATES = ["approved", "execution_pending", "sent", "failed", "refunde
  * What the business owes and how late it is, as the bookkeeper's payables will show it. Recorded invoices count for
  * what is left after settled payments and credits: a payment that is only approved or on its way does not reduce what
  * is owed, because the bank has not confirmed it. Payments not tied to a bill count once they are approved, and stay in
- * until they settle (a payment in a bank file that is not yet confirmed is still owed). A request waiting for evidence
+ * until they settle (a payment in a bank file that is not yet confirmed is still owed). A recorded invoice nobody has
+ * approved a payment for is listed apart ("recorded, not approved"), outside the ageing and its total, because the Xero
+ * bills file does not have it either. A request waiting for evidence
  * or for approval is not a bill yet, and a blocked one is not owed as asked, so neither is listed. Overdue counts from
  * the due date, or the date raised when there is none.
  */
-export function agedPayables(db: Db, businessId: string, today = localDateString()): { rows: PayableRow[]; totals: Record<string, number>; baseCurrency: string } {
+export function agedPayables(db: Db, businessId: string, today = localDateString()): { rows: PayableRow[]; totals: Record<string, number>; baseCurrency: string; /** Invoices a person recorded that nobody has approved a payment for: not in the Xero bills file, so outside the ageing and its total. */ recordedNotApproved: PayableRow[] } {
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get()!;
   const base = biz.baseCurrency;
   const t0 = Date.parse(`${today}T00:00:00Z`);
   const days = (d: string) => Math.floor((t0 - Date.parse(`${d}T00:00:00Z`)) / 86_400_000);
   const rows: PayableRow[] = [];
+  const recordedNotApproved: PayableRow[] = [];
   for (const b of openBills(db, businessId)) {
     const owed = b.totalMinor - b.balance.paidMinor - b.balance.creditedMinor;
     if (b.kind !== "invoice" || owed <= 0) continue;
     const due = b.dueDate ?? b.billDate ?? localDateString(new Date(b.createdAt));
-    const detail = b.balance.pendingMinor > 0 ? `bill, ${fmt(b.balance.pendingMinor, b.currency)} on its way` : b.balance.paidMinor + b.balance.creditedMinor > 0 ? "bill, part paid" : "bill, unpaid";
-    rows.push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: owed, currency: b.currency, baseMinor: toBaseOrZero(owed, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open", detail });
+    // Xero gets a bill when a payment on it is approved (or it was sent before), so that is when it is owed in the books.
+    const approved = !!b.xeroExportedAt || db.select({ state: obligations.state }).from(obligations).where(eq(obligations.billId, b.id)).all().some((p) => [...OWED_STATES, "settled"].includes(p.state));
+    const detail = !approved ? "recorded, not approved" : b.balance.pendingMinor > 0 ? `bill, ${fmt(b.balance.pendingMinor, b.currency)} on its way` : b.balance.paidMinor + b.balance.creditedMinor > 0 ? "bill, part paid" : "bill, unpaid";
+    (approved ? rows : recordedNotApproved).push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: owed, currency: b.currency, baseMinor: toBaseOrZero(owed, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open", detail });
   }
   const obs = db
     .select({ o: obligations, vendorName: vendors.name })
@@ -340,7 +353,8 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
   }
   rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
   const totals = Object.fromEntries(AGE_BUCKETS.map((k) => [k, rows.filter((r) => r.bucket === k).reduce((a, r) => a + r.baseMinor, 0)]));
-  return { rows, totals, baseCurrency: base };
+  recordedNotApproved.sort((a, b) => b.daysOverdue - a.daysOverdue);
+  return { rows, totals, baseCurrency: base, recordedNotApproved };
 }
 
 /* ---------- Period lock ---------- */

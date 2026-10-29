@@ -76,6 +76,25 @@ export default async function BooksPage() {
           ) : (
             <p className="px-4 py-3 text-ink-soft">Nothing owed.</p>
           )}
+          {aged.recordedNotApproved.length ? (
+            <div className="border-t px-4 py-3 hairline">
+              <h3 className="font-medium">Recorded, not approved</h3>
+              <p className="mt-0.5 text-xs text-ink-soft">Invoices someone recorded that no payment has been approved for. They are not in the Xero bills file yet, so they are left out of the ageing and the total above.</p>
+              <ul className="mt-2 divide-y hairline">
+                {aged.recordedNotApproved.map((r) => (
+                  <li key={r.id} className="flex items-baseline justify-between gap-3 py-1.5">
+                    <span>
+                      <Link href={`/vendors/${r.vendorId}`} className="font-medium hover:underline">
+                        {r.vendorName}
+                      </Link>{" "}
+                      <span className="num text-ink-soft">{r.reference}</span>
+                    </span>
+                    <span className="num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </Panel>
 
         <Panel title="PayPal statement" aside={last ? `last ${formatDateTime(last.createdAt)}` : "not reconciled yet"}>

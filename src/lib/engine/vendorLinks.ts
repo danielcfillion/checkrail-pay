@@ -6,6 +6,8 @@ import { billBalance } from "./bills";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { fmt } from "../domain/policy";
+import { senderOutlayMinor } from "../domain/routing";
+import type { Rail } from "../domain/types";
 import { formatDate, railLabel } from "../format";
 import { requirePermission, type Actor } from "./users";
 import { uploadDocument } from "./attachments";
@@ -61,6 +63,8 @@ export interface Remittance {
   language: "en" | "vi";
   /** Tax kept back and paid to the tax office instead, when any. */
   withheld: string | null;
+  /** The rail's fee, when it comes out of the amount the vendor is sent (Stellar) instead of being paid on top: "USD 13.25". */
+  feeDeducted?: string | null;
   /** Paid to the agreed rate, less than invoiced: what was invoiced, so the vendor sees the difference is deliberate. */
   shortPaid: { invoiced: string; basis: string } | null;
   /** For an invoice paid in parts: its total, every part and credit so far, and what is left. */
@@ -87,6 +91,7 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     status: ob.state === "settled" ? "paid" : "on its way",
     language: v.country === "VN" ? "vi" : "en",
     withheld: ob.withheldMinor ? fmt(ob.withheldMinor, ob.currency ?? "USD") : null,
+    feeDeducted: st && st.feeMinor > 0 && senderOutlayMinor({ rail: st.rail as Rail, sendAmountMinor: st.grossMinor, feeMinor: st.feeMinor }) === st.grossMinor ? fmt(st.feeMinor, st.grossCurrency) : null,
     shortPaid: shortPaidOf(db, ob),
     history: ob.billId ? billHistory(db, ob.billId, ob.id) : null,
   };
@@ -170,9 +175,13 @@ export function remittanceMessageFor(rs: Remittance[], urls: string[]): string {
   const shorts = rs.filter((x) => x.shortPaid);
   const left = rs.length === 1 && r.history ? r.history.left : null;
   const taxed = rs.length === 1 && r.withheld ? r : null;
+  // A fee taken out of the amount means the vendor receives less than invoiced: say so, per payment, whatever the rail.
+  const fees = rs.filter((x) => x.feeDeducted);
+  const feeVi = fees.map((x) => ` ${rs.length > 1 ? `Với ${x.reference}: ` : ""}phí ${x.feeDeducted} đã được trừ vào số tiền${x.received ? `; bạn nhận ${x.received}` : ""}.`).join("");
+  const feeEn = fees.map((x) => ` ${rs.length > 1 ? `For ${x.reference}, a` : "A"} ${x.feeDeducted} fee was deducted from the amount${x.received ? `; you receive ${x.received}` : ""}.`).join("");
   if (vi)
-    return `Chào ${r.vendorName}, ${sentences.join(" ")}${taxed ? ` Thuế khấu trừ ${taxed.withheld} đã nộp cho cơ quan thuế; bạn nhận ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
-  return `Hi ${r.vendorName}, ${sentences.join(" ")}${taxed ? ` ${taxed.withheld} was withheld for tax and paid to the tax office; you receive ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
+    return `Chào ${r.vendorName}, ${sentences.join(" ")}${feeVi}${taxed ? ` Thuế khấu trừ ${taxed.withheld} đã nộp cho cơ quan thuế; bạn nhận ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
+  return `Hi ${r.vendorName}, ${sentences.join(" ")}${feeEn}${taxed ? ` ${taxed.withheld} was withheld for tax and paid to the tax office; you receive ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
 }
 
 export interface EvidenceRequestView {
