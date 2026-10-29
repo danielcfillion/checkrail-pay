@@ -70,7 +70,24 @@ export function foldConfusables(s: string): string {
     .replace(CONFUSABLE_RE, (c) => CONFUSABLE[c]);
 }
 
-/** True when a reference carries letters from another script or invisible marks that make it look like something else. */
+/** Letters and digits that are plain Latin: ASCII, Latin-1 to Extended-B and Latin Extended Additional (Vietnamese and the like). */
+const PLAIN_LATIN = /[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF]/g;
+
+/**
+ * True when a reference carries letters from another script or invisible marks that make it look like something else.
+ * The fold list above only covers Cyrillic and Greek, so there is a second, list-free test: a token (a run of letters
+ * and digits) that mixes plain ASCII with any letter or digit outside plain Latin (Armenian, Cherokee, Coptic, Latin
+ * small capitals, Devanagari digits and the rest) is flagged. A whole word in another script, or Vietnamese with
+ * its diacritics, is not.
+ */
 export function hasConfusables(s: string | null | undefined): boolean {
-  return !!s && foldConfusables(s) !== s.normalize("NFKC");
+  if (!s) return false;
+  const n = s.normalize("NFKC");
+  if (foldConfusables(s) !== n) return true;
+  return n.split(/[^\p{L}\p{N}]+/u).some((tok) => /[A-Za-z0-9]/.test(tok) && /[\p{L}\p{N}]/u.test(tok.replace(PLAIN_LATIN, "")));
+}
+
+/** True when the flag comes only from mixed scripts that the fold list could not map back to Latin. */
+export function mixesScripts(s: string | null | undefined): boolean {
+  return !!s && hasConfusables(s) && foldConfusables(s) === s.normalize("NFKC");
 }

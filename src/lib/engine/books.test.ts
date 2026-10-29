@@ -123,7 +123,7 @@ describe("returned payouts", () => {
   });
 
   it("a clerk's upload shows matches but saves nothing, so it cannot plant an anchor or block the real line (SEC3-1, SEC3-2)", async () => {
-    const { db2, s2, head, payout, reversal } = await paid();
+    const { db2, s2, head, payout } = await paid();
     const lan = resolveActor(db2, DEMO_BUSINESS_ID, "lan", "clerk");
     const thu = resolveActor(db2, DEMO_BUSINESS_ID, "thu", "accountant");
     const planted = payout.replace('"9AB1"', '"PLANTED0001"');

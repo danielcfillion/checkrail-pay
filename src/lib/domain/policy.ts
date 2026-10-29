@@ -1,6 +1,6 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { localDateString } from "../format";
-import { foldConfusables, hasConfusables } from "./ids";
+import { foldConfusables, hasConfusables, mixesScripts } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -257,6 +257,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     else rules.push(pass("paypal_history", `PayPal's records could not be read (${h.error ?? "no answer"}); this app's own payment history was checked`));
   }
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
+  else if (mixesScripts(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} mixes letters from different scripts, so it could not be compared with earlier references; check it is not a re-issue of a job already paid`));
   else if (hasConfusables(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} contains look-alike letters from another script or hidden characters; it was compared as ${foldConfusables(obligation.sourceRef)}`));
 
   // R6: recipient details changed since verification
