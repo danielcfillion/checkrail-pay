@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/books";
-import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString, stateLabel } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
 import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileFromPayPal, ReconcileUpload } from "@/components/BooksControls";
@@ -63,7 +63,7 @@ export default async function BooksPage() {
                       <td className="num whitespace-nowrap text-ink-soft">{r.reference}</td>
                       <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
                       <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
-                      <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : stateLabel(r.state).toLowerCase()}</td>
+                      <td className="hidden text-ink-soft md:table-cell">{r.detail}</td>
                       <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
                     </tr>
                   ))}

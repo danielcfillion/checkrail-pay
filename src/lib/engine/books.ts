@@ -4,6 +4,7 @@ import { auditEntries, businesses, obligations, reconciliations, settlements, ve
 import { audit, transition } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { localDateString } from "../format";
+import { fmt } from "../domain/policy";
 import { toBaseOrZero } from "../fx";
 import { actorCan, requirePermission, type Actor } from "./users";
 import { openBills, reopenBill } from "./bills";
@@ -273,16 +274,24 @@ export interface PayableRow {
   daysOverdue: number;
   bucket: (typeof AGE_BUCKETS)[number];
   state: string;
+  /** Where it stands, in words for the Status column: "bill, USD 425.00 on its way", "in the bank file, not confirmed". */
+  detail: string;
 }
 
 function bucketOf(days: number): (typeof AGE_BUCKETS)[number] {
   return days <= 0 ? AGE_BUCKETS[0] : days <= 30 ? AGE_BUCKETS[1] : days <= 60 ? AGE_BUCKETS[2] : days <= 90 ? AGE_BUCKETS[3] : AGE_BUCKETS[4];
 }
 
+/** A payment in these states is in the books as a bill (Xero gets it at approval) and is still owed: nothing has arrived yet. */
+const OWED_STATES = ["approved", "execution_pending", "sent", "failed", "refunded"];
+
 /**
- * What the business owes and how late it is: open bills at their open amount, and payments not tied to a bill that
- * are agreed or waiting but not yet paid. Blocked requests are left out until fixed: a duplicate is not owed, and a
- * mismatched amount is not owed as asked. Overdue counts from the due date, or the date raised when there is none.
+ * What the business owes and how late it is, as the bookkeeper's payables will show it. Recorded invoices count for
+ * what is left after settled payments and credits: a payment that is only approved or on its way does not reduce what
+ * is owed, because the bank has not confirmed it. Payments not tied to a bill count once they are approved, and stay in
+ * until they settle (a payment in a bank file that is not yet confirmed is still owed). A request waiting for evidence
+ * or for approval is not a bill yet, and a blocked one is not owed as asked, so neither is listed. Overdue counts from
+ * the due date, or the date raised when there is none.
  */
 export function agedPayables(db: Db, businessId: string, today = localDateString()): { rows: PayableRow[]; totals: Record<string, number>; baseCurrency: string } {
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get()!;
@@ -291,15 +300,17 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
   const days = (d: string) => Math.floor((t0 - Date.parse(`${d}T00:00:00Z`)) / 86_400_000);
   const rows: PayableRow[] = [];
   for (const b of openBills(db, businessId)) {
-    if (b.kind !== "invoice" || b.balance.openMinor <= 0) continue;
+    const owed = b.totalMinor - b.balance.paidMinor - b.balance.creditedMinor;
+    if (b.kind !== "invoice" || owed <= 0) continue;
     const due = b.dueDate ?? b.billDate ?? localDateString(new Date(b.createdAt));
-    rows.push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: b.balance.openMinor, currency: b.currency, baseMinor: toBaseOrZero(b.balance.openMinor, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open" });
+    const detail = b.balance.pendingMinor > 0 ? `bill, ${fmt(b.balance.pendingMinor, b.currency)} on its way` : b.balance.paidMinor + b.balance.creditedMinor > 0 ? "bill, part paid" : "bill, unpaid";
+    rows.push({ kind: "bill", id: b.id, vendorId: b.vendorId, vendorName: b.vendorName, reference: b.reference, amountMinor: owed, currency: b.currency, baseMinor: toBaseOrZero(owed, b.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: "open", detail });
   }
   const obs = db
     .select({ o: obligations, vendorName: vendors.name })
     .from(obligations)
     .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
-    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, ["awaiting_approval", "approved", "failed", "needs_evidence", "refunded"])))
+    .where(and(eq(obligations.businessId, businessId), inArray(obligations.state, OWED_STATES)))
     .all();
   // A payment that came back is owed again until it has been requested again.
   const repaid = new Set(db.select({ d: auditEntries.detailJson }).from(auditEntries).where(eq(auditEntries.action, "obligation.repays")).all().map((r) => (JSON.parse(r.d ?? "{}") as { refunded?: string }).refunded));
@@ -307,7 +318,10 @@ export function agedPayables(db: Db, businessId: string, today = localDateString
     if (o.billId || !o.amountMinor || !o.currency) continue;
     if (o.state === "refunded" && repaid.has(o.id)) continue;
     const due = o.dueDate ?? localDateString(new Date(o.createdAt));
-    rows.push({ kind: "payment", id: o.id, vendorId: o.vendorId!, vendorName, reference: o.sourceRef ?? o.id, amountMinor: o.amountMinor, currency: o.currency, baseMinor: toBaseOrZero(o.amountMinor, o.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: o.state });
+    // Never the internal id: the reference, else the first words of what was asked.
+    const reference = o.sourceRef ?? (o.rawInput.trim().split(/\s+/).slice(0, 6).join(" ").slice(0, 40) || "no reference");
+    const detail = o.state === "approved" ? "approved, not paid yet" : o.state === "execution_pending" ? "being sent" : o.state === "sent" ? (o.selectedRail === "bank_file" ? "in the bank file, not confirmed" : "sent, not confirmed") : o.state === "failed" ? "payment failed, still owed" : "came back, owed again";
+    rows.push({ kind: "payment", id: o.id, vendorId: o.vendorId!, vendorName, reference, amountMinor: o.amountMinor, currency: o.currency, baseMinor: toBaseOrZero(o.amountMinor, o.currency, base), dueDate: due, daysOverdue: days(due), bucket: bucketOf(days(due)), state: o.state, detail });
   }
   rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
   const totals = Object.fromEntries(AGE_BUCKETS.map((k) => [k, rows.filter((r) => r.bucket === k).reduce((a, r) => a + r.baseMinor, 0)]));

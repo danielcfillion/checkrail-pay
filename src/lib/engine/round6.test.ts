@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { obligations, users } from "../db/schema";
+import { obligations, users, vendors } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation } from "./orchestrator";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
 import { billRecordOf, createBill, payBill } from "./bills";
 import { getDailyClose, signOffDailyClose } from "./dailyClose";
+import { agedPayables } from "./books";
 import { createRemittanceLink, remittanceMessageFor, viewRemittance, type Remittance } from "./vendorLinks";
 import { BankFileRail } from "../rails/bankFile";
 import { buildAccountingRecord, toCsv } from "../accounting/record";
@@ -28,7 +29,10 @@ beforeEach(async () => {
   await seedDemo(db, { history: true });
   setRailsForTest({ bank_file: new BankFileRail(() => db) });
 });
-afterEach(() => resetRails());
+afterEach(() => {
+  delete process.env.BANK_FILE_SOURCE_ACCOUNT;
+  resetRails();
+});
 
 describe("PR6-7: Daily close after a normal morning", () => {
   it("is one 'new vendor' line for a vendor paid twice in the same close, even when each is a new bank account", async () => {
@@ -162,4 +166,51 @@ describe("PR6-4: the settlement CSV and the Xero bills file agree", () => {
     }
     expect(toXeroFeeTransaction({ ...base, rail: "stellar", netPaid: "10800000" }, "091")).toBeNull();
   });
+});
+
+describe("PR6-5: aged payables tie to the bills in the books", () => {
+  it("leaves out a chat message with no evidence, and shows no raw id", async () => {
+    const chat = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "operator_instruction", rawInput: "pls pay Bayan 130", actor: "user:lan" });
+    expect(ob(chat).state).toBe("needs_evidence");
+    const rows = agedPayables(db, DEMO_BUSINESS_ID).rows;
+    expect(rows.some((r) => r.id === chat)).toBe(false);
+    expect(rows.some((r) => /^obl_/.test(r.reference))).toBe(false);
+    // Waiting for a person's approval is not in Xero yet either.
+    const waiting = db.select().from(obligations).where(eq(obligations.sourceRef, "HS-1027")).get()!;
+    expect(waiting.state).toBe("awaiting_approval");
+    expect(rows.some((r) => r.id === waiting.id)).toBe(false);
+  });
+
+  it("keeps a payment in the bank file in ageing until the bank confirms it, and names it by its reference", async () => {
+    process.env.BANK_FILE_SOURCE_ACCOUNT = "VCB 0071000123 Ridgeline Vietnam";
+    db.update(vendors).set({ preferredRail: "bank_file" }).where(eq(vendors.id, "ven_linh")).run();
+    const hs27 = db.select().from(obligations).where(eq(obligations.sourceRef, "HS-1027")).get()!;
+    await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", rawInput: "Hoa don HS-1034 tu Linh Family Homestay: tong cong 9.000.000 VND.", evidence: [{ kind: "invoice", label: "Invoice HS-1034", amountMinor: 900_000_000, currency: "VND", reference: "HS-1034", excerpt: "Linh Family Homestay, VND 9,000,000" }], actor: "user:lan" });
+    const hs34 = db.select().from(obligations).where(eq(obligations.sourceRef, "HS-1034")).get()!;
+    await executeObligationAfterApproval(hs34.id);
+    expect(ob(hs34.id).state).toBe("sent");
+    expect(ob(hs34.id).selectedRail).toBe("bank_file");
+    const row = agedPayables(db, DEMO_BUSINESS_ID).rows.find((r) => r.id === hs34.id)!;
+    expect(row).toMatchObject({ reference: "HS-1034", vendorName: "Linh Family Homestay", amountMinor: 900_000_000 });
+    expect(row.detail).toMatch(/bank file/);
+    void hs27;
+  });
+
+  it("a bill with a payment on its way is still owed in full, and the payment is not a second row", async () => {
+    const lan = as("lan");
+    const bill = createBill(db, DEMO_BUSINESS_ID, lan, "ven_dao", { kind: "invoice", reference: "INV-DML-6005", totalMinor: 85_000, currency: "USD" });
+    const dep = await payBill(db, DEMO_BUSINESS_ID, lan, bill, 42_500);
+    approveObligation(db, dep, "user:minh");
+    const rows = agedPayables(db, DEMO_BUSINESS_ID).rows.filter((r) => r.reference === "INV-DML-6005");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "bill", amountMinor: 85_000 });
+    await executeObligation(db, dep, { actor: "user:minh" });
+    await confirmSettlement(db, dep);
+    expect(agedPayables(db, DEMO_BUSINESS_ID).rows.find((r) => r.reference === "INV-DML-6005")!.amountMinor).toBe(42_500);
+  });
+
+  async function executeObligationAfterApproval(id: string) {
+    approveObligation(db, id, "user:minh");
+    await executeObligation(db, id, { actor: "user:minh" });
+  }
 });
