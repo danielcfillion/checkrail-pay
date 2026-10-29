@@ -32,11 +32,11 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="Inbox"
-        lede="Every obligation the business has been asked to pay, from first mention to the books."
+        lede="Every payment request the business has been asked to pay, from the first message to the books."
         actions={
           !viewer || viewer.can("ingest") ? (
             <Link href="/obligations/new" className="btn btn-primary">
-              New obligation
+              New request
             </Link>
           ) : undefined
         }
@@ -49,7 +49,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               key={f.key}
               href={f.key === "all" ? "/obligations" : `/obligations?filter=${f.key}`}
               aria-current={on ? "page" : undefined}
-              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 ${on ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink"}`}
+              className={`-mb-px flex min-h-11 items-center gap-1.5 border-b-2 px-3 py-2 ${on ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink"}`}
             >
               {f.label}
               <span className="num text-xs text-ink-soft">{counts[f.key]}</span>
@@ -61,16 +61,16 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         <ObligationTable rows={rows} />
       ) : (
         <EmptyState
-          title={active.key === "all" ? "No obligations yet" : active.key === "mine" ? "Nothing waiting for you" : `Nothing ${active.label.toLowerCase()}`}
-          body={active.key === "all" ? "Paste an invoice, a job sheet or a chat message and the agent will read it." : "Switch filter, or add a new obligation."}
+          title={active.key === "all" ? "No requests yet" : active.key === "mine" ? "Nothing waiting for you" : `Nothing ${active.label.toLowerCase()}`}
+          body={active.key === "all" ? "Paste an invoice, a job sheet or a chat message and the agent will read it." : "Switch filter, or add a new request."}
           action={
             <Link href={active.key === "mine" ? "/obligations" : "/obligations/new"} className="btn">
-              {active.key === "mine" ? "See everything" : "New obligation"}
+              {active.key === "mine" ? "See everything" : "New request"}
             </Link>
           }
         />
       )}
-      <p className="mt-3 text-xs text-ink-soft">{pluralise(rows.length, "obligation")} shown.</p>
+      <p className="mt-3 text-xs text-ink-soft">{pluralise(rows.length, "request")} shown.</p>
     </>
   );
 }

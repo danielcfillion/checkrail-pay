@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { anchorTransform, bookLineModel, positionFor, stationOffset, stationSummary, STATION_FILTER, STATIONS, STATION_LABELS } from "./checkline-model";
 import type { ObligationRow } from "@/lib/queries";
 import { formatMoney, formatMoneySymbol, stateLabel } from "@/lib/format";
@@ -12,7 +13,7 @@ const MAX_MARKS = 14;
  * they stopped. Each station carries its count and its money in the base currency, and is the one keyboard stop
  * for everything at it: the marks themselves are pointer shortcuts only, so the overview is not 18 Tab presses deep.
  */
-export function BookLine({ rows, currency = "USD" }: { rows: ObligationRow[]; currency?: string }) {
+export function BookLine({ rows, currency = "USD", header }: { rows: ObligationRow[]; currency?: string; header?: ReactNode }) {
   const stations = bookLineModel(rows, currency);
   const total = stations.reduce((a, s) => a + s.items.length + s.broken.length, 0);
 
@@ -33,11 +34,14 @@ export function BookLine({ rows, currency = "USD" }: { rows: ObligationRow[]; cu
 
   if (total === 0) {
     return (
-      <div className="panel px-6 py-10 text-center">
+      <div className="panel">
+        {header ? <div className="border-b px-5 py-4 hairline sm:px-8">{header}</div> : null}
+        <div className="px-6 py-10 text-center">
         <p className="font-medium">Nothing on the line</p>
         <p className="mt-1 text-ink-soft">
           No open payment requests and nothing settled this week. <Link className="link" href="/obligations/new">Add one</Link> or reset the demo to load the story.
         </p>
+        </div>
       </div>
     );
   }
@@ -45,8 +49,11 @@ export function BookLine({ rows, currency = "USD" }: { rows: ObligationRow[]; cu
   const LINE_Y = 52;
 
   return (
-    <div className="panel px-5 pb-4 pt-5 sm:px-8 sm:pb-5 sm:pt-6">
-      <div className="relative h-[84px] sm:h-[132px]">
+    <div className="panel">
+      {/* The figures sit in the hero's header row (DS2-25), so the line is the first thing under them. */}
+      {header ? <div className="border-b px-5 py-4 hairline sm:px-8">{header}</div> : null}
+      <div className="px-5 pb-4 pt-3 sm:px-8 sm:pb-5 sm:pt-3">
+      <div className="relative h-[84px] sm:h-[116px]">
         {/* the line */}
         <div className="absolute left-0 right-0 h-px" style={{ top: LINE_Y, background: "var(--rule-strong)" }} />
         {STATIONS.map((s, i) => {
@@ -157,6 +164,7 @@ export function BookLine({ rows, currency = "USD" }: { rows: ObligationRow[]; cu
       </ul>
 
       <p className="mt-2 text-sm text-ink-soft sm:mt-1">{summary}</p>
+      </div>
     </div>
   );
 }

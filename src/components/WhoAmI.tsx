@@ -6,13 +6,10 @@ import Link from "next/link";
 import { setPersonaAction } from "@/app/actions";
 import { useToast } from "./Toast";
 
-type Persona = { username: string; name: string; role: string };
+export type Persona = { username: string; name: string; role: string };
 
 /** Who is acting, and (on demo databases) a switch to act as another member of the demo team. */
 export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vendorChecks = 0, runsToRelease = 0 }: { name: string; role: string; username: string; viaLogin?: string; personas: readonly Persona[] | null; waiting: number; vendorChecks?: number; runsToRelease?: number }) {
-  const [pending, start] = useTransition();
-  const router = useRouter();
-  const { toast } = useToast();
   return (
     <div className="border-t hairline px-3 py-3 lg:px-5">
       <p className="text-sm" title={viaLogin ? `Signed in as ${name}, demo login ${viaLogin}` : `Signed in as ${name}`}>
@@ -41,30 +38,38 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
           </>
         ) : null}
       </p>
-      {personas ? (
-        <label className="mt-2 block">
-          <span className="dense text-attention">Demo only: switch role</span>
-          <select
-            className="field mt-0.5 w-full text-sm"
-            style={{ borderColor: "var(--attention)" }}
-            value={username}
-            disabled={pending}
-            onChange={(e) =>
-              start(async () => {
-                const r = await setPersonaAction(e.target.value);
-                toast(r.message, r.ok ? "ok" : "error");
-                router.refresh();
-              })
-            }
-          >
-            {personas.map((p) => (
-              <option key={p.username} value={p.username}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+      {personas ? <RoleSwitch personas={personas} username={username} className="mt-2" /> : null}
     </div>
+  );
+}
+
+/** The demo's role switch. Used in the sidebar and at the foot of the phone More sheet. */
+export function RoleSwitch({ personas, username, className = "" }: { personas: readonly Persona[]; username: string; className?: string }) {
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  const { toast } = useToast();
+  return (
+    <label className={`block ${className}`}>
+      <span className="dense text-attention">Demo only: switch role</span>
+      <select
+        className="field mt-0.5 w-full text-sm"
+        style={{ borderColor: "var(--attention)" }}
+        value={username}
+        disabled={pending}
+        onChange={(e) =>
+          start(async () => {
+            const r = await setPersonaAction(e.target.value);
+            toast(r.message, r.ok ? "ok" : "error");
+            router.refresh();
+          })
+        }
+      >
+        {personas.map((p) => (
+          <option key={p.username} value={p.username}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

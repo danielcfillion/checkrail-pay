@@ -1,17 +1,19 @@
 import Link from "next/link";
 import type { ObligationRow } from "@/lib/queries";
 import { CheckLine } from "./CheckLine";
-import { Money, RailTag, RelativeTime, StatePill } from "./ui";
+import { Money, RailTag, StatePill } from "./ui";
+import { formatDateTime, railLabel, timeAgoShort } from "@/lib/format";
+import { plainReason } from "@/lib/activity";
 
-/** One-line reason for a row in a "needs you" list. */
-const tidy = (s: string) => s.replace(/obligation obl_[a-z0-9]+ \((\w+)\)/i, "an earlier request ($1)");
-
+/**
+ * One-line reason for a row in a "needs you" list, in plain words (DS2-16). The router's long tie-break note stays on
+ * the request page; here a ready payment just names its rail.
+ */
 export function reasonFor(r: ObligationRow): string {
-  if (r.blockedReason) return tidy(r.blockedReason);
+  if (r.blockedReason) return plainReason(r.blockedReason);
   const reasons = safeParse(r.policyReasonsJson);
-  if (r.state === "approved") return r.routeReason ? `Ready to pay. ${r.routeReason}` : "Ready to pay.";
-  if (reasons.length) return reasons[0];
-  if (r.routeReason) return r.routeReason;
+  if (r.state === "approved") return r.selectedRail ? `Ready to pay over ${railLabel(r.selectedRail)}` : "Ready to pay";
+  if (reasons.length) return plainReason(reasons[0]);
   return "";
 }
 
@@ -85,11 +87,11 @@ export function NeedsYouList({ rows }: { rows: ObligationRow[] }) {
  * The inbox. From 640px a ledger table; below it, two-line rows (vendor and amount, then reference, state and rail)
  * where the whole row is the tap target, so nothing is clipped at the screen edge.
  */
-export function ObligationTable({ rows }: { rows: ObligationRow[] }) {
+export function ObligationTable({ rows, vendorPage = false }: { rows: ObligationRow[]; vendorPage?: boolean }) {
   return (
     <>
       <ObligationCards rows={rows} />
-      <ObligationLedger rows={rows} />
+      <ObligationLedger rows={rows} vendorPage={vendorPage} />
     </>
   );
 }
@@ -116,15 +118,19 @@ function ObligationCards({ rows }: { rows: ObligationRow[] }) {
   );
 }
 
-function ObligationLedger({ rows }: { rows: ObligationRow[] }) {
+/**
+ * Fits a 1440 screen with the sidebar: Description is capped at 28 characters and Updated is short ("3 min", "8 d")
+ * with the full time in its title (DS2-10). On a vendor's page the vendor column is the page itself, so it goes.
+ */
+function ObligationLedger({ rows, vendorPage }: { rows: ObligationRow[]; vendorPage: boolean }) {
   return (
     <div className="panel overflow-x-auto max-sm:hidden">
       <table className="ledger">
         <thead>
           <tr>
-            <th scope="col">Vendor</th>
+            {vendorPage ? null : <th scope="col">Vendor</th>}
             <th scope="col">Reference</th>
-            <th scope="col" className="hidden lg:table-cell">
+            <th scope="col" className={vendorPage ? "hidden 2xl:table-cell" : "hidden lg:table-cell"}>
               Description
             </th>
             <th scope="col" className="r">
@@ -132,7 +138,7 @@ function ObligationLedger({ rows }: { rows: ObligationRow[] }) {
             </th>
             <th scope="col">State</th>
             <th scope="col">Rail</th>
-            <th scope="col" className="hidden md:table-cell">
+            <th scope="col" className="r hidden md:table-cell">
               Updated
             </th>
           </tr>
@@ -140,29 +146,41 @@ function ObligationLedger({ rows }: { rows: ObligationRow[] }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="row-link relative">
-              <td className="whitespace-nowrap font-medium">
-                <Link href={`/obligations/${r.id}`} className="after:absolute after:inset-0 after:content-['']">
-                  {r.vendorName ?? "Unknown vendor"}
-                </Link>
+              {vendorPage ? null : (
+                <td className="whitespace-nowrap font-medium">
+                  <Link href={`/obligations/${r.id}`} className="after:absolute after:inset-0 after:content-['']">
+                    {r.vendorName ?? "Unknown vendor"}
+                  </Link>
+                </td>
+              )}
+              <td className={`num whitespace-nowrap ${vendorPage ? "font-medium" : "text-ink-soft"}`}>
+                {vendorPage ? (
+                  <Link href={`/obligations/${r.id}`} className="after:absolute after:inset-0 after:content-['']">
+                    {r.sourceRef ?? "no reference"}
+                  </Link>
+                ) : (
+                  (r.sourceRef ?? "none")
+                )}
               </td>
-              <td className="num whitespace-nowrap text-ink-soft">{r.sourceRef ?? "none"}</td>
-              <td className="hidden max-w-[320px] truncate text-ink-soft lg:table-cell" title={r.description ?? r.rawInput}>
-                {stripVendorPrefix(r.description, r.vendorName) ?? r.rawInput}
+              <td className={`text-ink-soft ${vendorPage ? "hidden 2xl:table-cell" : "hidden lg:table-cell"}`} title={r.description ?? r.rawInput}>
+                <span className="block max-w-[28ch] truncate">{stripVendorPrefix(r.description, r.vendorName) ?? r.rawInput}</span>
               </td>
               <td className="r whitespace-nowrap">
                 <Money minor={r.amountMinor} currency={r.currency} />
               </td>
               <td className="whitespace-nowrap">
                 <div className="flex items-center gap-2.5">
-                  <CheckLine state={r.state} variant="compact" hasAccounting />
+                  {vendorPage ? null : <CheckLine state={r.state} variant="compact" hasAccounting />}
                   <StatePill state={r.state} />
                 </div>
               </td>
               <td className="whitespace-nowrap">
                 <RailTag rail={r.selectedRail} />
               </td>
-              <td className="hidden whitespace-nowrap text-ink-soft md:table-cell">
-                <RelativeTime iso={r.updatedAt} />
+              <td className="r hidden whitespace-nowrap text-ink-soft md:table-cell">
+                <time dateTime={r.updatedAt} title={formatDateTime(r.updatedAt)} className="num">
+                  {timeAgoShort(r.updatedAt)}
+                </time>
               </td>
             </tr>
           ))}

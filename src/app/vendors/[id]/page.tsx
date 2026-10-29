@@ -47,7 +47,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
   return (
     <>
       <nav className="mb-3 text-xs text-ink-soft" aria-label="Breadcrumb">
-        <Link href="/vendors" className="hover:text-ink">
+        <Link href="/vendors" className="tap inline-block hover:text-ink">
           Vendors
         </Link>
         <span aria-hidden> / </span>
@@ -155,7 +155,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
           </Panel>
           <div>
           <h2 className="mb-3 font-medium">Payment requests</h2>
-          {d.obligations.length ? <ObligationTable rows={d.obligations} /> : <EmptyState title="Nothing yet for this vendor" body="Requests appear here once one names this vendor." />}
+          {d.obligations.length ? <ObligationTable rows={d.obligations} vendorPage /> : <EmptyState title="Nothing yet for this vendor" body="Requests appear here once one names this vendor." />}
           </div>
         </div>
       </div>

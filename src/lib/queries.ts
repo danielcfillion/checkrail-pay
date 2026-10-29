@@ -326,3 +326,20 @@ export function waitingIdsFor(actor: Actor, db: Db = getDb()): string[] {
 export function waitingFor(actor: Actor, db: Db = getDb()): number {
   return waitingIdsFor(actor, db).length;
 }
+
+export type RecentRelease = { id: string; vendorName: string | null; amountMinor: number | null; currency: string | null; rail: string | null; state: string; at: string };
+
+/** Payments autopilot released in the last `withinMs` (default two minutes), newest first: the overview keeps them on screen for a moment. */
+export function recentAgentReleases(withinMs = 120_000, db: Db = getDb()): RecentRelease[] {
+  const since = new Date(Date.now() - withinMs).toISOString();
+  return db
+    .select({ at: auditEntries.createdAt, seq: auditEntries.seq, o: obligations, vendorName: vendors.name })
+    .from(auditEntries)
+    .innerJoin(obligations, eq(obligations.id, auditEntries.obligationId))
+    .leftJoin(vendors, eq(vendors.id, obligations.vendorId))
+    .where(and(eq(auditEntries.action, "autopilot.releasing"), sql`${auditEntries.createdAt} >= ${since}`))
+    .orderBy(desc(auditEntries.seq))
+    .all()
+    .filter((r) => ["execution_pending", "sent", "settled"].includes(r.o.state))
+    .map((r) => ({ id: r.o.id, vendorName: r.vendorName, amountMinor: r.o.amountMinor, currency: r.o.currency, rail: r.o.selectedRail, state: r.o.state, at: r.at }));
+}

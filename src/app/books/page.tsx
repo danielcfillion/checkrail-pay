@@ -8,6 +8,7 @@ import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileFromPayPal, ReconcileUpload } from "@/components/BooksControls";
 import { isLiveRails } from "@/lib/config";
+import { taxFeaturesOn } from "@/lib/features";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Books" };
@@ -23,7 +24,8 @@ export default async function BooksPage() {
   const canRecon = !viewer || viewer.can("reconcile") || viewer.can("pay");
   const total = Object.values(aged.totals).reduce((a, b) => a + b, 0);
   const year = Number(localDateString().slice(0, 4));
-  const forms = form1099Report(db, biz.id, year);
+  const showTax = taxFeaturesOn();
+  const forms = showTax ? form1099Report(db, biz.id, year) : [];
   return (
     <>
       <PageHeader title="Books" lede="What is owed and how late, whether PayPal's statement agrees with what was paid, and which periods are closed." />
@@ -161,6 +163,7 @@ export default async function BooksPage() {
           ) : null}
         </Panel>
 
+        {showTax ? (
         <Panel title={`US 1099-NEC, ${year}`} aside="USD 2,000 threshold" className="lg:col-span-2" padded={forms.length === 0}>
           {forms.length ? (
             <div className="overflow-x-auto">
@@ -195,6 +198,7 @@ export default async function BooksPage() {
             <p className="text-ink-soft">No US payees paid this year.</p>
           )}
         </Panel>
+        ) : null}
 
         <Panel title="Closed periods" aside={biz.lockedThrough ? `closed through ${formatDate(biz.lockedThrough)}` : "all open"}>
           <p className="mb-3 text-ink-soft">Once a month is reported, close it. Nothing dated in a closed period can be amended, credited, voided or cancelled after its bill went to the books. Only the owner reopens.</p>

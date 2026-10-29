@@ -103,7 +103,9 @@ export function PendingChange({ c, canVerify, mine }: { c: ChangeView; canVerify
       <table className="w-full text-sm">
         <thead>
           <tr className="dense text-left text-ink-soft">
-            <th className="py-1 pr-3 font-normal" />
+            <th className="py-1 pr-3 font-normal">
+              <span className="sr-only">Detail</span>
+            </th>
             <th className="py-1 pr-3 font-normal">Proposed</th>
             {c.kind === "payout" ? <th className="py-1 font-normal">On file now</th> : null}
           </tr>

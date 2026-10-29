@@ -491,3 +491,103 @@ table.ledger td.r {
     margin: 18mm;
   }
 }
+
+/* Autopilot release countdown: the bar drains once a second, smoothly (DS2-9). */
+.release-bar {
+  transition: width 1s linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .release-bar {
+    transition: none;
+  }
+}
+
+/* A row of section tabs that scrolls sideways on a phone: snaps to each tab, and fades at the right edge so the
+   cut-off tab reads as "more this way" (DS2-13). The list ends with padding wider than the fade, so the last tab
+   is fully visible once scrolled to the end. */
+.tabs-scroll {
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+  mask-image: linear-gradient(to right, #000 85%, transparent);
+}
+.tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+.tabs-scroll > ul > li {
+  scroll-snap-align: start;
+}
+
+/* A checkbox with a tap area: the label is the target. */
+.tap-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+/* The sidebar's More disclosure is a nav row, not a ghost button. */
+details.nav-more > summary {
+  border: none;
+  padding: 0 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+details.nav-more > summary::before {
+  display: none;
+}
+details.nav-more > summary:hover {
+  background: transparent;
+}
+
+/* Touch screens: every control is at least 44px tall (DS2-12). Inline text links keep their line height but get
+   a taller hit area. Checkboxes grow to 20px and their label is the 44px target. */
+@media (pointer: coarse) {
+  .btn,
+  .btn-sm {
+    height: auto;
+    /* important: a few buttons set their own min-height inline for desktop. */
+    min-height: 44px !important;
+  }
+  .btn-sm {
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .field {
+    height: 44px;
+  }
+  textarea.field {
+    height: auto;
+  }
+  details > summary {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]),
+  .tap-check {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .link,
+  .tap {
+    padding-top: 14px;
+    padding-bottom: 14px;
+    margin-top: -14px;
+    margin-bottom: -14px;
+  }
+  .tap-icon {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+}

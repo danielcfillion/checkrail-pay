@@ -3,11 +3,13 @@ import { getDb } from "@/lib/db";
 import { autopilotStatus } from "@/lib/engine/autopilot";
 import { formatMoney, formatMoneyShort } from "@/lib/format";
 import { ScheduledReleases } from "./ScheduledReleases";
+import { recentAgentReleases } from "@/lib/queries";
 import { PauseButton } from "./PauseButton";
 
 /** Autonomy at a glance on the overview: the level, what is used of today's cap, what is about to go out, and the stop control. */
 export function AutopilotStrip({ businessId, currency, can = { stop: true, settings: true } }: { businessId: string; currency: string; can?: { stop: boolean; settings: boolean } }) {
   const ap = autopilotStatus(getDb(), businessId);
+  const released = recentAgentReleases();
   const on = ap.level === "autopilot" && !ap.paused;
   const name = ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot on") : ap.level === "review" ? "Review everything" : "Assist";
   const line =
@@ -40,11 +42,14 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
           ) : null}
         </div>
       </div>
-      {ap.scheduled.length ? (
-        <div className="border-t hairline">
-          <ScheduledReleases canCancel={can.stop} rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
-        </div>
-      ) : null}
+      {/* Always mounted, so it remembers what it showed as scheduled and can announce the release. */}
+      <ScheduledReleases
+        className="border-t"
+        canCancel={can.stop}
+        windowSeconds={ap.cancelWindowSeconds}
+        released={released}
+        rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))}
+      />
     </section>
   );
 }

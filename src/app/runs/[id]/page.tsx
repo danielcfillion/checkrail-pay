@@ -89,7 +89,11 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                   <th scope="col">{draft ? "Now" : "Result"}</th>
                   <th scope="col" className="hidden sm:table-cell">Rail</th>
                   <th scope="col" className="r">Amount</th>
-                  {draft && canBuild ? <th scope="col" /> : null}
+                  {draft && canBuild ? (
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>

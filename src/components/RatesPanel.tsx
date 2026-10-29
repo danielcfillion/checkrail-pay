@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { importDeparturesAction, setRateAction } from "@/app/actions";
 import { formatMoney } from "@/lib/format";
 import { useToast } from "./Toast";
+import { DateField } from "./DateField";
 
 const UNITS: Array<[string, string]> = [
   ["day", "per day"],
@@ -79,7 +80,7 @@ export function RatesPanel({ vendorId, rows, canSet, defaultCurrency }: { vendor
                 </option>
               ))}
             </select>
-            <input aria-label="Valid from" type="date" className="field" value={from} onChange={(e) => setFrom(e.target.value)} required />
+            <DateField aria-label="Valid from" value={from} onChange={setFrom} required style={{ width: "100%" }} />
             <input aria-label="Note" className="field" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="Contract 2026" />
             <div className="flex gap-2 sm:col-span-2">
               <button type="submit" className="btn btn-sm btn-primary" disabled={pending || !Number.isFinite(minor) || minor <= 0}>

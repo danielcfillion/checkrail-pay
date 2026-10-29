@@ -4,16 +4,27 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
-import { DEMO_GUIDE, groupItems, PHONE_PRIMARY, type Item } from "./nav-model";
+import { DEMO_GUIDE, groupItems, primaryFor, trimmedNav, type Item } from "./nav-model";
+import { RoleSwitch, type Persona } from "./WhoAmI";
+
+/** What the phone More sheet adds at its foot: the demo role switch and the mode list, which live in the sidebar on wider screens. */
+export type PhoneExtras = { personas: readonly Persona[] | null; username: string; modes: { summary: string; live: boolean; rows: Array<[string, string, boolean]> } | null };
 
 function useActive() {
   const path = usePathname();
   return { path, isActive: (href: string) => (href === "/" ? path === "/" : path === href || path.startsWith(href + "/")) };
 }
 
-export function NavLinks({ items, mobile = false, demoGuide = false }: { items: readonly Item[]; mobile?: boolean; demoGuide?: boolean }) {
-  const { isActive } = useActive();
-  if (mobile) return <PhoneBar items={items} demoGuide={demoGuide} />;
+export function NavLinks({ items, mobile = false, demoGuide = false, trimmed = false, phone }: { items: readonly Item[]; mobile?: boolean; demoGuide?: boolean; trimmed?: boolean; phone?: PhoneExtras }) {
+  const { path, isActive } = useActive();
+  const t = trimmed ? trimmedNav(items) : null;
+  const moreHasActive = Boolean(t?.more.some((g) => g.items.some((i) => isActive(i.href))));
+  const [moreOpen, setMoreOpen] = useState(moreHasActive);
+  // Opening a section that lives under More shows where you are.
+  useEffect(() => {
+    if (moreHasActive) setMoreOpen(true);
+  }, [path, moreHasActive]);
+  if (mobile) return <PhoneBar items={items} demoGuide={demoGuide} trimmed={trimmed} extras={phone} />;
 
   const row = (it: Item) => {
     const active = isActive(it.href);
@@ -32,6 +43,38 @@ export function NavLinks({ items, mobile = false, demoGuide = false }: { items: 
       </li>
     );
   };
+
+  if (t) {
+    return (
+      <div className="space-y-3">
+        {demoGuide ? <ul>{row(DEMO_GUIDE)}</ul> : null}
+        <ul className="space-y-0.5 max-lg:border-t max-lg:pt-3 hairline" aria-label="Main sections">
+          {t.primary.map(row)}
+        </ul>
+        <details className="nav-more" open={moreOpen} onToggle={(e) => setMoreOpen((e.currentTarget as HTMLDetailsElement).open)}>
+          <summary className="flex h-8 w-full items-center gap-2.5 rounded px-2 text-sm font-normal text-ink-soft hover:text-ink max-lg:justify-center" title="More sections">
+            <Icon name="more" />
+            <span className="hidden lg:inline">More</span>
+          </summary>
+          <div className="mt-2 space-y-3">
+            {t.more.map((g) => {
+              const id = `nav-group-${g.label.toLowerCase()}`;
+              return (
+                <div key={g.label} className="max-lg:border-t max-lg:pt-3 hairline">
+                  <p id={id} className="dense mb-1 hidden px-2 text-[11px] text-ink-soft lg:block">
+                    {g.label}
+                  </p>
+                  <ul className="space-y-0.5" aria-labelledby={id}>
+                    {g.items.map(row)}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -54,12 +97,13 @@ export function NavLinks({ items, mobile = false, demoGuide = false }: { items: 
 }
 
 /** Under 640px: four primary sections and More, which opens a bottom sheet with every other section. */
-function PhoneBar({ items, demoGuide }: { items: readonly Item[]; demoGuide: boolean }) {
+function PhoneBar({ items, demoGuide, trimmed, extras }: { items: readonly Item[]; demoGuide: boolean; trimmed: boolean; extras?: PhoneExtras }) {
   const { path, isActive } = useActive();
   const [open, setOpen] = useState(false);
   const moreBtn = useRef<HTMLButtonElement>(null);
-  const primary = PHONE_PRIMARY.map((h) => items.find((i) => i.href === h)).filter((i): i is Item => !!i);
-  const restGroups = groupItems(items.filter((i) => !(PHONE_PRIMARY as readonly string[]).includes(i.href)));
+  const bar = primaryFor(trimmed);
+  const primary = bar.map((h) => items.find((i) => i.href === h)).filter((i): i is Item => !!i);
+  const restGroups = groupItems(items.filter((i) => !bar.includes(i.href)));
   if (demoGuide) restGroups.unshift({ label: "Demo", items: [DEMO_GUIDE] });
   const moreActive = restGroups.some((g) => g.items.some((i) => isActive(i.href)));
 
@@ -107,19 +151,19 @@ function PhoneBar({ items, demoGuide }: { items: readonly Item[]; demoGuide: boo
           </button>
         </li>
       </ul>
-      {open ? <MoreSheet groups={restGroups} isActive={isActive} onClose={close} /> : null}
+      {open ? <MoreSheet groups={restGroups} isActive={isActive} onClose={close} extras={extras} /> : null}
     </>
   );
 }
 
-function MoreSheet({ groups, isActive, onClose }: { groups: Array<{ label: string; items: Item[] }>; isActive: (href: string) => boolean; onClose: (returnFocus: boolean) => void }) {
+function MoreSheet({ groups, isActive, onClose, extras }: { groups: Array<{ label: string; items: Item[] }>; isActive: (href: string) => boolean; onClose: (returnFocus: boolean) => void; extras?: PhoneExtras }) {
   const sheet = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
   useEffect(() => {
     const el = sheet.current;
     if (!el) return;
-    const focusables = () => Array.from(el.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+    const focusables = () => Array.from(el.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), select:not([disabled]), summary"));
     (focusables().find((f) => f.getAttribute("aria-current") === "page") ?? focusables()[0])?.focus();
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -198,6 +242,25 @@ function MoreSheet({ groups, isActive, onClose }: { groups: Array<{ label: strin
             </ul>
           </div>
         ))}
+        {extras?.personas || extras?.modes ? (
+          <div className="mx-4 mt-3 space-y-3 border-t pt-3 hairline">
+            {extras.personas ? <RoleSwitch personas={extras.personas} username={extras.username} /> : null}
+            {extras.modes ? (
+              <div>
+                <p className={`dense ${extras.modes.live ? "text-ink" : "text-attention"}`}>{extras.modes.summary}</p>
+                <p className="mt-0.5 text-xs text-ink-soft">{extras.modes.live ? "Rail and agent modes" : "Nothing here moves real money."}</p>
+                <ul className="dense mt-1.5 space-y-1">
+                  {extras.modes.rows.map(([label, mode, sim]) => (
+                    <li key={label} className="flex justify-between gap-3">
+                      <span className="text-ink-soft">{label}</span>
+                      <span className={`truncate text-right ${sim ? "text-ink-soft" : "text-ink"}`}>{mode}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

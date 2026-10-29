@@ -13,6 +13,23 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; hrefs: readonly string[]
 /** The four sections on the phone bar; everything else is one tap away under More. */
 export const PHONE_PRIMARY = ["/", "/obligations", "/exceptions", "/close"] as const;
 
+/**
+ * The judge's surface. With demo personas on, four sections lead (Overview, Inbox, Daily close, Books) and every
+ * other section sits under More, collapsed until opened, on desktop and in the phone bar alike.
+ */
+export const DEMO_PRIMARY = ["/", "/obligations", "/close", "/books"] as const;
+
+export function primaryFor(trimmed: boolean): readonly string[] {
+  return trimmed ? DEMO_PRIMARY : PHONE_PRIMARY;
+}
+
+/** Sidebar for the demo: the primary four in order, and the rest in their usual groups under More. */
+export function trimmedNav(items: readonly Item[]): { primary: Item[]; more: Array<{ label: string; items: Item[] }> } {
+  const primary = DEMO_PRIMARY.map((h) => items.find((i) => i.href === h)).filter((i): i is Item => !!i);
+  const more = groupItems(items.filter((i) => !(DEMO_PRIMARY as readonly string[]).includes(i.href)));
+  return { primary, more };
+}
+
 export const DEMO_GUIDE: Item = { href: "/demo", label: "Demo guide", icon: "demo" };
 
 export function groupItems(items: readonly Item[]): Array<{ label: string; items: Item[] }> {

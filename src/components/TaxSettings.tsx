@@ -13,11 +13,11 @@ export function TaxSettings({ vnPit, phEwt, editable }: { vnPit: boolean; phEwt:
   const { toast } = useToast();
   return (
     <div className="space-y-2">
-      <label className="flex items-start gap-2">
+      <label className="flex cursor-pointer items-start gap-2 py-1">
         <input type="checkbox" checked={a} disabled={!editable} onChange={(e) => setA(e.target.checked)} className="mt-1" />
         <span>We pay as a Vietnamese entity: withhold 10% personal income tax from individuals paid VND 2,000,000 or more (unless they gave form 08/CK-TNCN).</span>
       </label>
-      <label className="flex items-start gap-2">
+      <label className="flex cursor-pointer items-start gap-2 py-1">
         <input type="checkbox" checked={b} disabled={!editable} onChange={(e) => setB(e.target.checked)} className="mt-1" />
         <span>We pay as a Philippine entity: withhold expanded withholding tax at each payee&apos;s rate (set on the vendor).</span>
       </label>

@@ -6,6 +6,8 @@ import Link from "next/link";
 import { createRunAction } from "@/app/actions";
 import { formatDate, formatMoney, railLabel } from "@/lib/format";
 import { useToast } from "./Toast";
+import { DateField } from "./DateField";
+import { StatePill } from "./ui";
 
 export type Candidate = { id: string; vendorName: string | null; sourceRef: string | null; amountMinor: number; currency: string; dueDate: string | null; state: string; rail: string | null; scheduled: boolean };
 
@@ -37,10 +39,12 @@ export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-2 text-sm">
-        <label>
-          <span className="lbl">Pick everything due by</span>
-          <input type="date" className="field num" value={dueBy} onChange={(e) => pickDueBy(e.target.value)} />
-        </label>
+        <div>
+          <label className="lbl" htmlFor="run-due-by">
+            Pick everything due by
+          </label>
+          <DateField id="run-due-by" value={dueBy} onChange={pickDueBy} />
+        </div>
         {dueBy ? <span className="text-xs text-ink-soft">{rows.filter((r) => !r.dueDate).length} without a due date are not picked</span> : null}
       </div>
       <div className="overflow-x-auto">
@@ -48,7 +52,9 @@ export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[
           <thead>
             <tr>
               <th scope="col" className="w-8">
-                <input type="checkbox" aria-label="Select all" checked={all} onChange={() => setPicked(all ? new Set() : new Set(rows.map((r) => r.id)))} />
+                <label className="tap-check">
+                  <input type="checkbox" aria-label="Select all" checked={all} onChange={() => setPicked(all ? new Set() : new Set(rows.map((r) => r.id)))} />
+                </label>
               </th>
               <th scope="col">Vendor</th>
               <th scope="col" className="hidden sm:table-cell">Reference</th>
@@ -62,7 +68,9 @@ export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[
             {rows.map((r) => (
               <tr key={r.id}>
                 <td>
-                  <input type="checkbox" aria-label={`Include ${r.vendorName ?? r.id}`} checked={picked.has(r.id)} onChange={() => toggle(r.id)} />
+                  <label className="tap-check">
+                    <input type="checkbox" aria-label={`Include ${r.vendorName ?? r.id}`} checked={picked.has(r.id)} onChange={() => toggle(r.id)} />
+                  </label>
                 </td>
                 <td className="font-medium">
                   <Link href={`/obligations/${r.id}`} className="hover:underline">
@@ -71,7 +79,12 @@ export function RunBuilder({ rows, defaultName, today = "" }: { rows: Candidate[
                 </td>
                 <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.sourceRef ?? "none"}</td>
                 <td className={`num hidden whitespace-nowrap md:table-cell ${r.dueDate && r.dueDate < today ? "text-attention" : "text-ink-soft"}`}>{r.dueDate ? formatDate(r.dueDate) : "none"}</td>
-                <td className="text-ink-soft">{r.state === "approved" ? (r.scheduled ? "approved, autopilot scheduled" : "approved") : "waiting for approval"}</td>
+                <td className="whitespace-nowrap">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <StatePill state={r.state} />
+                    {r.scheduled ? <span className="text-xs text-attention">autopilot scheduled</span> : null}
+                  </span>
+                </td>
                 <td className="hidden text-ink-soft sm:table-cell">{r.rail ? railLabel(r.rail) : "none"}</td>
                 <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
               </tr>

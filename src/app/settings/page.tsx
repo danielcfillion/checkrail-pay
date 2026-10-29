@@ -15,6 +15,7 @@ import { fxAsOf, fxTable } from "@/lib/fx";
 import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
 import { usingDevKey } from "@/lib/crypto/dataKey";
 import { dualControlGap } from "@/lib/engine/orchestrator";
+import { taxFeaturesOn } from "@/lib/features";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
@@ -56,7 +57,7 @@ export default async function SettingsPage() {
   const rawGap = dualControlGap(getDb(), biz.id);
   // Two-person approval counts logins, not personas. In the demo, say how to give the second approval instead.
   const dualGap = rawGap && demo && login
-    ? `Logins: only ${login} is configured, so above ${formatMoneyShort(policy.dualApprovalThresholdMinor, cur)} two different logins must approve. In this demo, switch role to ${approverPersonas[0] ?? "Minh"} in the sidebar to see a second approval.`
+    ? `Logins: only ${login} is configured, so above ${formatMoneyShort(policy.dualApprovalThresholdMinor, cur)} two different logins must approve. In this demo, switch role to ${approverPersonas[0] ?? "Minh"} (sidebar, or More on a phone) to see a second approval.`
     : rawGap;
   const identity = viewer ? (viewer.actor.viaLogin ? `${viewer.actor.displayName.includes("(") ? viewer.actor.displayName : whoIs(viewer.actor)}, demo login ${viewer.actor.viaLogin}` : whoIs(viewer.actor)) : "not signed in";
 
@@ -75,8 +76,8 @@ export default async function SettingsPage() {
   return (
     <>
       <PageHeader title="Settings" lede="Choose how much the agent does without asking. The approval rules underneath stay the same at every level." />
-      <nav aria-label="Settings sections" className="sticky top-0 z-30 -mx-4 mb-6 overflow-x-auto border-b bg-paper px-4 hairline sm:-mx-6 sm:px-6">
-        <ul className="flex gap-1 py-2 text-sm">
+      <nav aria-label="Settings sections" className="tabs-scroll sticky top-0 z-30 -mx-4 mb-6 overflow-x-auto border-b bg-paper px-4 hairline sm:-mx-6 sm:px-6 md:[mask-image:none] md:[-webkit-mask-image:none]">
+        <ul className="flex w-max gap-1 py-2 pr-16 text-sm md:pr-0">
           {SECTIONS.map((x) => (
             <li key={x.id} className="shrink-0">
               <a href={`#${x.id}`} className="btn btn-sm whitespace-nowrap">
@@ -152,8 +153,8 @@ export default async function SettingsPage() {
               <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">Full bank account numbers are stored encrypted{usingDevKey() ? " with a development key. Set a real key before real use (see the README)" : ""}.</p>
             </Panel>
             <Panel title="Tax" aside="guidance, not tax advice">
-              <p className="mb-3 text-ink-soft">A US payee without a W-9 has 24% withheld. Payees abroad need a W-8 on file before they are paid without a second look. US payees paid USD 2,000 or more in a year are listed for a 1099-NEC on the Books page.</p>
-              <TaxSettings vnPit={Boolean(policy.withholdVnPit)} phEwt={Boolean(policy.withholdPhEwt)} editable={mayChange} />
+              <p className={taxFeaturesOn() ? "mb-3 text-ink-soft" : "text-ink-soft"}>A US payee without a W-9 has 24% withheld. Payees abroad need a W-8 on file before they are paid without a second look.{taxFeaturesOn() ? " US payees paid USD 2,000 or more in a year are listed for a 1099-NEC on the Books page." : ""}</p>
+              {taxFeaturesOn() ? <TaxSettings vnPit={Boolean(policy.withholdVnPit)} phEwt={Boolean(policy.withholdPhEwt)} editable={mayChange} /> : null}
             </Panel>
           </div>
         </Section>

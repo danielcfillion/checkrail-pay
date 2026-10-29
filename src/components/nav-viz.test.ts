@@ -3,7 +3,7 @@ import type { ObligationRow } from "@/lib/queries";
 import type { PaymentPoint } from "@/lib/queries";
 import { bookLineModel, describeLine, stationSummary } from "./checkline-model";
 import { axisLabel, buckets, chooseStep, paymentDensity } from "./moneyout-model";
-import { groupItems, NAV_GROUPS, PHONE_PRIMARY } from "./nav-model";
+import { DEMO_PRIMARY, groupItems, NAV_GROUPS, PHONE_PRIMARY, primaryFor, trimmedNav } from "./nav-model";
 
 /** Mirrors NAV in Shell.tsx (a .tsx file the test runner cannot load). */
 const NAV = ["/", "/obligations", "/runs", "/vendors", "/ledger", "/exceptions", "/close", "/accounting", "/books", "/audit", "/settings"].map((href) => ({ href, label: { "/": "Overview", "/obligations": "Inbox", "/exceptions": "Exceptions", "/runs": "Payment runs" }[href] ?? href, icon: "x" }));
@@ -76,6 +76,16 @@ describe("Navigation", () => {
     const rest = NAV.filter((i) => !(PHONE_PRIMARY as readonly string[]).includes(i.href));
     expect(PHONE_PRIMARY).toHaveLength(4);
     expect(rest.length + PHONE_PRIMARY.length).toBe(NAV.length);
+  });
+
+  it("trims the demo to Overview, Inbox, Daily close and Books, with every other section under More", () => {
+    const t = trimmedNav(NAV);
+    expect(t.primary.map((i) => i.href)).toEqual(["/", "/obligations", "/close", "/books"]);
+    const more = t.more.flatMap((g) => g.items.map((i) => i.href));
+    expect(more.sort()).toEqual(["/accounting", "/audit", "/exceptions", "/ledger", "/runs", "/settings", "/vendors"]);
+    expect(t.more.map((g) => g.label)).toEqual(["Pay", "People", "Books", "Admin"]);
+    expect(primaryFor(true)).toEqual(DEMO_PRIMARY);
+    expect(primaryFor(false)).toEqual(PHONE_PRIMARY);
   });
 });
 

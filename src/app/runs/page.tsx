@@ -4,7 +4,14 @@ import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { listRuns, runCandidates } from "@/lib/engine/runs";
 import { formatDate, formatDateTime, formatMoney, humaniseActor, localDateString } from "@/lib/format";
-import { EmptyState, PageHeader, Panel } from "@/components/ui";
+import { EmptyState, PageHeader, Panel, TonePill } from "@/components/ui";
+
+const RUN_STATUS: Record<string, { label: string; tone: "neutral" | "muted" | "attention" | "blocked" | "settled" }> = {
+  draft: { label: "Waiting for release", tone: "attention" },
+  releasing: { label: "Releasing", tone: "neutral" },
+  released: { label: "Released", tone: "settled" },
+  cancelled: { label: "Cancelled", tone: "muted" },
+};
 import { RunBuilder } from "@/components/RunBuilder";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +73,9 @@ export default async function RunsPage() {
                         {r.name}
                       </Link>
                     </td>
-                    <td className={r.status === "draft" ? "text-attention" : "text-ink-soft"}>{r.status === "draft" ? "waiting for release" : r.status}</td>
+                    <td className="whitespace-nowrap">
+                      <TonePill tone={RUN_STATUS[r.status]?.tone ?? "neutral"}>{RUN_STATUS[r.status]?.label ?? r.status}</TonePill>
+                    </td>
                     <td className="hidden text-ink-soft sm:table-cell">{humaniseActor(r.createdBy)}</td>
                     <td className="num hidden whitespace-nowrap text-ink-soft md:table-cell" title={formatDateTime(r.createdAt)}>{formatDate(r.createdAt)}</td>
                     <td className="r num">{r.status === "released" ? `${r.paid} of ${r.count} paid${r.withBank ? `, ${r.withBank} with the bank` : ""}` : r.count}</td>
