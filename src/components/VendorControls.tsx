@@ -145,6 +145,7 @@ export function PendingChange({ c, canVerify, mine }: { c: ChangeView; canVerify
             <button type="button" className="btn btn-primary" disabled={pending || !method} onClick={() => run(() => verifyVendorChangeAction(c.id, method, note || undefined))}>
               {pending ? "Saving" : "Verified, use these details"}
             </button>
+            {!method ? <p className="basis-full text-xs text-ink-soft">Choose how you checked first.</p> : null}
             <button type="button" className="btn btn-danger" disabled={pending} onClick={() => run(() => rejectVendorChangeAction(c.id, note || undefined))}>
               Turn down
             </button>

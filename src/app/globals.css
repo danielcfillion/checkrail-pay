@@ -518,8 +518,13 @@ table.ledger td.r {
 .tabs-scroll {
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
-  mask-image: linear-gradient(to right, #000 85%, transparent);
+}
+/* The fade is only for widths where the tabs can overflow; on a desktop it showed as a streak over nothing. */
+@media (max-width: 1023px) {
+  .tabs-scroll {
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+    mask-image: linear-gradient(to right, #000 85%, transparent);
+  }
 }
 .tabs-scroll::-webkit-scrollbar {
   display: none;

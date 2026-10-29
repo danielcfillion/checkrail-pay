@@ -120,7 +120,7 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.5, rootMargin: "0px 0px -51px 0px" });
+    const io = new IntersectionObserver(([e]) => setCardVisible(e.isIntersecting), { threshold: 0.5, rootMargin: "0px 0px -57px 0px" });
     io.observe(el);
     return () => io.disconnect();
   }, [action]);
@@ -179,7 +179,7 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
       {action ? (
         <>
           <div
-            className={`fixed inset-x-0 bottom-[51px] z-30 border-t bg-sheet px-4 py-2.5 transition-transform motion-reduce:transition-none md:bottom-0 md:left-16 lg:hidden ${cardVisible ? "pointer-events-none translate-y-[calc(100%+51px)]" : "translate-y-0"}`}
+            className={`fixed inset-x-0 bottom-[57px] z-30 border-t bg-sheet px-4 py-2.5 transition-transform motion-reduce:transition-none md:bottom-0 md:left-16 lg:hidden ${cardVisible ? "pointer-events-none translate-y-[calc(100%+57px)]" : "translate-y-0"}`}
             style={{ boxShadow: `inset 0 3px 0 ${tone.rule}`, borderColor: "var(--rule)" }}
             aria-hidden={cardVisible}
           >

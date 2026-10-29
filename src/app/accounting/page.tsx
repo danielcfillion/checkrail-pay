@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
-import { formatDate, formatDateTime, pluralise } from "@/lib/format";
+import { formatDate, formatDateTime, groupThousands, pluralise } from "@/lib/format";
 import { EmptyState, PageHeader, RailTag } from "@/components/ui";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { DemoVisit } from "@/components/DemoProgress";
@@ -23,7 +23,7 @@ export default function AccountingPage() {
   // One currency across every record: say it once in the column headers, not in every cell.
   const currencies = [...new Set(rows.map((r) => r.payload.grossCurrency ?? "USD"))];
   const single = currencies.length === 1 ? currencies[0] : null;
-  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? String(v) : `${cur} ${v}`);
+  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? groupThousands(v) : `${cur} ${groupThousands(v)}`);
   // Bills changed here after they went to Xero: the accountant makes the same change there.
   const changed = getDb()
     .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
@@ -88,14 +88,14 @@ export default function AccountingPage() {
                 <Link href={`/obligations/${r.obligationId}`} className="block min-h-11 px-4 py-3 active:bg-paper">
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</span>
-                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${p.grossAmount}`}</span>
+                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${groupThousands(p.grossAmount)}`}</span>
                   </span>
                   <span className="mt-1 flex items-center gap-2 text-xs">
                     <span className="num min-w-0 truncate text-ink-soft">
                       {p.reference ?? r.obligation.sourceRef ?? "no reference"}
                       {p.accountCode ? `, ${p.accountCode}` : ""}
                     </span>
-                    <span className={`dense ml-auto shrink-0 ${tone}`}>{status}</span>
+                    <span className={`dense ml-auto inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 ${tone}`} style={{ background: r.status === "pending" ? "var(--attention-soft)" : r.status === "failed" ? "var(--blocked-soft)" : "var(--settled-soft)" }}>{status}</span>
                   </span>
                 </Link>
               </li>
@@ -139,7 +139,7 @@ export default function AccountingPage() {
                 return (
                   <tr key={r.id}>
                     <td>
-                      <span className={`dense whitespace-nowrap ${r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled"}`}>{r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status}</span>
+                      <span className={`dense inline-flex h-5 items-center whitespace-nowrap rounded-sm px-1.5 ${r.status === "pending" ? "bg-attention-soft text-attention" : r.status === "failed" ? "bg-blocked-soft text-blocked" : "bg-settled-soft text-settled"}`}>{r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status}</span>
                     </td>
                     <td className="num whitespace-nowrap">
                       <Link href={`/obligations/${r.obligationId}`} className="hover:underline">
