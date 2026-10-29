@@ -20,6 +20,10 @@ Built against DESIGN.md. Next.js 15 App Router, React 19, Tailwind v4, no compon
 - `eslint.config.mjs` now switches off `no-require-imports` for `src/lib/rails/index.ts` only; that file's lazy `require` of the live SDKs is deliberate and I was not allowed to edit it, and the rule was failing `next build`.
 - The create-next-app SVGs in `public/` were removed.
 
+## Vietnamese strings
+
+Vietnamese text in the app (the remittance message in `src/lib/engine/vendorLinks.ts`, the remittance advice page in `src/app/remit/[token]/page.tsx`, the vendor onboarding and evidence pages) was written by an AI agent and has not been read by a native speaker. A Vietnamese reader should check it before a vendor sees it, in particular the polite register ("Chào ...", "bạn"), "đã thanh toán" against "đang chuyển" for money that has arrived against money on its way, and "chuyển khoản ngân hàng" as the one name for a bank file and a Wise transfer. The remittance message groups a vendor's payments by rail and by arrived or on its way, one sentence each, and writes the date day first (27/10/2026).
+
 ## Verification
 
 - `npm run typecheck`: passes.
