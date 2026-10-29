@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validatePayout, validateProfile, lookupInvite } from "@/lib/engine/vendors";
-import { bankOptionLabel, classifyOnboardingError, formatExpiryVi, linkReasonCode, precheckOnboarding, resolveLang, STRINGS, type ErrorCode } from "./onboarding-strings";
+import { bankOptionLabel, classifyOnboardingError, errorText, formatExpiryVi, linkReasonCode, precheckOnboarding, resolveLang, STRINGS, type ErrorCode } from "./onboarding-strings";
 
 /** Every leaf of a dictionary as a dotted path, with functions as "fn". */
 function leaves(o: unknown, prefix = ""): Record<string, string> {
@@ -118,6 +118,15 @@ describe("helpers", () => {
   it("does not print a bank's code twice", () => {
     expect(bankOptionLabel("BIDV", "BIDV")).toBe("BIDV");
     expect(bankOptionLabel("VCB", "Vietcombank")).toBe("Vietcombank (VCB)");
+  });
+
+  it("names Stellar in the no-way-to-be-paid message only when the form has a Stellar field", () => {
+    for (const lang of ["en", "vi"] as const) {
+      const t = STRINGS[lang];
+      expect(errorText(t, "noWayToPay", false)).not.toMatch(/stellar/i);
+      expect(errorText(t, "noWayToPay", true)).toMatch(/stellar/i);
+      expect(errorText(t, "emailInvalid", true)).toBe(t.errors.emailInvalid);
+    }
   });
 
   it("lists both plain problems in one pass", () => {

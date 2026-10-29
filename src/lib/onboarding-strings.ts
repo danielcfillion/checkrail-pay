@@ -13,6 +13,7 @@ export type Lang = "en" | "vi";
 export type ErrorCode =
   | "nameRequired"
   | "noWayToPay"
+  | "noWayToPayStellar"
   | "emailInvalid"
   | "paypalInvalid"
   | "stellarInvalid"
@@ -139,7 +140,9 @@ const EN: Dict = {
   errorTitle: (n) => `Not sent yet. Fix ${n === 1 ? "this" : `these ${n} things`}:`,
   errors: {
     nameRequired: "Enter your name or business name.",
-    noWayToPay: "Give at least one way to be paid: a PayPal email, a Stellar account or a bank account number.",
+    // The form only has a Stellar field for some vendors (the Philippines), so the message names only what is on screen.
+    noWayToPay: "Give at least one way to be paid: a PayPal email or a bank account number.",
+    noWayToPayStellar: "Give at least one way to be paid: a PayPal email, a Stellar account or a bank account number.",
     emailInvalid: "This email does not look right. Example: name@company.com",
     paypalInvalid: "This PayPal email does not look right.",
     stellarInvalid: "A Stellar public key starts with G and has 56 letters and digits.",
@@ -215,7 +218,8 @@ const VI: Dict = {
   errorTitle: (n) => `Chưa gửi được. Vui lòng sửa ${n === 1 ? "mục này" : `${n} mục sau`}:`,
   errors: {
     nameRequired: "Vui lòng nhập tên của bạn hoặc tên cơ sở kinh doanh.",
-    noWayToPay: "Vui lòng điền ít nhất một cách nhận tiền: email PayPal, tài khoản Stellar hoặc số tài khoản ngân hàng.",
+    noWayToPay: "Vui lòng điền ít nhất một cách nhận tiền: email PayPal hoặc số tài khoản ngân hàng.",
+    noWayToPayStellar: "Vui lòng điền ít nhất một cách nhận tiền: email PayPal, tài khoản Stellar hoặc số tài khoản ngân hàng.",
     emailInvalid: "Email này chưa đúng định dạng. Ví dụ: ten@congty.vn",
     paypalInvalid: "Email PayPal này chưa đúng định dạng.",
     stellarInvalid: "Khóa công khai Stellar bắt đầu bằng chữ G và gồm 56 ký tự.",
@@ -329,4 +333,9 @@ export function precheckOnboarding(v: Entered, needsName: boolean): OnboardingEr
   if (needsName && !v.name.trim()) out.push({ code: "nameRequired", field: "v-name" });
   if (!v.paypalEmail.trim() && !v.stellarAccount.trim() && !v.bankAccountNumber.trim()) out.push({ code: "noWayToPay", field: "v-pp" });
   return out;
+}
+
+/** The message for a code on a form that may or may not have a Stellar field: never names a field the vendor cannot see. */
+export function errorText(t: Dict, code: ErrorCode, hasStellarField: boolean): string {
+  return code === "noWayToPay" && hasStellarField ? t.errors.noWayToPayStellar : t.errors[code];
 }
