@@ -1,4 +1,5 @@
 import { formatDate, formatMoney, railLabel } from "@/lib/format";
+import { checkStatement, type ReaderView } from "./check-statement";
 
 /** Severity of the decision on a payment request: red, amber, green, or neutral for states with nothing to decide. */
 export type DecisionTone = "blocked" | "attention" | "settled" | "neutral";
@@ -36,6 +37,8 @@ export type DecisionInput = {
   releaseAt?: string | null;
   /** The earlier payment a duplicate block points at, looked up by the page. */
   earlier?: EarlierPayment | null;
+  /** The reading the page shows under "What the agent read". The band may not call the checks clear over its concerns. */
+  reader?: ReaderView | null;
 };
 
 export type Decision = {
@@ -53,6 +56,8 @@ export type Decision = {
   note?: string | null;
   /** Further policy reasons the card states through its note, so "Policy also found" does not count them again. */
   alsoStated?: string[];
+  /** A short label for the card's corner when something besides the rules is open ("1 reader concern"). */
+  chip?: string | null;
 };
 
 /** Whether this viewer may take the card's action. The server checks again. */
@@ -235,31 +240,37 @@ function approvalDecision(i: DecisionInput): Decision {
   const reasons = i.policyReasons.map((r) => r.replace(/^New since approval: /, ""));
   const reason = reasons[0] ?? null;
   const warnings = i.rules.filter((r) => !r.passed && r.severity === "warn");
-  const action: PrimaryAction = { kind: "approve", label: "Approve" };
   const matched = i.rules.find((r) => r.ruleId === "amount_matches_evidence" && r.passed);
   const route = i.quote && i.quote.receiveAmountMinor !== null ? `${railLabel(i.quote.rail)} delivers ${formatMoney(i.quote.receiveAmountMinor, i.quote.receiveCurrency)}.` : "";
   const evidenceLine = [matched ? `${tidyDates(matched.message)}.` : "", route].filter(Boolean).join(" ") || "Check the evidence and the route below.";
-  const base = { tone: "attention" as const, statedReason: reason, action };
+  // What the checks may claim: "Every check passed." only when the rules and the reading both are clean.
+  const checks = checkStatement({ rules: i.rules, reader: i.reader });
+  const chip = checks.chip;
+  const action: PrimaryAction = { kind: "approve", label: "Approve" };
+  const base = { tone: "attention" as const, statedReason: reason, action, chip };
+  // Only a clear result is silent on the other branches; anything open is said first.
+  const lead = (line: string) => (checks.kind === "clear" ? line : `${checks.text} ${line}`);
 
   let m = reason?.match(new RegExp(`^Amount exceeds auto-execute threshold ${MONEY}`));
-  if (m) return { ...base, title: `Needs your approval: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: warnings.length ? evidenceLine : `Every check passed. ${evidenceLine}` };
+  if (m) return { ...base, title: `Needs your approval: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: `${checks.text} ${evidenceLine}` };
   m = reason?.match(new RegExp(`^Amount exceeds dual-approval threshold ${MONEY}; (\\d+) more`));
-  if (m) return { ...base, title: `Needs ${m[3] === "1" ? "a second approval" : `${m[3]} approvals`}: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: evidenceLine };
+  if (m) return { ...base, title: `Needs ${m[3] === "1" ? "a second approval" : `${m[3]} approvals`}: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: lead(evidenceLine) };
   m = reason?.match(new RegExp(`^Amount exceeds the autopilot per-payment cap ${MONEY}`));
-  if (m) return { ...base, title: `Needs your approval: above the autopilot cap of ${shortMoney(toMinor(m[2]), m[1])}`, evidence: evidenceLine };
-  if (reason && /daily cap/.test(reason)) return { ...base, title: "Needs your approval: over the daily cap", evidence: tidyDates(reason) + "." };
-  if (reason && /^Only the vendor's own documents/.test(reason)) return { ...base, title: `Needs your approval: only the vendor's own invoice supports ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this amount"}`, evidence: "No job sheet, booking or rate card confirms it." };
-  if (reason && /^First payment to this vendor/.test(reason)) return { ...base, title: "Needs your approval: first payment to this vendor", evidence: evidenceLine };
-  if (reason && /times this vendor's usual/.test(reason)) return { ...base, title: `Needs your approval: ${reason.split(":")[0]}`, evidence: evidenceLine };
-  if (reason && /review everything/.test(reason)) return { ...base, title: "Needs your approval: you review every payment", evidence: evidenceLine };
+  if (m) return { ...base, title: `Needs your approval: above the autopilot cap of ${shortMoney(toMinor(m[2]), m[1])}`, evidence: lead(evidenceLine) };
+  if (reason && /daily cap/.test(reason)) return { ...base, title: "Needs your approval: over the daily cap", evidence: lead(tidyDates(reason) + ".") };
+  if (reason && /^Only the vendor's own documents/.test(reason)) return { ...base, title: `Needs your approval: only the vendor's own invoice supports ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this amount"}`, evidence: lead("No job sheet, booking or rate card confirms it.") };
+  if (reason && /^First payment to this vendor/.test(reason)) return { ...base, title: "Needs your approval: first payment to this vendor", evidence: lead(evidenceLine) };
+  if (reason && /times this vendor's usual/.test(reason)) return { ...base, title: `Needs your approval: ${reason.split(":")[0]}`, evidence: lead(evidenceLine) };
+  if (reason && /review everything/.test(reason)) return { ...base, title: "Needs your approval: you review every payment", evidence: lead(evidenceLine) };
   if (warnings.length) {
     return {
       ...base,
+      chip: checks.kind === "warnings" ? null : chip,
       title: `Needs your approval: ${warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`} on ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this request"}`,
       evidence: `${tidyDates(warnings[0].message)}.${warnings.length > 1 ? " The rest are listed first under Policy." : ""}`,
     };
   }
-  return { ...base, title: "Needs your approval", evidence: reason ? `${tidyDates(reason)}.` : evidenceLine };
+  return { ...base, title: "Needs your approval", evidence: reason ? lead(`${tidyDates(reason)}.`) : lead(evidenceLine) };
 }
 
 /** The decision a person is looking at on a payment request, stated once, with the one action that moves it on. */

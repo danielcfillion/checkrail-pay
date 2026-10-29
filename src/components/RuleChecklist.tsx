@@ -54,7 +54,7 @@ function Row({ r, earlier }: { r: Rule; earlier?: Map<string, EarlierPayment> })
 }
 
 /** The policy engine's own output, verbatim. Failing and warning rows first; passes collapsed behind a count. */
-export function RuleChecklist({ rules, earlier }: { rules: Rule[]; earlier?: Map<string, EarlierPayment> }) {
+export function RuleChecklist({ rules, earlier, readerOpen = false }: { rules: Rule[]; earlier?: Map<string, EarlierPayment>; readerOpen?: boolean }) {
   if (!rules.length) return <p className="text-ink-soft">Policy has not checked this request yet.</p>;
   const { failing, passed } = orderRules(rules);
   return (
@@ -66,9 +66,9 @@ export function RuleChecklist({ rules, earlier }: { rules: Rule[]; earlier?: Map
           ))}
         </ul>
       ) : (
-        <p className="flex items-center gap-2 text-settled">
+        <p className="flex items-start gap-2 text-settled">
           <Mark passed colour="var(--settled)" />
-          Every check passed.
+          {readerOpen ? "Every rule passed. The agent's concerns are not rules; read them under What the agent read." : "Every check passed."}
         </p>
       )}
       {passed.length ? (

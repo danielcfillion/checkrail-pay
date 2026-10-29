@@ -140,7 +140,14 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
             <span className="mt-[3px]">
               <ToneIcon icon={tone.icon} />
             </span>
-            <span className="min-w-0">{decision.title}</span>
+            <span className="min-w-0">
+              {decision.title}
+              {decision.chip ? (
+                <span className="dense ml-2 inline-block whitespace-nowrap rounded-sm px-1.5 align-[1px]" style={{ background: "var(--sheet)", color: tone.text, boxShadow: `inset 0 0 0 1px ${tone.rule}` }}>
+                  {decision.chip}
+                </span>
+              ) : null}
+            </span>
           </h2>
           <p className="mt-1 pl-[26px] text-ink">
             {decision.evidence}
