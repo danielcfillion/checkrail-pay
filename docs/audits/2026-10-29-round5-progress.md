@@ -11,16 +11,15 @@ Working note, updated as work lands. Status as of 29 Oct 2026.
 ## Done so far
 
 - Baseline on `acc039d`: 55 test files, 426 tests passed and 1 skipped; typecheck, lint and build clean.
-- `npm audit --omit=dev` reports 0 vulnerabilities. `npm audit` reports 4 moderate findings, all in dev tooling (esbuild through drizzle-kit). Decision: keep as accepted dev-only risk and record it in the response file.
-- A fresh security reviewer is running against `acc039d` with the standard scope: money path, login and persona header, encrypted bank numbers, PayPal and Stellar adapters, the webhook route, the agent prompt-injection surface, the Render setup, the `npm audit` question and the Soroban contract.
+- The reviewer's report is saved as `security-2026-10-29-r5.md`. Ratings: security 7, hosted demo 8, moving real money 4. Not satisfied while three Must-fix items stood.
+- Fixed and pushed, each with tests: SEC5-1 (departure import), SEC3-1 and SEC3-2 (statement references), SEC2-9 with SEC2-10, SEC2-11 and part of SEC5-7 (contract), SEC5-2 (payout hash).
+- `npm audit` decision recorded in `2026-10-29-response.md`: 0 production vulnerabilities, 4 moderate dev-only, accepted.
+- Full suite after SEC5-2: 56 files, 434 tests passed and 1 skipped; typecheck clean; contract 16 tests pass.
 
 ## Left to do
 
-1. Save the reviewer's report as `docs/audits/security-2026-10-29-r5.md`.
-2. Fix every Must-fix and Should-fix item, each with a test.
-3. Run the full check list: `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm run demo:replay`.
-4. Record what changed in `docs/audits/2026-10-29-response.md`, including the accepted dev-only `npm audit` risk.
-5. Open the pull request into `mac-import-2026-10-29`.
-6. Stop this track when the reviewer is satisfied with no Must-fix items outstanding; otherwise run another round.
+Should-fix items not yet done, roughly in order of value: SEC2-8 (run release shows each item's warnings), SEC5-3 (throttle: per-username counter, minimum password length for live, confirm Render's header), SEC2-7 (mixed-script flag), SEC5-4, SEC5-5, SEC5-6, SEC5-8, then contract expiry and time-to-live.
 
-If a session ends before step 5, whatever is finished is on this branch. Check `git log` for fix commits and this file for the list above.
+Then: run lint, build and `npm run demo:replay` on the final branch, update the response file with the final list, open the pull request into `mac-import-2026-10-29`, and run round 6 with a fresh reviewer. Stop this track when a reviewer is satisfied with no Must-fix items outstanding.
+
+If a session ends early, whatever is finished is on this branch. Check `git log` for fix commits, and `2026-10-29-response.md` for the status of each finding.
