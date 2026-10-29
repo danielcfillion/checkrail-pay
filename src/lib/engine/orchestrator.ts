@@ -516,7 +516,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -566,14 +566,14 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
   const outcome = evaluatePolicy(policy, {
-    obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId },
+    obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId, createdAt: ob.createdAt },
     vendor,
     evidence: myEvidence,
     ai,
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
+    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
     invoiceDate: ob.invoiceDate,

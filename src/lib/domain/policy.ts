@@ -213,7 +213,13 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   //   c) same vendor, same amount, settled in the last 30 days with no shared identifier: a warning that forces approval.
   {
     // Earlier payments on the same bill are its other parts; the bill check above stops them adding up to too much.
-    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && p.state !== "refunded" && !(bill && p.billId === bill.id));
+    // Which other requests count as "already used": money that is committed (approved, in flight, paid, disputed) always
+    // does, in any order, so a later payment still stops an earlier request paying the same job twice. A request still
+    // open counts only if it is earlier than this one, so the original is never blocked by its own duplicate. A blocked,
+    // cancelled, failed or refunded request never counts: it will not pay, so it must not stop the one it duplicates.
+    const committed = ["approved", "execution_pending", "sent", "settled", "disputed"];
+    const earlier = (p: { obligationId: string; createdAt?: string }) => !p.createdAt || !obligation.createdAt || p.createdAt < obligation.createdAt || (p.createdAt === obligation.createdAt && p.obligationId < obligation.id);
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && !["cancelled", "failed", "refunded", "blocked"].includes(p.state) && !(bill && p.billId === bill.id) && (committed.includes(p.state) || earlier(p)));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;

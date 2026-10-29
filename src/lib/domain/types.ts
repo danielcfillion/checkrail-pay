@@ -191,6 +191,8 @@ export interface PolicyInput {
     currency: string | null;
     sourceRef: string | null;
     vendorId: string | null;
+    /** ISO time it was received; with each earlier request's, decides which of two open duplicates is the original. */
+    createdAt?: string;
   };
   vendor: VendorPayoutProfile | null;
   evidence: EvidenceItem[];
@@ -219,6 +221,8 @@ export interface PolicyInput {
     keys?: string[];
     /** ISO time of last update, for the same-amount recency check. */
     updatedAt?: string;
+    /** ISO time it was received, to tell an earlier request from a later one. */
+    createdAt?: string;
     /** Bill the earlier obligation paid against: payments on the same bill are parts of one invoice, not duplicates. */
     billId?: string | null;
   }>;
