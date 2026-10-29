@@ -115,3 +115,12 @@ export function autopilotSentence(statement: CheckStatement): string {
   if (statement.kind === "clear") return `Every check passed and this is within your caps, so the agent will send it when the cancel window ends. ${policy}`;
   return `${statement.text} It is within your caps, so the agent will send it when the cancel window ends unless you cancel it. ${policy}`;
 }
+
+/** The statement as a chip and one line for a place that shows less than the request page (a countdown, a list row); null when clear. */
+export type ConcernNote = { chip: string; line: string };
+
+export function concernNote(statement: CheckStatement): ConcernNote | null {
+  if (statement.kind === "clear" || !statement.chip) return null;
+  const line = statement.text.replace(/^Rules passed, but /, "").replace(/^./, (c) => c.toUpperCase());
+  return { chip: statement.chip, line };
+}

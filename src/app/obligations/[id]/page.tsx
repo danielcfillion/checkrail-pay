@@ -5,8 +5,8 @@ import { notFound } from "next/navigation";
 import { getBusiness, getObligationDetail, listVendors } from "@/lib/queries";
 import { toBaseMinor } from "@/lib/fx";
 import { billBalance } from "@/lib/engine/bills";
-import { bills as billsTable, obligations as obligationsTable } from "@/lib/db/schema";
-import { and, eq, gt } from "drizzle-orm";
+import { bills as billsTable } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate, dualControlGap } from "@/lib/engine/orchestrator";
 import { InvoiceDates } from "@/components/InvoiceDates";
@@ -23,10 +23,11 @@ import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
 import { DecisionCard } from "@/components/DecisionCard";
-import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE, type ReaderView } from "@/components/check-statement";
+import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE } from "@/components/check-statement";
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
-import { amountAsRead, correctionLine, RECORDED_LABEL, selectRecordedReading, summaryWithoutCount } from "@/components/agent-reading";
+import { correctionLine, RECORDED_LABEL, summaryWithoutCount } from "@/components/agent-reading";
+import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
 
@@ -76,15 +77,8 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
   const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
   const caption = o.state === "blocked" && o.blockedReason ? checkLineCaption(o.blockedReason, earlier) : undefined;
-  // The reading the page shows under "What the agent read" is the one the band has to agree with; it is chosen below.
-  const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
-  const newer = o.vendorId && o.sourceRef ? getDb().select({ id: obligationsTable.id }).from(obligationsTable).where(and(eq(obligationsTable.vendorId, o.vendorId), eq(obligationsTable.sourceRef, o.sourceRef), gt(obligationsTable.createdAt, o.createdAt))).get() : undefined;
-  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
-  const reader: ReaderView | null = recorded
-    ? { confidence: recorded.confidence, concerns: recorded.flags, missing: recorded.missing, recorded: true }
-    : o.aiConfidence !== null
-      ? { confidence: o.aiConfidence, concerns: d.aiFlags, missing: d.aiMissing, recorded: false }
-      : null;
+  // The reading the page shows under "What the agent read" is the one the band has to agree with.
+  const { recorded, reader } = readingFor(d);
   const decision: Decision = decide({
     state: o.state,
     vendorName: o.vendorName,

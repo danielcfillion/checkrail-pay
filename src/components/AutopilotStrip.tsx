@@ -5,11 +5,14 @@ import { formatMoney, formatMoneyShort } from "@/lib/format";
 import { ScheduledReleases } from "./ScheduledReleases";
 import { recentAgentReleases } from "@/lib/queries";
 import { PauseButton } from "./PauseButton";
+import { readerNotesFor } from "@/lib/reading";
 
 /** Autonomy at a glance on the overview: the level, what is used of today's cap, what is about to go out, and the stop control. */
 export function AutopilotStrip({ businessId, currency, can = { stop: true, settings: true } }: { businessId: string; currency: string; can?: { stop: boolean; settings: boolean } }) {
   const ap = autopilotStatus(getDb(), businessId);
   const released = recentAgentReleases();
+  // A countdown is where a person can stop an automatic payment, so it carries what the request page says about the reading.
+  const notes = readerNotesFor(ap.scheduled.map((s) => s.id));
   const on = ap.level === "autopilot" && !ap.paused;
   const name = ap.level === "autopilot" ? (ap.paused ? "Autopilot paused" : "Autopilot on") : ap.level === "review" ? "Review everything" : "Assist";
   const line =
@@ -48,7 +51,7 @@ export function AutopilotStrip({ businessId, currency, can = { stop: true, setti
         canCancel={can.stop}
         windowSeconds={ap.cancelWindowSeconds}
         released={released}
-        rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))}
+        rows={ap.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt, concern: notes[s.id] ?? null }))}
       />
     </section>
   );

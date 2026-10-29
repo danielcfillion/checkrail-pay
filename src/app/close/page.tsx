@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { runAs } from "@/lib/engine/requestContext";
 import { getBusiness, listObligations, waitingIdsFor } from "@/lib/queries";
 import { reasonFor } from "@/components/ObligationList";
+import { readerNotesFor } from "@/lib/reading";
 import { getDailyClose, listSignOffs, type AttentionItem, type CloseItem } from "@/lib/engine/dailyClose";
 import { formatDateTime, formatMoney, formatMoneySymbol, humaniseAction, humaniseActor, pluralise, stateLabel } from "@/lib/format";
 import { CapMeter } from "@/components/CapMeter";
@@ -55,6 +56,7 @@ export default async function DailyClosePage() {
         .map((r) => ({ id: r.id, vendorName: r.vendorName, amountMinor: r.amountMinor, currency: r.currency, note: reasonFor(r) || stateLabel(r.state) }))
     : c.waitingOnYou.map((w) => ({ id: w.id, vendorName: w.vendorName, amountMinor: w.amountMinor, currency: w.currency, note: w.note ? plainReason(w.note) : stateLabel(w.state) }));
   const others = mineIds ? c.waitingOnYou.filter((w) => !mineIds.has(w.id)) : [];
+  const scheduledNotes = readerNotesFor(c.scheduled.map((s) => s.id));
   const quiet = !c.attention.length && !c.paidByAgent.length && !c.paidByPeople.length && !c.settingsChanges.length;
 
   return (
@@ -155,7 +157,7 @@ export default async function DailyClosePage() {
 
           {c.scheduled.length ? (
             <Panel title="About to go out" aside={`${c.scheduled.length} scheduled`} padded={false}>
-              <ScheduledReleases compact windowSeconds={c.autopilot.cancelWindowSeconds} canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt }))} />
+              <ScheduledReleases compact windowSeconds={c.autopilot.cancelWindowSeconds} canCancel={!viewer || viewer.can("stop")} rows={c.scheduled.map((s) => ({ id: s.id, vendorName: s.vendorName, amountText: formatMoney(s.amountMinor, s.currency), releaseAt: s.releaseAt, concern: scheduledNotes[s.id] ?? null }))} />
             </Panel>
           ) : null}
 
