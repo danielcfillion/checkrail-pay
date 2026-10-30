@@ -4,7 +4,7 @@ export type Item = { readonly href: string; readonly label: string; readonly ico
 
 /** Sidebar groups, in order. Anything not listed falls into the last group. */
 export const NAV_GROUPS: ReadonlyArray<{ label: string; hrefs: readonly string[] }> = [
-  { label: "Pay", hrefs: ["/", "/obligations", "/exceptions", "/runs"] },
+  { label: "Pay", hrefs: ["/", "/obligations", "/exceptions", "/runs", "/agents"] },
   { label: "People", hrefs: ["/vendors"] },
   { label: "Books", hrefs: ["/ledger", "/accounting", "/books", "/close"] },
   { label: "Admin", hrefs: ["/audit", "/settings"] },

@@ -68,6 +68,7 @@ export function decidedByFor(actor: string | null | undefined): { kind: DecidedK
   if (!actor) return { kind: "unknown", label: "Not recorded" };
   if (actor.startsWith("user:")) return { kind: "person", label: humaniseActor(actor) };
   if (actor.startsWith("agent:") || actor.startsWith("ai:")) return { kind: "agent", label: humaniseActor(actor) };
+  if (actor.startsWith("mcp:")) return { kind: "agent", label: humaniseActor(actor) };
   return { kind: "unknown", label: humaniseActor(actor) };
 }
 

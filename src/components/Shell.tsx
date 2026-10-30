@@ -12,6 +12,7 @@ export const NAV = [
   { href: "/", label: "Overview", icon: "overview" },
   { href: "/obligations", label: "Inbox", icon: "inbox" },
   { href: "/runs", label: "Payment runs", icon: "runs" },
+  { href: "/agents", label: "Agents", icon: "agents" },
   { href: "/vendors", label: "Vendors", icon: "vendors" },
   { href: "/ledger", label: "Ledger", icon: "ledger" },
   { href: "/exceptions", label: "Exceptions", icon: "exceptions" },

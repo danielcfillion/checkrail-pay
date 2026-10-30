@@ -486,3 +486,30 @@ export const vendorLinks = sqliteTable(
   },
   (t) => [uniqueIndex("vendor_links_token_hash_unique").on(t.tokenHash)]
 );
+
+/**
+ * Every question an outside agent asked through the agent guard (MCP or HTTP), and what Checkrail answered. Append-only.
+ * A check judges a copy of the books and changes nothing else; a payment request also links the request it created.
+ * The owner reads this to see which agents asked, for what, and what was refused.
+ */
+export const agentChecks = sqliteTable(
+  "agent_checks",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    agent: text("agent").notNull(), // the agent key's name, e.g. "claude-desktop"
+    tool: text("tool").notNull(), // "check_payment" | "request_payment"
+    verdict: text("verdict").notNull(), // "pay" | "hold" | "block" | "refused"
+    payee: text("payee"),
+    payeeKey: text("payee_key"), // lower-cased payee, for spotting an agent trying amount after amount
+    amountMinor: integer("amount_minor"),
+    currency: text("currency"),
+    reference: text("reference"),
+    summary: text("summary").notNull(),
+    rulesJson: text("rules_json"), // rule ids that did not pass
+    obligationId: text("obligation_id"), // request_payment only: the request it created
+    idempotencyKey: text("idempotency_key"), // request_payment only: the agent's key for "this one payment"
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey)]
+);

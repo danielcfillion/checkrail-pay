@@ -20,7 +20,7 @@ export const PUBLIC_HEADER = "x-checkrail-public";
  *    dev server, can act as one of the demo team to see roles at work. The real login is kept in the audit.
  *
  * Exempt, by exact path: the PayPal webhook (PayPal cannot send credentials; the route verifies PayPal's
- * signature itself) and the vendor onboarding and evidence pages (a vendor has no login; each link carries a
+ * signature itself), the agent endpoint /api/mcp (agents send an agent key, which the route checks) and the vendor onboarding and evidence pages (a vendor has no login; each link carries a
  * single-use token). Static build assets are excluded by the matcher.
  */
 /*
@@ -46,6 +46,8 @@ export function middleware(req: NextRequest) {
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
 
   if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
+  // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
+  if (path === "/api/mcp") return NextResponse.next({ request: { headers } });
   // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
   if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return NextResponse.next({ request: { headers } });
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {

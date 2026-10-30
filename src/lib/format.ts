@@ -287,6 +287,9 @@ export function humaniseActor(actor: string | null | undefined): string {
       return SYSTEM_SOURCES[rest ?? ""] ?? "System";
     case "agent":
       return rest === "autopilot" ? "Autopilot" : "Agent";
+    case "mcp":
+      // An outside agent, through the agent guard: never Autopilot, and never able to approve or send.
+      return `Outside agent ${rest ?? ""}`.trim();
     case "policy":
       return "Policy";
     case "router":

@@ -5,15 +5,16 @@ Paste each section into the matching Devpost field. Numbers here match the READM
 ## Prizes to select
 
 1. **Best Use of PayPal + AI** (first). PayPal's own records decide a block: before any payment, the app reads PayPal Transaction Search itself and blocks a job PayPal already paid, citing the PayPal transaction id ("PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com"). Claude reads the request and checks the same history with read-only Transaction Search and Invoicing calls, and Books reconciles back from Transaction Search. PayPal and AI do the work together on every payment.
-2. **Best Demo Delivery** (second).
-3. **Best Use of AG Grid** (sponsor prize). Payment runs and the ledger are AG Grid tables with filters and CSV export.
+2. **Best Use of Agentic Commerce** (second). Checkrail is an MCP server any agent asks before it pays a supplier: `check_payment` answers pay, hold or block with the rule and PayPal's transaction id, and `request_payment` lets the agent hand Checkrail the payment, which Autopilot sends over PayPal Payouts only inside the owner's caps. The agent transacts; it never holds the keys.
+3. **Best Demo Delivery** (third).
+4. **Sponsor prize:** decided by the sponsor builds (see the rules checklist). Plain AG Grid tables alone do not meet AG Grid's brief, which asks for AG Studio.
 
 Render stays the host of the judging demo (see "Built with"); it is not the sponsor prize we select.
 
 A project can win one grand prize or one honourable mention, plus one sponsor prize.
 
 Rules checklist before submitting:
-- Select Best Use of AG Grid only once the submitted build has `/runs` and `/ledger` on AG Grid (the grid lane's work). If it has not merged, select no sponsor prize rather than claim it.
+- Select a sponsor prize only for a build that meets that sponsor's own brief (AG Grid asks for AG Studio; Bryntum for Gantt, Scheduler or Calendar in a real workflow; Render for Workflows). Otherwise select none rather than claim it.
 - Public repo with the MIT licence visible in the repo's About section.
 - Video under 3 minutes, public on YouTube, no copyrighted music.
 - Judges can test free until 15 Dec 2026: the hosted demo link plus the run instructions in the README. Put the hosted login in the testing instructions field, with this line: "The hosted demo runs on simulated rails with the rule-based reader, and shows Claude's readings recorded from a live run; the video shows Claude live." Keep the Render plan awake through 15 Dec. It is one shared database that restores the four opening requests after 30 minutes without use; Reset demo on /demo does the same at any time.
@@ -59,6 +60,8 @@ Every request travels one line through five stations: read, verified, routed, pa
 
 **Reconciled from PayPal.** Read from PayPal on the Books page pulls the statement from Transaction Search and ties a returned payout to its original payout by reference id.
 
+**Agents ask first.** PayPal moves money for people. Next it moves money for agents, and agents need a check rail. Checkrail is an MCP server: before any agent pays a supplier through any tool, it calls `check_payment` and gets pay, hold or block, the rule that decided, what would clear it, and PayPal's transaction id when PayPal already paid the job. The check runs on an in-memory copy of the books, so nothing is paid or saved. With the request scope, the agent hands Checkrail the payment instead; it lands in the inbox, and Autopilot sends it only inside the owner's caps after the cancel window. Trust is per agent: what an assistant attaches is its own say-so and a person approves, while a booking system's own agent can be made a system of record. An agent that tries amount after amount for one payee is held for a person.
+
 **What it does not do.** It never holds funds: money goes from the business's own PayPal, Wise or bank account. The model has no tool that moves money.
 
 **Who pays and how much (planned pricing, to be confirmed).** Free Review plan for 30 checked payments a month. Operator plan at USD 79 a month for 300 checked payments, then USD 0.20 per extra payment. Practice plan for bookkeepers at USD 35 per client business a month. Priced per checked payment, never as a percentage of money moved. Blocking one wrong USD 80 request a month pays for the Operator plan.
@@ -88,9 +91,11 @@ The domain layer is deliberately boring: a typed state machine with whitelisted 
 
 The agent is Claude (`claude-sonnet-5-5`) through the Anthropic SDK, with a small tool set: look up vendor, read evidence, vendor history, three read-only PayPal REST calls (`paypal_list_transactions` on Transaction Search, `paypal_list_invoices` and `paypal_get_invoice` on Invoicing), and submit interpretation. Its output is clamped and validated, and its concerns can only tighten a decision.
 
+The agent guard is a dependency-free JSON-RPC handler shared by two MCP transports: streamable HTTP at `/api/mcp` (agent keys as bearer tokens, rate limits, cross-origin refusal) and stdio for Claude Desktop. `check_payment` copies the SQLite database into memory, runs the real ingest and previews policy there, then throws the copy away; `request_payment` goes through the same ingest a clerk uses, with an idempotency key. Every question lands in an append-only agent log the owner reads on the Agents page.
+
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 617 tests in 69 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 648 tests in 71 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
 
 ## Challenges we ran into
 
@@ -122,13 +127,14 @@ A Zalo Official Account and a forward-to-email address for intake. A pilot with 
 
 ## Built with
 
-TypeScript, Next.js 15, React 19, Tailwind CSS 4, AG Grid, Drizzle ORM, SQLite (better-sqlite3), Anthropic SDK (Claude), PayPal Payouts REST API, PayPal Transaction Search and Invoicing REST APIs, Stellar SDK, PYUSD on Stellar (simulated), pdf.js, Vitest, Render (hosting).
+TypeScript, Next.js 15, React 19, Tailwind CSS 4, Model Context Protocol, AG Grid, Drizzle ORM, SQLite (better-sqlite3), Anthropic SDK (Claude), PayPal Payouts REST API, PayPal Transaction Search and Invoicing REST APIs, Stellar SDK, PYUSD on Stellar (simulated), pdf.js, Vitest, Render (hosting).
 
 ## Tools used and how they are integrated
 
 - **PayPal Payouts REST API**: the execution rail. One batch per payment, idempotency through `sender_batch_id` and `PayPal-Request-Id`, settlement by polling, a signature-verified webhook at `/api/webhooks/paypal` that only triggers a re-check. Proven in sandbox (batch RGS5PUZPH4CNY).
 - **PayPal Transaction Search and Invoicing REST APIs**: the app reads Transaction Search itself before every decision that can move money, and a PayPal record of the same job paid to the same payee blocks the payment with its transaction id (policy rule `paypal_history`). The same three read-only calls are given to Claude. Transaction Search also feeds Read from PayPal on the Books page (tested against fakes; needs live keys). Live, it needs Transaction search enabled on the PayPal app, and new payouts can take up to three hours to appear.
 - **Anthropic Claude**: reads requests and documents and returns a structured, validated interpretation with concerns and notes.
+- **Model Context Protocol**: Checkrail's agent guard. Any MCP agent (Claude Desktop, Claude Code, a booking system's agent) calls `check_payment` before paying and `request_payment` to have Checkrail pay; served over HTTP at `/api/mcp` and over stdio.
 - **Stellar SDK and PYUSD**: the second rail. A signed PYUSD payment with memo-based idempotency and Horizon polling. Simulated in the demo; never run on testnet.
 - **AG Grid**: the payment run builder and the ledger are AG Grid tables with column filters and CSV export.
 - **Render**: hosts the judging demo on simulated rails from `render.yaml`.

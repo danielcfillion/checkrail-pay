@@ -7,6 +7,7 @@
 - Blocks inflated and duplicate invoices against the evidence, and against PayPal's own record of what was already paid.
 - Pays the clean ones over PayPal, and the agent pays only inside your caps.
 - Lands every payment in the books, with a two-minute Daily close.
+- Answers any AI agent that asks before it pays a supplier: pay, hold or block, over MCP.
 
 **Try it.** Hosted demo and video: linked from the Devpost page. Login in the Devpost testing instructions.
 <!-- Founder: when they exist, replace the line above with:
@@ -41,6 +42,12 @@ Every request travels one line through five stations:
 4. **Paid.** Policy runs again, then the rail is called with an idempotency key on the attempt.
 5. **Reconciled.** Settlement is confirmed by polling the rail. Bills go to a Xero import file at approval, settlements export as CSV, and the PayPal statement is matched back line by line.
 
+## For agents
+
+PayPal moves money for people. Next it moves money for agents, and agents need a check rail.
+
+Checkrail is an MCP server (`/api/mcp` over HTTP, or `npm run -s mcp` on stdio). Before an agent pays a supplier through any tool, it calls `check_payment` and gets **pay**, **hold** or **block**, the rule that decided, what would clear it, and PayPal's transaction id when PayPal already paid that job. The check runs on an in-memory copy of the books: nothing is paid or saved. An agent with the request scope can hand Checkrail the payment with `request_payment`; it lands in the inbox, where policy and the owner's autonomy setting decide, and Autopilot sends it only inside the caps after the cancel window. No agent can approve or send, see payout details, or shop for a pass by trying amount after amount. Keys, trust levels and examples: [docs/AGENTS.md](docs/AGENTS.md). The Agents page shows every agent and every question.
+
 ## What is live and what is simulated
 
 As of 29 Oct 2026:
@@ -56,7 +63,8 @@ As of 29 Oct 2026:
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
-- **Tests:** 617 in 69 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
+- **Tests:** 648 in 71 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -205,7 +213,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-617 tests in 69 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+648 tests in 71 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 
@@ -214,9 +222,11 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     src/lib/ai/           Claude agent, read-only PayPal tools, rule-based reader
     src/lib/rails/        PayPal Payouts, Stellar, Wise (beta), bank file, mock adapters, fee model
     src/lib/accounting/   accounting records, CSV export, Xero mapping and bills file
-    src/app/              Next.js pages and API routes (export, PayPal webhook, autopilot tick)
-    scripts/              seed, replay, Stellar setup, screenshots
-    docs/                 Devpost text, video script, SCF application, business notes, benchmark, audits
+    src/lib/agent/        agent guard: MCP handler, agent keys and trust, check and request tools, rule glossary
+    src/lib/check/        judge a payment on a copy of the books; the historical re-check
+    src/app/              Next.js pages and API routes (export, PayPal webhook, autopilot tick, MCP)
+    scripts/              seed, replay, re-check, MCP over stdio, Stellar setup, screenshots
+    docs/                 agents guide, Devpost text, video script, business notes, benchmark, audits
 
 A Soroban spend-policy contract (caps, payee allow-list, cancel window and pause enforced on chain) lives in `contracts/spend-policy`; see its README.
 

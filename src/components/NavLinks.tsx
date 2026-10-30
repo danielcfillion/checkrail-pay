@@ -343,6 +343,14 @@ function Icon({ name }: { name: string }) {
           <path d="M8 5v3.3l2.2 1.3" />
         </svg>
       );
+    case "agents":
+      return (
+        <svg {...common}>
+          <rect x="3" y="4.5" width="10" height="8" rx="2" />
+          <path d="M8 2.5v2M6 8h.01M10 8h.01" />
+          <path d="M6.2 10.4h3.6" />
+        </svg>
+      );
     case "settings":
       return (
         <svg {...common}>
