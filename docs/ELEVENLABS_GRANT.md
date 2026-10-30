@@ -2,7 +2,7 @@
 
 For Daniel to submit from his own account (H12). Check the live program page for the current form fields and eligibility; the numbers on its pricing page (12 months free, 33M characters, aimed at real-time conversational agents) were read on 7 Oct 2026 and may change. Replace the bracketed items. The product name is provisional (see H11).
 
-**Company:** An Nhien Group Investment and Trading Company Limited (Vietnam). Founder: Daniel Fillion.
+**Company:** [the entity that will own Checkrail Pay, see F4 in `docs/FOUNDER_DECISIONS.md`]. Founder: Daniel Fillion.
 
 **Product (one sentence):** [Product name] is an AI payables control center that reads supplier payment requests, checks them against the evidence, blocks mistakes and duplicates, and pays over PayPal or Stellar, with a setting that lets the owner choose between approving each payment and letting the agent run inside spending limits.
 

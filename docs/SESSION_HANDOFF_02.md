@@ -4,7 +4,7 @@ Read this first. It replaces the "Honest state" and "Your queue" sections of MON
 
 ## Who and what
 
-Daniel Fillion (An Nhien Group, Vietnam-based Canadian, works on macOS). He asked me to act as project manager and lead developer on a solo build (not with Logistech): an AI payables ops and cross-border settlement layer for the PayPal AI Hackathon (Devpost, due Nov 12 2026 12:00 PT) and an SCF #46 Build Award application (due Nov 8 2026). It must stay open to accounting systems such as Xero. He wants the UX to be a showreel.
+Daniel Fillion (Vietnam-based Canadian, works on macOS). He asked me to act as project manager and lead developer on a solo build (not with Logistech): an AI payables ops and cross-border settlement layer for the PayPal AI Hackathon (Devpost, due Nov 12 2026 12:00 PT) and an SCF #46 Build Award application (due Nov 8 2026). It must stay open to accounting systems such as Xero. He wants the UX to be a showreel.
 
 Preferences: direct recommendations rather than option lists. No em dashes in anything written. He is not a developer by trade: give exact terminal commands one block at a time, and expect him to paste output back. Never ask him to paste a secret in chat, and never type credentials for him.
 

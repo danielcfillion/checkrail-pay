@@ -90,7 +90,7 @@ The agent is Claude (`claude-sonnet-5-5`) through the Anthropic SDK, with a smal
 
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 426 tests in 55 files. Six review rounds on 16 Oct by AI agents briefed as critics, and three further review rounds from 25 to 27 Oct by AI agents briefed as a security analyst and as an AP practitioner, each working from a clean copy of the repo (`docs/audits/`). No human security audit has been done yet. Round 1 findings were fixed with tests; round 2 findings are listed with their status in `docs/audits/`, and some remain open.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 604 tests in 68 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
 
 ## Challenges we ran into
 
@@ -118,7 +118,7 @@ Asking a person to approve after the AI did all the work gives them no context; 
 
 Get requests in where suppliers already send them, and prove it on a real operator's books.
 
-A Zalo Official Account and a forward-to-email address for intake. A pilot on the founder's own tour company in Review mode. A MISA export for Vietnamese books next to the Xero file. The Stellar rail running through an on-chain spend-policy contract, so the caps hold even if the server is compromised.
+A Zalo Official Account and a forward-to-email address for intake. A pilot with a small Vietnamese tour operator in Review mode. A MISA export for Vietnamese books next to the Xero file. The Stellar rail running through an on-chain spend-policy contract, so the caps hold even if the server is compromised.
 
 ## Built with
 

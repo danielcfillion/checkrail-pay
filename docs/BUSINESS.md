@@ -14,7 +14,7 @@ A pre-payment control layer for supplier requests that arrive without a purchase
 
 Why them first:
 - The pain is concrete: no purchase orders, evidence is a departure manifest or a job sheet, requests arrive in chat.
-- The founder runs one, so customer zero exists and the supplier network is shared with other operators.
+- The founder runs tour operations in Northern Vietnam, so the workflow is known first hand, and operators share many of the same suppliers.
 - Vietnam has 4,652 licensed international travel businesses as of July 2026 ([Viet Nam News](https://vietnamnews.vn/life-style/1797262/international-tour-operator-growth-signals-increased-travel-demand.html)).
 - The PayPal and Wise use case is real for **foreign-registered operators** (like the demo company, a US LLC) paying Vietnamese and Filipino contractors from a USD treasury. Vietnamese-registered operators pay local suppliers in VND by bank file.
 
@@ -66,10 +66,9 @@ Rules behind it:
 
 ## First 10 customers
 
-1. **Loop Tours (customer zero).** Its last 90 days of supplier payments re-checked in Review mode, then one month live in Review mode.
-2. **Three to five operators that share suppliers with Loop.** A homestay that invoices three operators gets one onboarding link.
-3. **Two Hanoi service-accounting firms** that keep books for small travel companies. They work in MISA. Offer a wholesale price.
-4. **Two foreign-owned operators** registered abroad and operating in Vietnam, with the real PayPal and Wise use case.
+1. **Three to five tour operators running northern loop departures.** Their last 90 days of supplier payments re-checked in Review mode, then one month live in Review mode. Operators share suppliers, so a homestay that invoices three operators gets one onboarding link.
+2. **Two Hanoi service-accounting firms** that keep books for small travel companies. They work in MISA. Offer a wholesale price.
+3. **Two foreign-owned operators** registered abroad and operating in Vietnam, with the real PayPal and Wise use case.
 
 PayPal and SCF give credibility and at most a showcase listing. Neither is a revenue channel.
 

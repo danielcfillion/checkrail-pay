@@ -12,7 +12,7 @@ Draft for a future round. Whether and when to apply is founder decision F3 in `d
 
 **Category.** Payments (agent payments, B2B supplier payouts).
 
-**Stage.** Contract written and unit-tested (11 tests); not yet deployed. The app it serves is a working MVP with a proven PayPal sandbox payout and a live Claude reader. Details below.
+**Stage.** Contract written and unit-tested (20 tests); not yet deployed. The app it serves is a working MVP with a proven PayPal sandbox payout and a live Claude reader. Details below.
 
 **Team.** Daniel Fillion, solo founder. Runs a tour operations business in Northern Vietnam that pays exactly this kind of supplier roster.
 
@@ -74,8 +74,8 @@ Checkrail Pay reads each supplier request (Claude, or a rule-based reader), chec
 
 As of 29 Oct 2026:
 
-- **Spend-policy contract:** written in Rust on soroban-sdk 29.0.1. 11 unit tests pass with `cargo test` (caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation). Not deployed to testnet. Not called by the app yet.
-- **Checkrail Pay app:** 426 tests in 55 files, named policy rules, a typed state machine with whitelisted transitions, idempotency on every rail attempt, autonomy levels with caps and a cancel window, a Daily close with audited sign-off, a Xero bills import file and CSV export.
+- **Spend-policy contract:** written in Rust on soroban-sdk 29.0.1. 20 unit tests pass with `cargo test` (caps, rolling window, allow-list, cancel, pause and resume, idempotency, lowered limits at release, a failed transfer leaving the payment pending, owner-only and agent-only authorisation). Not deployed to testnet. Not called by the app yet.
+- **Checkrail Pay app:** 604 tests in 68 files, named policy rules, a typed state machine with whitelisted transitions, idempotency on every rail attempt, autonomy levels with caps and a cancel window, a Daily close with audited sign-off, a Xero bills import file and CSV export.
 - **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
 - **Claude (`claude-sonnet-5-5`): has read the full demo live,** with three read-only PayPal REST calls (Transaction Search and Invoicing).
 - **Stellar PYUSD rail: simulated.** The adapter is written to the Stellar SDK with memo-based idempotency and has never run on testnet.
@@ -121,7 +121,7 @@ Checkrail Pay routes between PayPal Payouts, Stellar PYUSD, Wise and a Vietnames
 - **No testnet transaction yet.** The build environment had no network path to Stellar. Mitigation: a real testnet release from the running app is a condition of applying (F3).
 - **Anchors accept USDC, not PYUSD.** Mitigation: fund contracts in USDC where an anchor leg is needed, or path-pay PYUSD to USDC first. Liquidity is unproven: our benchmark found no PYUSD/USDC pool with reserves, so slippage will be measured on testnet first.
 - **Solo founder.** Mitigation: hire a part-time Soroban engineer from the testnet tranche. The contract's security review goes through SCF's Audit Bank, not this budget.
-- **No traction yet.** Mitigation: the founder's own tour company is customer zero, and pilot letters are being sought from operators that share its suppliers.
+- **No traction yet.** Mitigation: pilot letters are being sought from tour operators in Northern Vietnam. Until they arrive there is no traction to show, and this draft says so.
 - **Regulatory posture.** The business owns the contract and its funds; Checkrail sends instructions and never holds money. A payments-law opinion is needed and is paid for outside this grant (SCF does not fund legal fees).
 - **AI error.** The model has no spending authority in the app, and with this contract a compromised app cannot overspend either.
 
