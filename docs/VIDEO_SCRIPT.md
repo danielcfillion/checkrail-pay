@@ -34,6 +34,20 @@ Crop values are relative to the full 1440px frame. "2x" means the crop is half t
 
 The countdown runs ten minutes by default. Either set a short cancel window in Settings before the take (the caption band then says "Cancel window shortened for the video; default 10 minutes"), or keep the default and cut from the countdown to the sent state with a visible jump cut and a caption "10 minutes later". Never fake the transition.
 
+## The agent beat (added 31 Oct, replaces the Ana shot at 1:58 to 2:12)
+
+The line the video is built around: "PayPal moves money for people. Next it moves money for agents, and agents need a check rail." Use it as the hook over the opening motion graphic and again, shorter, here.
+
+| Time | On screen | Crop and zoom | Action | Voiceover |
+|---|---|---|---|---|
+| 1:58 to 2:05 | Claude Desktop with two MCP servers connected: PayPal's and Checkrail. The prompt typed: "Pay Phuong $960 for the van, he needs it today." | 1.5x on the chat | Send the prompt | And it is not only me. Agents are starting to pay people. |
+| 2:05 to 2:14 | Claude's tool call to `check_payment` and Checkrail's answer: "Do not pay: Rate card and departure HG-4D-0927 say USD 800.00 ... this asks for USD 960.00." Claude's reply that it will not pay and why | 2x on the verdict, then on Claude's reply | Hold on "Do not pay" | Before any agent pays a supplier, it asks Checkrail. Blocked, and it tells me why. PayPal moves money for agents now. Agents need a check rail. |
+| 2:14 to 2:18 | The Agents page in Checkrail: the new row, Blocked | 2x on the row | Hold | Every question an agent asks lands here. |
+
+Prep: on the Mac, add Checkrail to Claude Desktop (`docs/AGENTS.md`, local stdio, checks only), reseed, then rehearse the prompt once. If Claude answers before calling the tool, add to the prompt: "Check it with Checkrail first."
+
+Ana's unclaimed payout moves to the Devpost text and the README; the Daily close shot keeps its place after this beat.
+
 ## Off-camera prep (do this before the take)
 
 1. **Before 1:27, set up the autopilot shot.** Follow /demo step 6 to create the autopilot-eligible request, with autonomy still on Assist: New request, type "Trip sheet attached for Rosa, please pay.", upload `docs/demo-documents/tripsheet-ceb2d-1024.pdf` (USD 190) and create it. Rosa is PayPal only, and the business's own rate card (USD 95 a day) and departure CEB-2D-1024 (2 days) confirm USD 190, so policy clears it. (Rosa's own invoice, `invoice-rosa-0942.pdf`, would wait for a person: a vendor's own invoice never auto-pays.) With `DEMO_PAYPAL_RECIPIENT_ROSA` set, the payout lands in your second sandbox account, so the agent's send on camera is a real sandbox payout. When you switch to Autopilot on camera it is scheduled with a ten-minute countdown.
