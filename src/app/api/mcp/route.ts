@@ -22,6 +22,8 @@ export const runtime = "nodejs";
 
 const BODY_LIMIT = 64 * 1024;
 const PER_AGENT_LIMIT = 60; // calls a minute
+const IN_FLIGHT_LIMIT = 2; // calls at once per agent, so one agent cannot queue every other behind its reader runs (AG3-10)
+const inFlight = new Map<string, number>();
 const BAD_KEY_LIMIT = 20; // wrong keys per address per 15 minutes
 const perAgent = newThrottle();
 const badKeys = newThrottle();
@@ -73,7 +75,17 @@ export async function POST(req: Request) {
   }
   const asked = req.headers.get("mcp-protocol-version");
   const version = asked && (SUPPORTED_VERSIONS as readonly string[]).includes(asked) ? asked : SUPPORTED_VERSIONS[0];
-  const reply = await handleMcp(message, { db: getDb(), agent, version: (pkg as { version: string }).version });
+  const name = agent.name;
+  if ((inFlight.get(name) ?? 0) >= IN_FLIGHT_LIMIT) return deny(429, `At most ${IN_FLIGHT_LIMIT} calls at once per agent; wait for an answer before sending more`, { "Retry-After": "2" });
+  inFlight.set(name, (inFlight.get(name) ?? 0) + 1);
+  let reply: Awaited<ReturnType<typeof handleMcp>>;
+  try {
+    reply = await handleMcp(message, { db: getDb(), agent, version: (pkg as { version: string }).version });
+  } finally {
+    const left = (inFlight.get(name) ?? 1) - 1;
+    if (left > 0) inFlight.set(name, left);
+    else inFlight.delete(name);
+  }
   if (!reply) return new Response(null, { status: 202 });
   return NextResponse.json(reply, { headers: { "MCP-Protocol-Version": version, "Cache-Control": "no-store" } });
 }

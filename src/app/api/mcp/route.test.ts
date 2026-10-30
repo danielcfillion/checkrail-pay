@@ -116,6 +116,13 @@ describe("POST /api/mcp", () => {
     expect(re.test("/api/mcpx")).toBe(true);
   });
 
+  it("AG3-10: one agent has at most two calls in flight", async () => {
+    const check = () => post(rpc("tools/call", { name: "check_payment", arguments: { payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" } }), auth);
+    const codes = (await Promise.all([check(), check(), check(), check()])).map((r) => r.status);
+    expect(codes.filter((c) => c === 429).length).toBeGreaterThan(0);
+    expect(codes.filter((c) => c === 200).length).toBeGreaterThanOrEqual(2);
+  });
+
   it("refuses an oversized body and reports bad JSON", async () => {
     expect((await post("x".repeat(70_000), auth)).status).toBe(413);
     expect((await post("{not json", auth)).status).toBe(400);

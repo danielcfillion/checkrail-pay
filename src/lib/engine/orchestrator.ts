@@ -15,7 +15,7 @@ import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerpri
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
-import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now } from "../domain/ids";
+import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
 import { listPayPalTransactionsRaw } from "../ai/paypalTools";
@@ -64,6 +64,9 @@ export interface StatedFields {
   currency: string;
   sourceRef: string | null;
   flags?: string[];
+  /** The caller is a system of record (an agent key with attest). An untrusted caller's open request does not stop
+   *  other requests for the job until a person approves it (agent guard review AG3-3). */
+  trusted?: boolean;
 }
 
 const SOURCE_TYPES: readonly SourceType[] = ["invoice", "job_completion", "operator_instruction", "booking"];
@@ -143,7 +146,7 @@ export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<s
     if (rawInput.stated) {
       const s = rawInput.stated;
       if (!isValidAmountMinor(s.amountMinor) || !SUPPORTED_CURRENCIES.includes(s.currency)) throw new Error("Stated amount or currency is invalid");
-      const stated: StatedFields = { vendorId: s.vendorId ?? null, amountMinor: s.amountMinor, currency: s.currency, sourceRef: s.sourceRef ?? null, flags: (s.flags ?? []).map((f) => String(f).slice(0, 300)).slice(0, 5) };
+      const stated: StatedFields = { vendorId: s.vendorId ?? null, amountMinor: s.amountMinor, currency: s.currency, sourceRef: s.sourceRef ?? null, flags: (s.flags ?? []).map((f) => String(f).slice(0, 300)).slice(0, 5), trusted: s.trusted === true };
       audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.stated", detail: { ...stated } });
     }
     for (const [n, e] of (input.evidence ?? []).entries()) {
@@ -205,7 +208,7 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   const ai = { ...run.interpretation };
   // Fields a structured caller sent are the request; the reader's reading of them only describes it.
   const statedRow = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
-  if (statedRow) applyStated(ai, JSON.parse(statedRow.detail ?? "{}") as StatedFields, vendorProfiles, ev, ob.rawInput);
+  if (statedRow) applyStated(ai, JSON.parse(statedRow.detail ?? "{}") as StatedFields, vendorProfiles, ev, ob.rawInput, amended);
   if (amended.has("amountMinor")) {
     ai.amountMinor = ob.amountMinor;
     ai.flags = ai.flags.filter((f) => !/amount differs|differs from/i.test(f));
@@ -277,7 +280,7 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
  * reference was taken from text the caller wrote, so its concerns about those figures are replaced by checks on the
  * fields themselves; every other concern stays. Policy then judges exactly what was sent (agent guard review AG2-1).
  */
-function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: VendorPayoutProfile[], ev: EvidenceItem[], rawInput: string): void {
+function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: VendorPayoutProfile[], ev: EvidenceItem[], rawInput: string, amended: Set<string>): void {
   const vendor = s.vendorId ? vendorProfiles.find((v) => v.id === s.vendorId) ?? null : null;
   const otherFigure = ai.amountMinor !== s.amountMinor || ai.currency !== s.currency;
   const differs = otherFigure || ai.vendorId !== (vendor?.id ?? null) || (ai.sourceRef ?? null) !== (s.sourceRef ?? null);
@@ -290,19 +293,35 @@ function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: Vend
   ai.amountMinor = s.amountMinor;
   ai.currency = s.currency;
   ai.sourceRef = s.sourceRef ?? null;
-  ai.flags = ai.flags.filter((f) => !/amount differs|differs from|Reference .* does not (match|appear)/i.test(f));
+  // Only the rules reader's own two sentences about the figures it read are dropped. Any other concern, from any
+  // reader, stays a hold, however it is worded (agent guard review AG3-2).
+  ai.flags = ai.flags.filter((f) => !/^Requested amount differs from /.test(f) && !/^Reference \S+ does not appear on any attached record/.test(f));
   ai.missing = ai.missing.filter((m) => !/vendor name|amount and currency|invoice, job or booking reference/i.test(m));
   const refs = ev.map((e) => e.reference).filter((r): r is string => Boolean(r) && !/^AGR-/i.test(r!));
   if (s.sourceRef && refs.length > 0 && !refs.some((r) => r.toUpperCase() === s.sourceRef!.toUpperCase())) {
     ai.flags.push(`Reference ${s.sourceRef} does not appear on any attached record (found ${[...new Set(refs)].join(", ")})`);
   }
-  ai.flags.push(...(s.flags ?? []));
+  // The caller's own concerns compare its fields with its words. Once a person has corrected a field, that
+  // comparison is about a figure no longer on the request (AG3-5).
+  if (!["vendorId", "amountMinor", "currency", "sourceRef"].some((f) => amended.has(f))) ai.flags.push(...(s.flags ?? []));
   const totals = ev.filter((e) => e.currency === s.currency && e.amountMinor != null).map((e) => e.amountMinor!);
   if (otherFigure) ai.paymentPart = paymentPartOf(rawInput, s.amountMinor, s.currency, totals);
   if (differs) {
     ai.description = `${vendor?.name ?? "Unknown payee"}${s.sourceRef ? ` (${s.sourceRef})` : ""}: ${fmt(s.amountMinor, s.currency)} as requested`;
     ai.summary = `${vendor?.name ?? "A payee not on file"} is asked for ${fmt(s.amountMinor, s.currency)}${s.sourceRef ? ` for ${s.sourceRef}` : ""}. ${ai.flags.length === 0 ? "No concerns noted." : `${ai.flags.length} concern${ai.flags.length === 1 ? "" : "s"} noted.`}`;
   }
+}
+
+/**
+ * The text policy reads to see whether the request names the payee. For a request with stated fields that is the
+ * requester's own words, not the header Checkrail wrote from the fields, so an agent is held to the same test as an
+ * integration sending the same text (agent guard review AG3-4). With no words, the fields are the request.
+ */
+const QUOTED = 'The request as the agent received it: "';
+function policyRequestText(db: Db, ob: typeof obligations.$inferSelect): string {
+  const stated = db.select({ id: auditEntries.id }).from(auditEntries).where(and(eq(auditEntries.obligationId, ob.id), eq(auditEntries.action, "obligation.stated"))).get();
+  const at = ob.rawInput.indexOf(QUOTED);
+  return stated && at >= 0 ? ob.rawInput.slice(at + QUOTED.length).replace(/"$/, "") : ob.rawInput;
 }
 
 function invoiceDatesFor(db: Db, ob: typeof obligations.$inferSelect, vendorId: string | null, docTexts: Array<string | null>, ev: EvidenceItem[], agentDue: string | null): { invoiceDate: string | null; dueDate: string | null } {
@@ -341,6 +360,13 @@ export function setObligationDates(db: Db, obligationId: string, actor: string, 
  * same text and records, through every check again: the vendor's details, the duplicate check (a refunded payment
  * does not count as paid), approval. The refunded one stays as it is, for the books.
  */
+function statedAgain(db: Db, ob: typeof obligations.$inferSelect): StatedFields | undefined {
+  const row = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, ob.id), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
+  if (!row || !ob.amountMinor || !ob.currency) return undefined;
+  const s = JSON.parse(row.detail ?? "{}") as StatedFields;
+  return { vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, flags: s.flags ?? [], trusted: s.trusted === true };
+}
+
 export async function repayRefunded(db: Db, obligationId: string, actor: string): Promise<string> {
   const ob = mustGet(db, obligationId);
   if (ob.state !== "refunded") throw new Error("Only a payment that came back can be paid again");
@@ -358,6 +384,8 @@ export async function repayRefunded(db: Db, obligationId: string, actor: string)
     evidence: ev.map(({ id: _id, provenance: _p, ...e }) => (void _id, void _p, e)),
     evidenceProvenance: ev.map((e) => e.provenance ?? "system"),
     actor,
+    // A request whose fields were stated keeps them, as paid, with the caller's own concerns (AG3-7).
+    stated: statedAgain(db, ob),
   });
   // The bill is already in Xero from the first time: the same invoice is not a second bill.
   if (ob.xeroBillExportedAt) db.update(obligations).set({ xeroBillExportedAt: ob.xeroBillExportedAt }).where(eq(obligations.id, id)).run();
@@ -465,7 +493,7 @@ function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
 /** The job identifiers this request names: its reference, its text, its evidence and its documents. */
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
-  return jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000)));
+  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...ev.flatMap((e) => sourceRefKeys(e.reference))])];
 }
 
 /**
@@ -482,7 +510,7 @@ export async function refreshPayPalHistory(db: Db, obligationId: string): Promis
     return null;
   }
   const keys = ownJobKeys(db, ob);
-  if (ob.sourceRef) keys.push(ob.sourceRef.toLowerCase());
+  keys.push(...sourceRefKeys(ob.sourceRef));
   // PayPal transactions this business has recorded as come back (refunded here) are not "already paid".
   const cameBack = db
     .select({ ref: settlements.statementRef })
@@ -581,9 +609,19 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
           const ev = db.select({ reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
           const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
-          return { ...p, keys: jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))) };
+          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...ev.flatMap((e) => sourceRefKeys(e.reference))])] };
         })
     : [];
+  // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
+  // request for the same job until a person approves it (agent guard review AG3-3). Committed money always counts.
+  const untrustedOpen = new Set(
+    prior.length
+      ? db.select({ id: auditEntries.obligationId, detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.action, "obligation.stated"), inArray(auditEntries.obligationId, prior.map((p) => p.obligationId)))).all()
+          .filter((r) => (JSON.parse(r.detail ?? "{}") as StatedFields).trusted !== true)
+          .map((r) => r.id!)
+          .filter((id) => ["drafted", "needs_evidence", "awaiting_approval", "verified", "blocked"].includes(prior.find((p) => p.obligationId === id)?.state ?? ""))
+      : [],
+  );
   const myEvidence = listEvidence(db, obligationId);
   // Exact references on this obligation (its own and its evidence's), checked against other payees' obligations.
   const myRefs = new Set([ob.sourceRef, ...myEvidence.map((e) => e.reference)].filter((r): r is string => Boolean(r)).map((r) => r.toUpperCase()));
@@ -629,7 +667,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
+    priorSourceRefs: prior.filter((p) => !untrustedOpen.has(p.obligationId)).map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
     invoiceDate: ob.invoiceDate,
@@ -645,7 +683,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     otherVendorRefs,
     acknowledgedWarnings,
     sharedPayoutWith: vendorRow ? sharedPayout(db, vendorRow) : [],
-    requestText: ob.rawInput,
+    requestText: policyRequestText(db, ob),
     vendorSettledMinors: prior.filter((p) => p.state === "settled" && p.amountMinor != null).map((p) => inBase(p.amountMinor, p.currency)),
     knownVendorNames: db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, ob.businessId)).all(),
     approvalsCount,
@@ -890,7 +928,9 @@ export async function amendObligation(db: Db, obligationId: string, actor: strin
   // The human's values are now authoritative; drop agent flags about the field that was corrected.
   // Approvals given before the correction were for different numbers; they no longer count.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
-  const flags = (JSON.parse(ob.aiFlagsJson ?? "[]") as string[]).filter((f) => !(patch.amountMinor != null && /amount differs/i.test(f)) && !(patch.sourceRef && /Reference .* does not match/i.test(f)));
+  // A requester's own comparison of its fields with its words is about fields a person has now set (AG3-5).
+  const corrected = patch.amountMinor != null || patch.currency != null || patch.sourceRef != null || patch.vendorId != null;
+  const flags = (JSON.parse(ob.aiFlagsJson ?? "[]") as string[]).filter((f) => !(patch.amountMinor != null && /amount differs/i.test(f)) && !(patch.sourceRef && /Reference .* does not match/i.test(f)) && !(corrected && f.startsWith("The agent's request text disagrees with the fields it sent")));
   db.update(obligations).set({ ...patch, aiFlagsJson: JSON.stringify(flags), updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   audit(db, { obligationId, actor, action: "obligation.amended", detail: { patch, note: note ?? null, previous: { amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId } } });
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.resolved", { note: note ?? null });

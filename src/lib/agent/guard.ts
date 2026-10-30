@@ -3,9 +3,10 @@ import { snapshotOf, type Db } from "../db";
 import { agentChecks, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
-import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES } from "../domain/money";
-import { distinctiveWords, isGenericWord, namesVendorFully, normaliseName } from "../domain/vendorNames";
-import { amountsIn, extractAmount, extractReference } from "../ai/extractor";
+import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
+import { canonicalRef, jobKeys, sourceRefKeys } from "../domain/ids";
+import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendorNames";
+import { amountsIn, extractAmount } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
 import { ingestObligation, previewPolicy } from "../engine/orchestrator";
@@ -70,6 +71,13 @@ export function amountToMinor(v: unknown, name = "amount"): number {
   return minor;
 }
 
+/** A reference as references are written: letters, digits and . _ / # : - only, no spaces or line breaks (AG3-1, AG3-9). */
+function refText(v: unknown, name: string): string | null {
+  const t = text(v, name, 64);
+  if (t !== null && !isValidSourceRef(t)) throw new AgentInputError(`${name} must be letters and digits, with only . _ / # : - between them (no spaces), as on the invoice or job sheet`);
+  return t;
+}
+
 export function validatePaymentArgs(raw: unknown) {
   if (!raw || typeof raw !== "object") throw new AgentInputError("Arguments must be an object");
   const a = raw as Record<string, unknown>;
@@ -83,7 +91,7 @@ export function validatePaymentArgs(raw: unknown) {
     return minor;
   };
   whole(amountMinor, "amount");
-  const reference = text(a.reference, "reference", 80);
+  const reference = refText(a.reference, "reference");
   const description = text(a.description, "description", 2000);
   const evRaw = a.evidence ?? [];
   if (!Array.isArray(evRaw) || evRaw.length > 10) throw new AgentInputError("evidence must be a list of at most 10 records");
@@ -97,7 +105,7 @@ export function validatePaymentArgs(raw: unknown) {
       label: text(r.label, `evidence[${i}].label`, 200, true)!,
       amountMinor: whole(r.amount == null || r.amount === "" ? null : amountToMinor(r.amount, `evidence[${i}].amount`), `evidence[${i}].amount`),
       currency,
-      reference: text(r.reference, `evidence[${i}].reference`, 80),
+      reference: refText(r.reference, `evidence[${i}].reference`),
       excerpt: text(r.excerpt, `evidence[${i}].excerpt`, 2000),
     };
   });
@@ -123,27 +131,69 @@ function vendorNamed(db: Db, businessId: string, payee: string) {
   return same.length === 1 ? same[0] : null;
 }
 
+/** Words that make a stated figure a rate: "a day", "per guest", "/night", "x 2", "at USD 95". */
+const RATE_WORDS = /\b(?:per|a|each)\s+(?:day|night|person|guest|pax|trip|hour|vehicle)\b|\/\s?(?:day|night|pax|person|guest)\b|\bx\s?\d|\d\s?x\b|×|\bat\s+(?:USD|PHP|VND|THB|\$|₱)/i;
+
+/**
+ * Does the amount sent follow from the figures stated: one of them, the difference of two (a total less a deposit),
+ * or, where the text states a rate, a whole number of that rate (two days at USD 95)?
+ */
+function amountFollows(sent: number, stated: number[], text: string): boolean {
+  if (stated.includes(sent)) return true;
+  if (RATE_WORDS.test(text) && stated.some((x) => x > 0 && sent % x === 0 && sent / x <= 31)) return true;
+  return stated.some((x) => stated.some((y) => x - y === sent));
+}
+
+/** The leading letters of a reference ("CEB" of CEB-2D-1024, "INV" of INV-2026-0177): two references of one family name the same kind of thing. */
+const familyOf = (ref: string) => (ref.toUpperCase().match(/^[A-Z]+/)?.[0] ?? "");
+
 /**
  * Where the agent's own description disagrees with the fields it sent, or null. Only the description is read, never
- * the header Checkrail writes from the fields, so the comparison is fields against words (review AG2-3). A description
- * that mentions the payee sent, states the amount sent somewhere, and gives no other reference agrees. Disagreement is
- * a hold for a person, never a reason to change a field.
+ * the header Checkrail writes from the fields (review AG2-3). It disagrees when:
+ *  - the supplier it asks to pay (the one named right after "pay", "send", "transfer") is not the payee sent, or it
+ *    names suppliers and never the payee and asks to pay one of them;
+ *  - it states amounts and the amount sent does not follow from them, in any currency (AG3-4, AG3-5);
+ *  - it names a reference of the same family as the one sent that is a different job (CEB-3D-1102 for CEB-2D-1024).
+ * Disagreement is a hold for a person, never a reason to change a field.
  */
 function disagreementOf(db: Db, businessId: string, asked: { id: string; name: string } | null, a: ReturnType<typeof validatePaymentArgs>): string | null {
   const d = a.description;
   if (!d) return null;
   const parts: string[] = [];
   const names = db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, businessId)).all();
-  const mentions = (v: { id: string; name: string }) => namesVendorFully(d, v.name) || distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).some((w) => ` ${normaliseName(d)} `.includes(` ${w} `));
-  const named = names.filter(mentions);
-  if (named.length > 0 && !(asked && named.some((v) => v.id === asked.id))) parts.push(`it names ${named.map((v) => v.name).join(" and ")}, not the payee sent`);
-  const stated = amountsIn(d).filter((x) => x.currency === a.currency);
-  const pick = extractAmount(d);
-  if (stated.length > 0 && !stated.some((x) => x.amountMinor === a.amountMinor) && !(pick && pick.currency === a.currency && pick.amountMinor === a.amountMinor)) {
-    parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
+  const mentionAt = (text: string, v: { id: string; name: string }): number => {
+    const t = ` ${normaliseName(text)} `;
+    const full = normaliseName(v.name);
+    const hits = [full && t.indexOf(` ${full} `), ...distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).map((w) => t.indexOf(` ${w} `))].filter((i): i is number => typeof i === "number" && i >= 0);
+    return hits.length ? Math.min(...hits) : -1;
+  };
+  // Who the words ask to pay: the first supplier named within a few words after a paying verb.
+  let payTo: { id: string; name: string } | null = null;
+  for (const m of d.matchAll(/\b(?:pay|paid to|send|transfer|remit|wire)\b/gi)) {
+    const window = d.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
+    const hit = names.map((v) => ({ v, at: mentionAt(window, v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
+    if (hit) {
+      payTo = hit.v;
+      break;
+    }
   }
-  const ref = extractReference(d);
-  if (ref && a.reference && ref.toUpperCase() !== a.reference.toUpperCase() && !d.toUpperCase().includes(a.reference.toUpperCase())) parts.push(`it gives reference ${ref}, not the ${a.reference} sent`);
+  if (payTo && payTo.id !== asked?.id) parts.push(`it asks to pay ${payTo.name}, not the payee sent`);
+  const stated = amountsIn(d);
+  if (stated.length > 0) {
+    const same = stated.filter((x) => x.currency === a.currency).map((x) => x.amountMinor);
+    const pick = extractAmount(d);
+    const follows = same.length > 0 && (amountFollows(a.amountMinor, same, d) || (pick?.currency === a.currency && pick.amountMinor === a.amountMinor));
+    if (!follows) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
+  }
+  if (a.reference) {
+    const keysOf = (r: string) => new Set([...sourceRefKeys(r), ...jobKeys(r)]);
+    const sent = keysOf(a.reference);
+    const ids = jobKeys(d).filter((k) => !k.startsWith("~"));
+    const mentionsSent = ids.some((k) => [...keysOf(k)].some((x) => sent.has(x)));
+    const family = familyOf(a.reference);
+    const other = family ? ids.find((k) => familyOf(k) === family) : undefined;
+    if (!mentionsSent && other) parts.push(`it names ${other.toUpperCase()}, not the reference ${a.reference} sent`);
+  }
   return parts.length ? `The agent's request text disagrees with the fields it sent: ${parts.join("; ")}. A person confirms which is right` : null;
 }
 
@@ -152,7 +202,7 @@ function disagreementOf(db: Db, businessId: string, asked: { id: string; name: s
  * amount after amount for one job is looking for the line (review AG-7); a batch of different jobs is not (AG2-5).
  */
 const probeKeyOf = (vendorId: string | null | undefined, payee: string, currency: string, reference: string | null) =>
-  `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${(reference ?? "").toUpperCase()}`;
+  `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${canonicalRef(reference) ?? (reference ?? "").toLowerCase()}`;
 
 function probing(db: Db, agent: AgentKey, key: string, amountMinor: number): number {
   const recent = db.select({ amountMinor: agentChecks.amountMinor }).from(agentChecks)
@@ -178,27 +228,34 @@ export function evidenceSourceOf(agent: AgentKey): "system" | "operator" {
   return agent.scopes.includes("attest") ? "system" : "operator";
 }
 
+/** A word as redaction compares it, in any script: compatibility forms and accents set aside, case ignored (AG3-8). */
+const foldWord = (w: string) => w.normalize("NFKD").replace(/\p{M}/gu, "").replace(/đ/gi, "d").toLowerCase();
+const wordsIn = (s: string) => [...s.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, w: foldWord(m[0]) })).filter((t) => t.w.length > 0);
+
 /**
- * What goes back to an agent: no internal ids, no emails or account numbers, no other supplier's name, no runaway
- * length (review AG-6). `others` are the names of suppliers the agent did not ask about; `keep` the one it did.
- * Names are matched as whole words with accents set aside, and a distinctive part of a name ("Maria" of "Maria
- * Santos") counts too (review AG2-4). Reference-shaped tokens ("INV-2026-000123") keep their digits.
+ * What goes back to an agent: no internal ids, no emails, account numbers or payout addresses, no other supplier's
+ * name, no runaway length (review AG-6). `others` are the names of suppliers the agent did not ask about; `keep` the
+ * one it did. Names are matched as whole words in any script with accents set aside, and a distinctive part of a
+ * name ("Maria" of "Maria Santos") counts too; the payee asked about is never cut (AG2-4, AG3-8). Reference-shaped
+ * tokens ("INV-2026-000123") keep their digits.
  */
 export function clean(message: string, others: string[] = [], keep: string | null = null): string {
   let out = message
     .replace(/obligation obl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/\bobl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/[^\s@<>"',;()]+@[^\s@<>"',;()]+\.[^\s@<>"',;().]{2,}/gu, "the payee's PayPal account")
+    .replace(/\bG[A-Z0-9]{50,60}\b/g, "[payout account]")
+    .replace(/\*{2,}\s?\d{2,}/g, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
-  const keepWords = new Set(keep ? normaliseName(keep).split(" ") : []);
-  const fulls = others.map((n) => normaliseName(n).split(" ").filter(Boolean)).filter((t) => t.join(" ").length >= 3).sort((x, y) => y.length - x.length);
-  const parts = new Set(others.flatMap((n) => distinctiveWords(n, keep ? [keep] : [])).filter((w) => !keepWords.has(w) && !isGenericWord(w)));
+  const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];
+  const fulls = others.map((n) => wordsIn(n).map((t) => t.w)).filter((ws) => ws.join("").length >= 3).sort((x, y) => y.length - x.length);
+  const otherWordSets = others.map((n) => wordsIn(n).map((t) => t.w));
+  const parts = new Set(otherWordSets.flat().filter((w) => [...w].length >= 3 && !keepWords.includes(w) && !isGenericWord(w)));
   if (fulls.length || parts.size) {
-    const tokens = [...out.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, w: normaliseName(m[0]) }));
+    const tokens = wordsIn(out);
     // The payee asked about is never cut: another supplier called "Rosa" leaves "Rosa Villanueva" whole.
-    const keepTokens = keep ? normaliseName(keep).split(" ").filter(Boolean) : [];
     const kept = new Set<number>();
-    for (let i = 0; keepTokens.length && i < tokens.length; i++) if (keepTokens.every((w, j) => tokens[i + j]?.w === w)) keepTokens.forEach((_, j) => kept.add(i + j));
+    for (let i = 0; keepWords.length && i < tokens.length; i++) if (keepWords.every((w, j) => tokens[i + j]?.w === w)) keepWords.forEach((_, j) => kept.add(i + j));
     const spans: Array<[number, number]> = [];
     for (let i = 0; i < tokens.length; i++) {
       if (kept.has(i)) continue;
@@ -268,7 +325,7 @@ export interface CheckAnswer {
 async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, kind: string) {
   const asked = vendorNamed(db, biz.id, a.payee);
   const disagreement = disagreementOf(db, biz.id, asked, a);
-  const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [] };
+  const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [], trusted: agent.scopes.includes("attest") };
   const r = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}`, text: requestTextFor(kind, asked?.name ?? a.payee, a), stated });
   return { asked, disagreement, stated, r, payeeKey: probeKeyOf(asked?.id, a.payee, a.currency, a.reference) };
 }
@@ -456,7 +513,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
         evidence: a.evidence,
         evidenceSource: evidenceSourceOf(agent),
         actor: `mcp:${agent.name}`,
-        stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [] },
+        stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [], trusted: agent.scopes.includes("attest") },
       });
     } catch (e) {
       // Nothing half-made stays behind: no stuck key, no orphan draft (review AG-4).

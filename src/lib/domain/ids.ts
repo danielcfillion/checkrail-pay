@@ -49,6 +49,36 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
   return [...out].map((k) => k.toLowerCase());
 }
 
+const REF_PREFIX = /^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)/;
+
+/**
+ * The one form a reference is compared in, whatever separators it was written with: look-alike letters folded, case
+ * ignored, everything but letters and digits dropped, the INV/JOB/... prefix dropped. "JOB-HG4D-0914", "JOB HG4D
+ * 0914", "job_hg4d_0914" and "JOBHG4D0914" are all "hg4d0914" (agent guard review AG3-1). Null under four characters.
+ */
+export function canonicalRef(ref: string | null | undefined): string | null {
+  if (!ref) return null;
+  const core = foldConfusables(ref).toUpperCase().replace(/[^A-Z0-9]/g, "").replace(REF_PREFIX, "");
+  return core.length >= 4 ? core.toLowerCase() : null;
+}
+
+/**
+ * The keys a stated reference is matched on, beside the job identifiers jobKeys finds in text: the reference as
+ * written, its canonical form, and the canonical form of the original when it carries a re-issue suffix after a
+ * separator ("10234-B", "INV 0152 R", "INV-0834-REV2" also key 10234, 0152, 0834).
+ */
+export function sourceRefKeys(ref: string | null | undefined): string[] {
+  if (!ref) return [];
+  const t = foldConfusables(ref).toUpperCase().trim();
+  const out = new Set<string>([t.toLowerCase()]);
+  const canon = canonicalRef(t);
+  if (canon) out.add(`~${canon}`);
+  const reissue = t.match(/^(.*\d{3,6})[^A-Z0-9]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
+  const base = reissue ? canonicalRef(reissue[1]) : null;
+  if (base) out.add(`~${base}`);
+  return [...out];
+}
+
 /**
  * Letters from other scripts that look like Latin ones in references (Cyrillic and Greek capitals and smalls),
  * folded to Latin so "JOB-HG4D-0914" with a Cyrillic O keys the same job as the plain one.

@@ -1,4 +1,4 @@
-import { foldConfusables, jobKeys } from "./ids";
+import { foldConfusables, jobKeys, sourceRefKeys } from "./ids";
 
 /**
  * PayPal's own record of money already sent, checked deterministically before a payment: not by the model, and not
@@ -76,7 +76,7 @@ export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: str
     if (!(value < 0)) continue;
     if (!["S", "P"].includes((t.transaction_status ?? "").toUpperCase())) continue;
     if ((r.payer_info?.email_address ?? "").trim().toLowerCase() !== email) continue;
-    const hit = jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id).find((k) => wanted.has(k) && !k.startsWith("agr-") && !k.startsWith("~agr"));
+    const hit = [...jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id), ...sourceRefKeys(t.invoice_id)].find((k) => wanted.has(k) && !k.startsWith("agr-") && !k.startsWith("~agr"));
     if (!hit) continue;
     matches.push({
       transactionId: t.transaction_id,
