@@ -522,13 +522,18 @@ function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
  * Reference keys from records that name one job (an invoice, a job sheet, a receipt). A contract, booking or rate
  * sheet is shared by many payments to the vendor, so its reference names no single job (agent guard review AG4-2).
  */
+/** Records that name one job. A booking or purchase order does: the same booking on two invoices is one job paid twice (AG5-1). */
+const SINGLE_JOB_KINDS = ["invoice", "job_sheet", "receipt", "booking", "purchase_order"];
+/** Text that can name a job. A contract's own number is shared by every payment under it, so it is not read (AG5-2). */
+const jobTexts = (ev: Array<{ kind: string; reference: string | null; label: string; excerpt: string | null }>) => ev.filter((e) => e.kind !== "contract").flatMap((e) => [e.reference, e.label, e.excerpt]);
+
 function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>): string[] {
-  return ev.filter((e) => ["invoice", "job_sheet", "receipt"].includes(e.kind)).flatMap((e) => sourceRefKeys(e.reference));
+  return ev.filter((e) => SINGLE_JOB_KINDS.includes(e.kind)).flatMap((e) => sourceRefKeys(e.reference));
 }
 
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
-  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...jobRecordRefKeys(ev)])];
+  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...jobTexts(ev), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...jobRecordRefKeys(ev)])];
 }
 
 /**
@@ -644,7 +649,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
           const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
           const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
-          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
+          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another

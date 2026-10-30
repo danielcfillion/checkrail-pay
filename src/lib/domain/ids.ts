@@ -36,14 +36,15 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       const k = m[0].toUpperCase();
       out.add(k);
       // JOB-HG4D-0914 and trip sheet HG-4D-0914 name the same departure: normalise by stripping the prefix and dashes.
-      // An agreement number stays an agreement number (AGR...), so the exclusions for shared contracts apply (AG4-2).
-      const core = k.replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR)-/, "").replace(/-/g, "");
+      // Only JOB, TRIP and TOUR name a departure; INV, BK, PO and REF stay, so INV-2026-0152 is not PO-2026-0152
+      // (AG5-3), and an agreement number stays an agreement number (AGR...) for the shared-contract exclusions (AG4-2).
+      const core = k.replace(/^(JOB|TRIP|TOUR)-/, "").replace(/-/g, "");
       if (core.length >= 6) out.add(`~${core}`);
       for (const f of canonicalForms(k)) out.add(`~${f}`);
       // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
       const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
       if (reissue) {
-        const base = reissue[1].replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR)-/, "").replace(/-/g, "");
+        const base = reissue[1].replace(/^(JOB|TRIP|TOUR)-/, "").replace(/-/g, "");
         if (base.length >= 6) out.add(`~${base}`);
         for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
       }
@@ -114,8 +115,12 @@ export function sourceRefKeys(ref: string | null | undefined): string[] {
 
 /** The re-issue base of a reference when it has one, else its first comparison form: what a probe for one job keys on. */
 export function jobOfRef(ref: string | null | undefined): string | null {
-  const keys = sourceRefKeys(ref).filter((k) => k.startsWith("~"));
-  return keys.length ? keys[keys.length - 1].slice(1) : null;
+  if (!ref) return null;
+  const t = foldRef(ref);
+  const reissue = t.match(/^(.*\d{3,6})[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/u);
+  // The first form is the departure form (JOB/TRIP/TOUR set aside, numbers kept apart), the same for every spelling
+  // the duplicate check treats as one job (AG5-6).
+  return canonicalForms(reissue ? reissue[1] : t)[0] ?? null;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { evaluatePolicy } from "./policy";
+import { jobKeys } from "./ids";
 import { DEFAULT_POLICY, type PolicyInput, type VendorPayoutProfile } from "./types";
 
 const vendor: VendorPayoutProfile = {
@@ -191,7 +192,7 @@ describe("duplicate detection beyond the exact reference", () => {
   });
 
   it("warns and forces approval when only the amount matches and the invoice names no job", () => {
-    const o = base({ jobKeys: ["inv-ms-0044", "~ms0044"] });
+    const o = base({ jobKeys: jobKeys("INV-MS-0044") });
     const r = o.rules.find((x) => x.ruleId === "no_duplicate")!;
     expect(r.passed).toBe(false);
     expect(r.severity).toBe("warn");
@@ -199,7 +200,7 @@ describe("duplicate detection beyond the exact reference", () => {
   });
 
   it("passes a same-amount invoice that names a different trip", () => {
-    const o = base({ jobKeys: ["inv-ms-0044", "~ms0044", "hg-4d-0921", "~hg4d0921"] });
+    const o = base({ jobKeys: jobKeys("INV-MS-0044", "HG-4D-0921") });
     expect(o.rules.find((x) => x.ruleId === "no_duplicate")!.passed).toBe(true);
   });
 });

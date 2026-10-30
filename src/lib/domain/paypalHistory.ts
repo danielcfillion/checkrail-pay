@@ -1,17 +1,19 @@
 import { canonicalForms, foldConfusables, jobKeys, sourceRefKeys } from "./ids";
 
 /**
- * References in a free-text PayPal note however they were typed ("JOB HG4D 0914 guide fee", "job_hg4d_0914"): the
- * comparison forms of every run of one to four words. A payment made in the PayPal app by hand is the case this
- * catches (agent guard review AG4-4). Only forms of five characters or more, so a bare amount never matches.
+ * References in a free-text PayPal note however they were typed ("JOB HG4D 0914 guide fee", "Invoice 4471"): the
+ * comparison forms of every run of one to four words, after amounts ("PHP 10830") are taken out so a figure is never
+ * read as a reference (agent guard reviews AG4-4, AG5-5). A payment made in the PayPal app by hand is the case this
+ * catches. Forms are kept from three characters; they only ever match one of the request's own reference forms.
  */
+const NOTE_AMOUNT = /(?:US\$|USD|PHP|VND|THB|EUR|GBP|[$₱₫฿€£])\s?[\d][\d.,]*|[\d][\d.,]*\s?(?:USD|PHP|VND|THB|EUR|GBP|đ|₫|dong)\b/giu;
 function noteRefKeys(text: string | null | undefined): string[] {
   if (!text) return [];
-  const words = text.slice(0, 500).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const words = text.slice(0, 500).replace(NOTE_AMOUNT, " ").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const out = new Set<string>();
   for (let i = 0; i < words.length; i++) {
     for (let n = 1; n <= 4 && i + n <= words.length; n++) {
-      for (const f of canonicalForms(words.slice(i, i + n).join("-"))) if (f.replace(/\./g, "").length >= 5) out.add(`~${f}`);
+      for (const f of canonicalForms(words.slice(i, i + n).join("-"))) out.add(`~${f}`);
     }
   }
   return [...out];

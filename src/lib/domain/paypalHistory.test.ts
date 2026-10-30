@@ -48,3 +48,13 @@ describe("PayPal's own history, however the note was typed (agent guard review A
     expect(matchPayPalHistory(body(line("7XK", "-180.00", "guide fee 180 for October", "m@x.co")), want, "m@x.co").matches).toHaveLength(0);
   });
 });
+
+describe("PayPal's own history, short references and amounts in notes (agent guard review AG5-5)", () => {
+  it("finds a short reference typed by hand, and never reads an amount as a reference", async () => {
+    const { sourceRefKeys } = await import("./ids");
+    const keysFor = (r: string) => [...jobKeys(r), ...sourceRefKeys(r)];
+    for (const note of ["Invoice 4471 guide fee", "4471"]) expect(matchPayPalHistory(body(line("7XA", "-180.00", note, "m@x.co")), keysFor("4471"), "m@x.co").matches, note).toHaveLength(1);
+    expect(matchPayPalHistory(body(line("7XB", "-180.00", "R12 guiding", "m@x.co")), keysFor("R-12"), "m@x.co").matches).toHaveLength(1);
+    expect(matchPayPalHistory(body(line("7XC", "-180.00", "PHP 10830 for the boats", "m@x.co")), keysFor("10830"), "m@x.co").matches).toHaveLength(0);
+  });
+});

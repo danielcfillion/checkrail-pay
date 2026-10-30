@@ -6,7 +6,7 @@ import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
 import { canonicalRef, jobKeys, jobOfRef, sourceRefKeys } from "../domain/ids";
 import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendorNames";
-import { amountsIn, extractAmount } from "../ai/extractor";
+import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
 import { AGENT_FLAG_PREFIX, ingestObligation, previewPolicy } from "../engine/orchestrator";
@@ -131,19 +131,41 @@ function vendorNamed(db: Db, businessId: string, payee: string) {
   return same.length === 1 ? same[0] : null;
 }
 
+/** Units a count can be of: "2 days", "9 guests", "x 2". */
+const COUNT_RE = /(?<![\p{L}\p{N}.,/-])(\d{1,3})\s*(?:days?|nights?|guests?|pax|people|persons?|adults?|children|kids|vehicles?|vans?|cars?|bikes?|boats?|rooms?|hours?|trips?|departures?|seats?|porters?|guides?)\b|\bx\s*(\d{1,3})(?!\p{N}|[.,]\p{N})|(?<![\p{L}\p{N}.,/-])(\d{1,3})\s*x\b/giu;
+/** A figure labelled as paid already, a deposit or taken off: the one a difference may subtract. */
+const SUBTRACTED = /(deposit|paid|less|minus|discount|credit|advance|already)/i;
+/** A figure the text asks to be paid now: right after "pay", "please pay", "balance due", "amount due". */
+const ASKED = /(?:please pay|pay|balance due|amount due|now due)[^0-9$₱₫฿]{0,12}$/i;
+/** A figure labelled as the total. */
+const TOTALLED = /(?:total|sum|=)[^0-9$₱₫฿]{0,12}$/i;
+
+type Stated = { amountMinor: number; currency: string; index: number; length: number };
+
 /**
- * Does the amount sent follow from the figures stated: one of them, the difference of two (a total less a deposit),
- * or a stated rate times counts the text itself states ("2 days at USD 95", "9 guests x 2 nights x USD 18"), and then
- * only when no stated total says otherwise (agent guard reviews AG3-5, AG4-7).
+ * Does the amount sent follow from the figures stated (agent guard reviews AG3-5, AG4-7, AG5-4)?
+ *  - A figure the text asks to be paid now must be the amount sent; nothing else rescues a different one.
+ *  - Otherwise: one of the figures; the sum of two (a fee plus a boat fee); a figure less one labelled as a deposit,
+ *    paid or taken off; or a stated rate times counts the text states with a unit ("2 days", "9 guests x 2 nights").
+ *  - A part never exceeds a figure labelled as the total.
+ * Numbers inside references and dates are not counts.
  */
-function amountFollows(sent: number, stated: Array<{ amountMinor: number; index: number; length: number }>, text: string, total: number | null): boolean {
+function amountFollows(sent: number, stated: Stated[], text: string): boolean {
+  const lead = (x: Stated) => text.slice(Math.max(0, x.index - 24), x.index);
+  const around = (x: Stated) => `${text.slice(Math.max(0, x.index - 24), x.index)} ${text.slice(x.index + x.length, x.index + x.length + 24)}`;
+  const asked = stated.filter((x) => ASKED.test(lead(x)));
+  if (asked.length > 0) return asked.some((x) => x.amountMinor === sent);
+  const totals = stated.filter((x) => TOTALLED.test(lead(x))).map((x) => x.amountMinor);
+  if (totals.some((t) => sent > t)) return false;
   const figures = stated.map((x) => x.amountMinor);
   if (figures.includes(sent)) return true;
-  if (figures.some((x) => figures.some((y) => x - y === sent))) return true;
-  if (total != null && total !== sent) return false;
+  if (figures.some((x, i) => figures.some((y, j) => i !== j && x + y === sent))) return true;
+  if (stated.some((x) => stated.some((y) => y !== x && SUBTRACTED.test(around(y)) && x.amountMinor - y.amountMinor === sent))) return true;
+  // "total USD 600, 50% deposit now"
+  for (const m of text.matchAll(/(\d{1,3})\s?%/g)) if (figures.some((x) => Math.round((x * Number(m[1])) / 100) === sent)) return true;
   let rest = text;
   for (const x of [...stated].sort((p, q) => q.index - p.index)) rest = `${rest.slice(0, x.index)} ${rest.slice(x.index + x.length)}`;
-  const counts = [...rest.matchAll(/(?<![\d.,])(\d{1,3})(?![\d]|[.,]\d|\s?%)/g)].map((m) => Number(m[1])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
+  const counts = [...rest.matchAll(COUNT_RE)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
   const products = new Set<number>(counts);
   for (const p of [...products]) for (const q of counts) products.add(p * q);
   return figures.some((x) => x > 0 && sent % x === 0 && products.has(sent / x));
@@ -152,13 +174,15 @@ function amountFollows(sent: number, stated: Array<{ amountMinor: number; index:
 /** The leading letters of a reference in its comparison form ("ceb" of CEB-2D-1024 and of JOB-CEB3D-1102). */
 const familyOf = (ref: string) => (canonicalRef(ref) ?? "").match(/^\p{L}+/u)?.[0] ?? "";
 
-const PAY_PHRASE = /\b(?:pay|paid to|payable to|send|transfer|remit|wire|release(?:\s+(?:the\s+)?(?:fee|payment|money|funds|it))?\s+to|owed to|settle with)\b/gi;
+/** Phrases that say who is to be paid. "Send" and "transfer" count only with money ("send the payment to"), so "send the receipt to Maria" does not (AG5-4). */
+const PAY_PHRASE = /\b(?:pay|paid to|payable to|remit|wire|beneficiary(?:\s+is)?|credit|owed to|settle with|(?:send|transfer|release)(?:\s+(?:the\s+)?(?:fee|payment|money|funds|amount|balance|it))\s+to|release\s+to)\b/gi;
 
 /**
  * Where the agent's own description disagrees with the fields it sent: one sentence per field, or none. Only the
  * description is read, never the header Checkrail writes from the fields (review AG2-3). It disagrees when:
- *  - the supplier it asks to pay (named right after "pay", "payable to", "release the fee to", ...) is not the payee;
- *  - it states amounts, in any currency, and the amount sent does not follow from them (AG3-4, AG3-5, AG4-7);
+ *  - the supplier it asks to pay (named right after a paying phrase) is not the payee, or it names another supplier
+ *    in full before, or without, the payee (AG5-4);
+ *  - it states amounts, in any currency, and the amount sent does not follow from them (see amountFollows);
  *  - it names another job of the same kind as the reference sent (CEB-3D-1102 for CEB-2D-1024), however written.
  * Disagreement is a hold for a person, never a reason to change a field.
  */
@@ -173,30 +197,42 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     const hits = [full && t.indexOf(` ${full} `), ...distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).map((w) => t.indexOf(` ${w} `))].filter((i): i is number => typeof i === "number" && i >= 0);
     return hits.length ? Math.min(...hits) : -1;
   };
+  const fullAt = (v: { name: string }) => {
+    const full = normaliseName(v.name);
+    return full ? ` ${normaliseName(d)} `.indexOf(` ${full} `) : -1;
+  };
   // Who the words ask to pay: the first supplier named within a few words after a paying phrase.
+  let payTo: { id: string; name: string } | null = null;
   for (const m of d.matchAll(PAY_PHRASE)) {
     const window = d.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
     const hit = names.map((v) => ({ v, at: mentionAt(window, v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
     if (hit) {
-      if (hit.v.id !== asked?.id) parts.push(`it asks to pay ${hit.v.name}, not the payee sent`);
+      payTo = hit.v;
       break;
     }
   }
-  const stated = amountsIn(d);
-  const shorthand = stated.length === 0 ? extractAmount(d, a.currency) : null;
+  const askedAt = asked ? mentionAt(d, asked) : -1;
+  const firstOther = names.filter((v) => v.id !== asked?.id).map((v) => ({ v, at: fullAt(v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
+  if (payTo && payTo.id !== asked?.id) parts.push(`it asks to pay ${payTo.name}, not the payee sent`);
+  else if (!payTo && firstOther && (askedAt < 0 || firstOther.at < askedAt)) parts.push(`it names ${firstOther.v.name} before or instead of the payee sent`);
+  const stated: Stated[] = amountsIn(d);
+  // "pay 95 only": a figure right after "pay" with no currency is in the currency sent.
+  for (const m of d.matchAll(/\bpay\s+(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\.(\d{1,2}))?(?![\d.,]|\s*(?:%|days?|nights?|guests?|pax|people|persons?)\b)/gi)) {
+    const minor = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0") || "0");
+    const at = m.index! + m[0].indexOf(m[1]);
+    stated.push({ amountMinor: minor, currency: a.currency, index: at, length: m.index! + m[0].length - at });
+  }
+  stated.sort((x, y) => x.index - y.index);
   if (stated.length > 0) {
     const same = stated.filter((x) => x.currency === a.currency);
-    const pick = extractAmount(d);
-    const total = pick && pick.currency === a.currency && /\b(total|sum|balance due|amount due)\b|=/i.test(d) ? pick.amountMinor : null;
-    const follows = same.length > 0 && (amountFollows(a.amountMinor, same, d, total) || (pick?.currency === a.currency && pick.amountMinor === a.amountMinor));
-    if (!follows) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
-  } else if (shorthand && shorthand.amountMinor !== a.amountMinor) {
-    parts.push(`it states ${formatMoney(shorthand.amountMinor, a.currency, { code: true })}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
+    if (same.length === 0 || !amountFollows(a.amountMinor, same, d)) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
   }
   if (a.reference) {
     const sent = new Set([...sourceRefKeys(a.reference), ...jobKeys(a.reference)].filter((k) => k.startsWith("~")));
-    // Job identifiers however typed: the dashed ones jobKeys finds, and runs of letters and digits like CEB3D1102.
-    const ids = [...new Set([...jobKeys(d).filter((k) => !k.startsWith("~")), ...(d.match(/\b[\p{L}]{2,6}[-_./ ]?\d[\p{L}\p{N}]*(?:[-_./]\p{L}*\d[\p{L}\p{N}]*)*\b/gu) ?? [])])];
+    // Job identifiers however typed: the dashed ones jobKeys finds, and unseparated runs of letters and three or more
+    // digits like CEB3D1102 (not "CEB 2 day" or "Inv 1 of 2", AG5-4).
+    const loose = (d.match(/\b\p{L}{2,6}[-_./]?\d[\p{L}\p{N}]*(?:[-_./]\p{L}*\d[\p{L}\p{N}]*)*\b/gu) ?? []).filter((x) => (x.match(/\d/g) ?? []).length >= 3);
+    const ids = [...new Set([...jobKeys(d).filter((k) => !k.startsWith("~")), ...loose])];
     const same = (k: string) => [...sourceRefKeys(k), ...jobKeys(k)].some((x) => x.startsWith("~") && sent.has(x));
     const family = familyOf(a.reference);
     const other = family ? ids.find((k) => familyOf(k) === family && !same(k)) : undefined;
@@ -253,8 +289,11 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     .replace(/obligation obl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/\bobl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/[^\s@<>"',;()]+@[^\s@<>"',;()]+\.[^\s@<>"',;().]{2,}/gu, "the payee's PayPal account")
-    .replace(/\b[GM][A-Z0-9]{50,75}\b/g, "[payout account]")
-    .replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/g, "[payout account]")
+    .replace(/[^\s*@<>"',;()]+\*[^\s*@<>"',;()]+\.[^\s*@<>"',;().]{2,}/gu, "[payout account]")
+    .replace(/\b[GM][A-Z0-9]{34,75}\b/g, "[payout account]")
+    // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account, AG5-7).
+    .replace(/\b[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?\b/g, "[payout account]")
+    .replace(/\b(?:acct|account|a\/c)\b(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d{3,}/gi, "[payout account]")
     .replace(/\*{2,}\s?\d{2,}/g, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
   const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];

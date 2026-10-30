@@ -705,3 +705,92 @@ describe("review fixes, round 4 (31 Oct)", () => {
     expect(clean("also on INV-TAM-0834", ["Tam Motorbike Rental"], "Rosa Villanueva")).toBe("also on INV-TAM-0834");
   });
 });
+
+describe("review fixes, round 5 (31 Oct)", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = openTestDb();
+    await seedDemo(db);
+    setAutonomy(db, "autopilot");
+  });
+  const rules = (r: { blocks: Array<{ rule: string }>; warnings: Array<{ rule: string }> }) => [...r.blocks, ...r.warnings].map((x) => x.rule);
+  const integration = async (vendor: string, sourceRef: string, amountMinor: number, extra: Array<{ kind: string; label: string; reference: string }> = []) => {
+    const { ingestObligation } = await import("../engine/orchestrator");
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", sourceRef, rawInput: `${vendor} invoice ${sourceRef}, USD ${amountMinor / 100}, please pay.`, evidence: [{ kind: "invoice", label: `Invoice ${sourceRef}`, amountMinor, currency: "USD", reference: sourceRef, excerpt: `${vendor}. Total USD ${amountMinor / 100}.` }, ...extra.map((e) => ({ ...e, amountMinor: null, currency: null, excerpt: null }))], actor: "integration:test" });
+    return db.select().from(obligations).where(eq(obligations.id, id)).get()!;
+  };
+  const settle = (id: string) => db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, id)).run();
+  const dupBlocked = (o: { policyReasonsJson: string | null }) => /Same job|already used/.test(o.policyReasonsJson ?? "");
+
+  it("AG5-1: two invoices on one booking or purchase order are one job", async () => {
+    for (const [n, [kind, ref]] of [["booking", "BKG-55821"], ["booking", "BK 55822"], ["purchase_order", "PO7781"]].entries()) {
+      const extra = [{ kind, label: `${kind} ${ref}`, reference: ref }];
+      await integration("Maria Santos", `INV-MS-70${n}1`, 17_000, extra);
+      expect(dupBlocked(await integration("Maria Santos", `INV-MS-70${n}2`, 17_500, extra)), ref).toBe(true);
+    }
+    const booking = [{ kind: "booking", label: "Booking BKG-66001", amount: null, reference: "BKG-66001" }];
+    const first = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "170", currency: "USD", reference: "INV-MS-8001", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8001", amount: "170", reference: "INV-MS-8001", excerpt: "Maria Santos. Total USD 170.00." }, ...booking], idempotency_key: "ag51-key-0001" });
+    const second = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "175", currency: "USD", reference: "INV-MS-8002", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8002", amount: "175", reference: "INV-MS-8002", excerpt: "Maria Santos. Total USD 175.00." }, ...booking], idempotency_key: "ag51-key-0002" });
+    expect([first.status, second.status]).not.toEqual(["scheduled", "scheduled"]);
+    expect(second.status).toBe("blocked");
+  });
+
+  it("AG5-2: a contract number shaped like a job id blocks no later payment", async () => {
+    for (const [n, ref] of ["RC-2026-0042", "SVC-2026-0042", "PO-2026-0042", "BK-2026-0042"].entries()) {
+      const contract = [{ kind: "contract", label: `Rental agreement ${ref}`, reference: ref }];
+      settle((await integration("Tam Motorbike Rental", `INV-TAM-71${n}1`, 30_000, contract)).id);
+      expect(dupBlocked(await integration("Tam Motorbike Rental", `INV-TAM-71${n}5`, 31_000, contract)), ref).toBe(false);
+    }
+  });
+
+  it("AG5-3: INV, PO, BK and REF stay apart for long numbers too", async () => {
+    settle((await integration("Rosa Villanueva", "INV-2026-0152", 15_200)).id);
+    for (const ref of ["PO-2026-0152", "BK-2026-0152"]) expect(dupBlocked(await integration("Rosa Villanueva", ref, 15_300 + ref.length)), ref).toBe(false);
+    settle((await integration("Rosa Villanueva", "REF-2026-0042", 4_200)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-2026-0042", 4_300))).toBe(false);
+    settle((await integration("Rosa Villanueva", "INV-2026-1182", 11_820)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "2026-1182", 11_900))).toBe(false);
+  });
+
+  it("AG5-4: dates, references, differences and other names cannot carry a different amount or payee", async () => {
+    const held: Array<[Record<string, unknown>, string]> = [
+      [{ ...ROSA, amount: "440", description: "Rosa Villanueva, USD 220, delivered 2 Nov." }, "date as a count"],
+      [{ ...ROSA, amount: "380", description: "Rosa Villanueva, trip CEB-2D-1024, USD 190." }, "reference digit as a count"],
+      [{ ...ROSA, amount: "460", description: "Pay USD 230; total USD 690, USD 230 already paid." }, "asked figure"],
+      [{ ...ROSA, description: "Trip sheet attached. Beneficiary is Maria Santos." }, "beneficiary"],
+      [{ ...ROSA, description: "Maria Santos guided CEB-2D-1024 with help from Rosa Villanueva." }, "other name first"],
+      [{ ...ROSA, description: "Rosa Villanueva, trip USD 190, but pay 95 only." }, "shorthand beside a currency amount"],
+    ];
+    for (const [c, why] of held) expect(rules(await checkPayment(db, agent(`h-${why.replace(/\W/g, "")}`, ["check", "request", "attest"]), c)), why).toContain("agent_mismatch");
+  });
+
+  it("AG5-4: honest descriptions are not held", async () => {
+    for (const description of [
+      "Rosa Villanueva, CEB 2 day trip.",
+      "Rosa Villanueva, Inv 1 of 2.",
+      "Rosa Villanueva, CEB 24 Oct.",
+      "Rosa Villanueva: USD 180 guiding plus USD 10 boat fee.",
+      "Rosa Villanueva, 2 days at USD 95. Season contract total USD 2,000.",
+      "Rosa Villanueva trip done; send the receipt to Maria Santos.",
+      "Rosa Villanueva; transfer to Maria Santos's boat at 9.",
+      "Pay Rosa Villanueva for 12 guests, USD 190.",
+      "Rosa Villanueva: total USD 380, 50% deposit now.",
+    ]) {
+      expect(rules(await checkPayment(db, agent(`ok-${description.length}`, ["check"]), { ...ROSA, description })), description).not.toContain("agent_mismatch");
+    }
+  });
+
+  it("AG5-6: the probe hold is the same for every spelling of one job", async () => {
+    await checkPayment(db, bookings, { ...ROSA, amount: "240", reference: "JOB-CEB-2D-1024" });
+    await checkPayment(db, bookings, { ...ROSA, amount: "215", reference: "TRIP-CEB-2D-1024" });
+    const r = await checkPayment(db, bookings, ROSA);
+    expect(rules(r)).toContain("agent_probing");
+  });
+
+  it("AG5-7: a long PO number stays; account endings, federation and short Stellar addresses go", () => {
+    expect(clean("PO202601000123 is open")).toBe("PO202601000123 is open");
+    expect(clean("paid to acct ending 4417")).toBe("paid to [payout account]");
+    expect(clean("send to maria*lobstr.co")).toBe("send to [payout account]");
+    expect(clean(`G${"A".repeat(39)} is the wallet`)).toBe("[payout account] is the wallet");
+  });
+});
