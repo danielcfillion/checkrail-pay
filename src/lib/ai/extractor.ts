@@ -66,6 +66,11 @@ export function paymentPartOf(text: string, amountMinor: number, currency: strin
   return null;
 }
 
+/** Every amount stated in a text, with its currency, in the order written. */
+export function amountsIn(text: string): Array<{ amountMinor: number; currency: string }> {
+  return findAmounts(text.slice(0, MAX_REQUEST_CHARS)).sort((a, b) => a.index - b.index).map(({ amountMinor, currency }) => ({ amountMinor, currency }));
+}
+
 function findAmounts(text: string): Found[] {
   // e.g. "$180", "USD 1,240.50", "180 USD", "PHP 9,000", "₱9,000". Commas are only thousands separators
   // (exactly three digits follow), and a number glued to an identifier ("INV-K-77", "HG-4D-0914") is not an

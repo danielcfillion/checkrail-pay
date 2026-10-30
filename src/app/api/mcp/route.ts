@@ -14,10 +14,10 @@ export const runtime = "nodejs";
 /**
  * Checkrail's MCP server over HTTP (streamable HTTP, stateless, JSON responses; no server-sent stream).
  *
- * An agent authenticates with an agent key from CHECKRAIL_AGENT_KEYS as a bearer token. The middleware lets this one
- * path through without a login and the key is checked here. On the simulated-rails judging demo only,
- * CHECKRAIL_AGENT_DEMO_OPEN=1 admits callers without a key as "demo-<hash of their address>", so a judge can add the
- * URL to an agent and try it; it is ignored whenever rails are live or real money can move.
+ * An agent authenticates with an agent key from CHECKRAIL_AGENT_KEYS as a bearer token. The middleware does not run
+ * on this path; the key is checked here. On the simulated-rails judging demo only, CHECKRAIL_AGENT_DEMO_OPEN=1 admits
+ * callers without a key as "demo-<hash of their address>" with the check scope only, so a judge can add the URL to an
+ * agent and try it; it is ignored whenever rails are live or real money can move.
  */
 
 const BODY_LIMIT = 64 * 1024;
@@ -53,9 +53,10 @@ export async function POST(req: Request) {
     overLimit(badKeys, ip, BAD_KEY_LIMIT, 15 * 60_000);
     return deny(401, "Unknown agent key", { "WWW-Authenticate": 'Bearer realm="Checkrail Pay agents"' });
   }
-  // Each keyless demo caller gets a name of its own, so one visitor cannot read another's requests or trip their
-  // probe hold (review AG-7). The address is hashed; it is never stored.
-  if (!agent && open()) agent = { name: `demo-${createHash("sha256").update(ip).digest("hex").slice(0, 8)}`, scopes: ["check", "request"], digest: Buffer.alloc(32) };
+  // Each keyless demo caller gets a name of its own, so one visitor cannot trip another's probe hold (review AG-7),
+  // and may only check: a visitor's request would sit in the books and could block the presenter's (AG2-7). The
+  // address is hashed; it is never stored.
+  if (!agent && open()) agent = { name: `demo-${createHash("sha256").update(ip).digest("hex").slice(0, 8)}`, scopes: ["check"], digest: Buffer.alloc(32) };
   if (!agent) return deny(401, "An agent key is required (Authorization: Bearer <key>)", { "WWW-Authenticate": 'Bearer realm="Checkrail Pay agents"' });
   // Open demo callers share one name, so they are limited per address as well.
   if (overLimit(perAgent, agent.name, PER_AGENT_LIMIT, 60_000)) return deny(429, "Slow down: at most 60 calls a minute per agent", { "Retry-After": "60" });

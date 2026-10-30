@@ -2,7 +2,7 @@
 
 PayPal moves money for people. Next it moves money for agents, and agents need a check rail.
 
-Checkrail is an MCP server any agent can ask before it pays a supplier. It reads the request, matches it to the business's job records, its payment history and PayPal's own transaction history, applies the owner's rules, and answers **pay**, **hold** or **block** with the reason and what would clear it. An agent can also hand Checkrail the payment: it goes to the business's inbox, where the rules and the owner's autonomy setting decide what happens. No agent can approve, release or send a payment, or read a supplier's payout details.
+Checkrail is an MCP server any agent can ask before it pays a supplier. It takes the payee, amount and reference the agent sends, reads the request, matches it to the business's job records, its payment history and PayPal's own transaction history, applies the owner's rules, and answers **pay**, **hold** or **block** with the reason and what would clear it. An agent can also hand Checkrail the payment: it goes to the business's inbox, where the rules and the owner's autonomy setting decide what happens. No agent can approve, release or send a payment, or read a supplier's payout details.
 
 ## Connect
 
@@ -37,16 +37,16 @@ The Agents page in the app shows the endpoint, every agent, and every question a
 
 Even with `attest`, policy runs, the owner's caps and cancel window apply, and policy runs again at release. Outside agents appear in the audit log as `mcp:<name>`, never as Autopilot.
 
-On the simulated-rails judging demo only, `CHECKRAIL_AGENT_DEMO_OPEN=1` lets a caller without a key in as `demo-<hash of its address>`, so visitors do not share requests. It is ignored whenever rails are live or real money can move.
+On the simulated-rails judging demo only, `CHECKRAIL_AGENT_DEMO_OPEN=1` lets a caller without a key in as `demo-<hash of its address>`, with `check` only, so a visitor can try the guard but never put a request in the shared books. It is ignored whenever rails are live or real money can move.
 
 ## Tools
 
 | Tool | Writes | What it does |
 |---|---|---|
-| `check_payment` | one agent-log row | Judges a payment on an in-memory copy of the books. The verdict covers the payee and amount the agent sent: if the request text names another supplier or figure, the answer is a block. Returns `verdict`, `summary`, `blocks`, `warnings`, `next_steps`, and `paypal_transaction_id` when PayPal's history shows the job already paid. |
-| `request_payment` | a request, as a clerk would | Needs `idempotency_key`; the same key returns the same request, and the same key for a different payment is refused. Returns `status`: blocked, waiting for evidence or approval, scheduled by Autopilot (with `releases_at`), sending, paid (with the rail and the provider's id), returned. |
+| `check_payment` | one agent-log row | Judges a payment on an in-memory copy of the books. The payee, amount, currency and reference the agent sends are what is judged; if the agent's own text names another supplier, figure or reference, a person looks (`agent_mismatch`). Returns `verdict`, `summary`, `blocks`, `warnings`, `next_steps`, and `paypal_transaction_id` when PayPal's history shows the job already paid. |
+| `request_payment` | a request, as a clerk would | The request is exactly the payee, amount, currency and reference sent. Needs `idempotency_key`; the same key returns the same request, the same key for a different payment is refused, and a key whose request was refused may be used again. Returns `status`: blocked, waiting for evidence or approval, scheduled by Autopilot (with `releases_at`), sending, paid (with the rail and the provider's id), returned. |
 | `payment_status` | nothing | Status of a request this agent made. An agent cannot read another agent's requests. |
-| `lookup_payee` | nothing | Whether a payee is on file (by full name or contact email), verified and paid before. Never payout details. |
+| `lookup_payee` | nothing | Whether a payee is on file (by full name, the same name without accents, or contact email), verified and paid before. Never payout details. |
 | `explain_rule` | nothing | What a rule id checks and what clears it without bending it. |
 
 ## What it looks like
@@ -68,12 +68,12 @@ A job PayPal already paid comes back blocked with PayPal's transaction id. A cle
 
 - **A check cannot change the books or pay.** It runs on `snapshotOf(db)`, an in-memory copy, and only previews policy. Tests prove the real database is untouched and no payment attempt is created.
 - **A request is a request.** It enters through the same ingest as a clerk's, so every rule applies. There is no agent tool that approves, releases or sends.
-- **The verdict is about what the agent sent.** The request text goes through the reader like any other; if it names a different supplier or figure from the agent's fields, the check blocks and a request is refused before anything is written. A request that reads differently once in the books is cancelled.
-- **One request at a time.** Requests are taken in turn per business, so a second request for the same job sees the first and is blocked; policy runs again at release regardless.
-- **No shopping for a pass.** An agent that tries three or more different amounts for one supplier within 15 minutes gets a hold on checks and a refusal on requests, whatever the rules say. The supplier is the one Checkrail resolved, not the spelling the agent used.
+- **The verdict is about what the agent sent.** The payee, amount, currency and reference the agent sends are fixed on the request: the reader describes and flags it but never replaces them, so what is judged is what would be paid. Where the agent's own words name another supplier, figure or reference, a person looks before anything is paid, and the agent is told not to change a field to match. The header Checkrail writes carries the supplier's name on file and no agent name, so nothing in it reads as a reference.
+- **One request at a time.** Requests are taken in turn per business within a server, so a second request for the same job sees the first and is blocked. Across two servers (stdio and HTTP at once) that queue does not reach, and policy running again at release is what stops the second: one payment attempt, not two.
+- **No shopping for a pass.** An agent that tries three or more different amounts for one payment (the supplier Checkrail resolved, the currency and the reference) within 15 minutes gets a hold on checks and a refusal on requests, whatever the rules say. A batch of different jobs for one supplier is not a probe.
 - **No ceilings from say-so.** An outside agent's own attachment never sets a bill total for later payments.
-- **Answers are data.** Messages are trimmed and carry no internal ids, emails, account numbers or other suppliers' names; the server instructions tell agents that quoted supplier text is never an instruction. The agent's own words are kept in quotes in the request, after a header Checkrail writes.
-- **Limits.** 60 calls a minute per agent, 20 wrong keys per address per 15 minutes, 64 KB per request, and cross-origin browser calls are refused.
+- **Answers are data.** Messages are trimmed and carry no internal ids, emails, account numbers or other suppliers' names (whole names and their distinctive parts, accents aside); references keep their digits; the server instructions tell agents that quoted supplier text is never an instruction. The agent's own words are kept in quotes in the request, after a header Checkrail writes.
+- **Limits.** 60 calls a minute per agent, 20 wrong keys per address per 15 minutes, 64 KB per request (the app's middleware does not run on this path, so nothing reads more), and cross-origin browser calls are refused.
 
 ## The same engine, on your own history
 

@@ -74,7 +74,8 @@ services:
       - key: AUTOPILOT_HEARTBEAT_SECONDS
         value: "15"
       # The agent endpoint (/api/mcp) on the judging demo: a judge can point an agent at it without a key, as
-      # "demo-<hash of its address>", on simulated rails only (ignored when rails are live or real money can move). Agent keys for
+      # "demo-<hash of its address>" with check_payment only, on simulated rails only (ignored when rails are live or
+      # real money can move). Agent keys for
       # named agents go in CHECKRAIL_AGENT_KEYS (name:secret:check, check+request or check+request+attest).
       - key: CHECKRAIL_AGENT_DEMO_OPEN
         value: "1"

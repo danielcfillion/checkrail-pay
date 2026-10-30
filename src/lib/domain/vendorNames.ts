@@ -22,6 +22,11 @@ const GENERIC = new Set(
   ],
 );
 
+/** A word that names a kind of business, not a business: it identifies no supplier on its own. */
+export function isGenericWord(word: string): boolean {
+  return GENERIC.has(normaliseName(word));
+}
+
 export function normaliseName(s: string): string {
   return s
     .normalize("NFD")

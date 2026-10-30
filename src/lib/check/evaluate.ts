@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { obligations, vendors } from "../db/schema";
-import { ingestObligation, previewPolicy } from "../engine/orchestrator";
+import { ingestObligation, previewPolicy, type StatedFields } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import type { PolicyDecision, PolicyRuleResult } from "../domain/types";
 
@@ -28,6 +28,10 @@ export interface PaymentToCheck {
   /** Evidence from the business's own systems ("system") or typed by whoever asks ("operator"). Operator evidence is weighed less. */
   evidenceSource?: "system" | "operator";
   actor?: string;
+  /** The request text to keep, when the caller writes its own (the agent guard). Defaults to requestText(). */
+  text?: string;
+  /** Fields that are the request and that the reader may not replace (see IngestInput.stated). */
+  stated?: StatedFields;
 }
 
 export type Verdict = "pay" | "hold" | "block";
@@ -68,10 +72,11 @@ export async function evaluatePayment(db: Db, p: PaymentToCheck): Promise<CheckR
     businessId: p.businessId,
     sourceType: "operator_instruction",
     sourceRef: p.reference ?? null,
-    rawInput: requestText(p),
+    rawInput: p.text ?? requestText(p),
     evidence: (p.evidence ?? []).map((e) => ({ kind: e.kind, label: e.label, amountMinor: e.amountMinor ?? null, currency: e.currency ?? null, reference: e.reference ?? null, excerpt: e.excerpt ?? null })),
     evidenceSource: p.evidenceSource ?? "system",
     actor: p.actor ?? "check",
+    stated: p.stated,
   });
   const outcome = previewPolicy(db, draftId);
   const ob = db.select().from(obligations).where(eq(obligations.id, draftId)).get()!;

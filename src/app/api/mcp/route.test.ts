@@ -100,6 +100,22 @@ describe("POST /api/mcp", () => {
     expect(names.every((n) => /^demo-[0-9a-f]{8}$/.test(n))).toBe(true);
   });
 
+  it("AG2-7: a keyless demo caller may check, but not put a request in the books", async () => {
+    vi.stubEnv("CHECKRAIL_AGENT_DEMO_OPEN", "1");
+    const list = (await (await post(rpc("tools/list"), { "x-forwarded-for": "203.0.113.8" })).json()) as { result: { tools: Array<{ name: string }> } };
+    expect(list.result.tools.map((t) => t.name)).not.toContain("request_payment");
+    const r = (await (await post(rpc("tools/call", { name: "request_payment", arguments: { payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "CEB-2D-1024", idempotency_key: "visitor-0001" } }), { "x-forwarded-for": "203.0.113.8" })).json()) as { error?: { code: number } };
+    expect(r.error?.code).toBe(-32602);
+  });
+
+  it("AG-3: the middleware never runs on /api/mcp, so it never copies the body", async () => {
+    const { config } = await import("@/middleware");
+    const re = new RegExp(`^${config.matcher[0]}$`);
+    expect(re.test("/api/mcp")).toBe(false);
+    expect(re.test("/agents")).toBe(true);
+    expect(re.test("/api/mcpx")).toBe(true);
+  });
+
   it("refuses an oversized body and reports bad JSON", async () => {
     expect((await post("x".repeat(70_000), auth)).status).toBe(413);
     expect((await post("{not json", auth)).status).toBe(400);

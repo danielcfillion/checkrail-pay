@@ -20,11 +20,11 @@ export const INSTRUCTIONS = [
 
 const amountSchema = { anyOf: [{ type: "string" }, { type: "number" }], description: 'Amount in major units, no symbol: "960.00" or "2500000".' };
 const paymentProps = {
-  payee: { type: "string", description: "The supplier's full name, or their contact email. The verdict covers this payee and this amount only." },
+  payee: { type: "string", description: "The supplier's full name, or their contact email. The payee, amount, currency and reference you send are what is judged and, for a request, what is paid; Checkrail never takes them from the text." },
   amount: amountSchema,
   currency: { type: "string", description: "Three-letter code: USD, VND, PHP or THB." },
-  reference: { type: "string", description: "Invoice, job, trip or booking reference, if the request has one. Duplicates are matched on it." },
-  description: { type: "string", description: "The request in the requester's own words (the chat message, email or invoice line)." },
+  reference: { type: "string", description: "Invoice, job, trip or booking reference. Send it whenever the request has one: duplicates are matched on it, and Checkrail does not read one from the text in its place." },
+  description: { type: "string", description: "The request in the requester's own words (the chat message, email or invoice line). If it disagrees with the fields you send, a person looks first." },
   evidence: {
     type: "array",
     maxItems: 10,

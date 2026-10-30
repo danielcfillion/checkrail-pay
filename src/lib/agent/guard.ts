@@ -3,12 +3,14 @@ import { snapshotOf, type Db } from "../db";
 import { agentChecks, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
-import { SUPPORTED_CURRENCIES } from "../domain/money";
+import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES } from "../domain/money";
+import { distinctiveWords, isGenericWord, namesVendorFully, normaliseName } from "../domain/vendorNames";
+import { amountsIn, extractAmount, extractReference } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
 import { ingestObligation, previewPolicy } from "../engine/orchestrator";
 import { formatMoney } from "../format";
-import { evaluatePayment, verdictOf, type CheckResult, type Verdict } from "../check/evaluate";
+import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
 import { guideFor } from "./rules";
 
@@ -22,8 +24,10 @@ import { guideFor } from "./rules";
  *    unless the owner gave its key the attest scope (a system of record), when it counts like any integration's records.
  *  - payment_status, lookup_payee and explain_rule only read.
  *
- * Everything an agent sends is data. Checkrail judges the payee and amount the agent sent: when the reader takes a
- * different payee or figure from the agent's own text, the answer is a block and no request is kept (review AG-1).
+ * Everything an agent sends is data. The payee, amount, currency and reference the agent sends as fields are the
+ * request: the reader never replaces them, so a verdict covers exactly what was sent (reviews AG-1, AG2-1). When the
+ * agent's own text disagrees with its fields, a person looks (a hold), and the agent is told not to change a field to
+ * match (AG2-3).
  * Messages coming back are trimmed, carry no internal ids, emails, account numbers or other suppliers' names, because
  * they can quote what a supplier wrote and the calling agent will read them.
  */
@@ -73,6 +77,12 @@ export function validatePaymentArgs(raw: unknown) {
   const currency = (text(a.currency, "currency", 3, true) ?? "").toUpperCase();
   if (!SUPPORTED_CURRENCIES.includes(currency)) throw new AgentInputError(`currency must be one of ${SUPPORTED_CURRENCIES.join(", ")}`);
   const amountMinor = amountToMinor(a.amount);
+  // VND has no smaller unit: "4320000.50" is a typo, not an amount (review AG2-10).
+  const whole = (minor: number | null, name: string) => {
+    if (minor != null && ZERO_DECIMAL_CURRENCIES.has(currency) && minor % 100 !== 0) throw new AgentInputError(`${name} must be a whole number of ${currency}`);
+    return minor;
+  };
+  whole(amountMinor, "amount");
   const reference = text(a.reference, "reference", 80);
   const description = text(a.description, "description", 2000);
   const evRaw = a.evidence ?? [];
@@ -85,7 +95,7 @@ export function validatePaymentArgs(raw: unknown) {
     return {
       kind,
       label: text(r.label, `evidence[${i}].label`, 200, true)!,
-      amountMinor: r.amount == null || r.amount === "" ? null : amountToMinor(r.amount, `evidence[${i}].amount`),
+      amountMinor: whole(r.amount == null || r.amount === "" ? null : amountToMinor(r.amount, `evidence[${i}].amount`), `evidence[${i}].amount`),
       currency,
       reference: text(r.reference, `evidence[${i}].reference`, 80),
       excerpt: text(r.excerpt, `evidence[${i}].excerpt`, 2000),
@@ -98,34 +108,67 @@ export function validatePaymentArgs(raw: unknown) {
 
 const norm = (s: string) => s.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
 
-/** The supplier the agent named: exact name, or the contact email on file. Never the PayPal email (review AG-6). */
+/**
+ * The supplier the agent named: exact name, the contact email on file, or else the one supplier whose name is the same
+ * once accents and punctuation are set aside ("Huong Giang Boats" for "Hương Giang Boats", review AG2-8). Never the
+ * PayPal email (review AG-6).
+ */
 function vendorNamed(db: Db, businessId: string, payee: string) {
+  const all = db.select().from(vendors).where(eq(vendors.businessId, businessId)).all();
   const want = norm(payee);
-  return db.select().from(vendors).where(eq(vendors.businessId, businessId)).all().find((v) => norm(v.name) === want || (v.email ?? "").toLowerCase() === want) ?? null;
+  const exact = all.find((v) => norm(v.name) === want || (v.email ?? "").toLowerCase() === want);
+  if (exact) return exact;
+  const folded = normaliseName(payee);
+  const same = folded ? all.filter((v) => normaliseName(v.name) === folded) : [];
+  return same.length === 1 ? same[0] : null;
 }
 
 /**
- * Why what Checkrail read differs from what the agent sent, or null when it does not. The verdict is only about the
- * payment the agent asked about: a different payee or figure in the agent's own text must never come back as "pay"
- * for the fields the agent will then use (review AG-1).
+ * Where the agent's own description disagrees with the fields it sent, or null. Only the description is read, never
+ * the header Checkrail writes from the fields, so the comparison is fields against words (review AG2-3). A description
+ * that mentions the payee sent, states the amount sent somewhere, and gives no other reference agrees. Disagreement is
+ * a hold for a person, never a reason to change a field.
  */
-function mismatchOf(read: Pick<CheckResult, "vendor" | "amountMinor" | "currency">, askedVendorId: string | null, a: { amountMinor: number; currency: string }): string | null {
+function disagreementOf(db: Db, businessId: string, asked: { id: string; name: string } | null, a: ReturnType<typeof validatePaymentArgs>): string | null {
+  const d = a.description;
+  if (!d) return null;
   const parts: string[] = [];
-  if ((read.vendor?.id ?? null) !== askedVendorId) parts.push(askedVendorId ? "the request text names a different supplier from the payee you sent" : "the payee you sent is not a supplier on file, but the request text names one");
-  if (read.amountMinor !== a.amountMinor || read.currency !== a.currency) {
-    parts.push(read.amountMinor && read.currency ? `the request text reads ${formatMoney(read.amountMinor, read.currency, { code: true })}, not ${formatMoney(a.amountMinor, a.currency, { code: true })}` : "no amount could be read from the request text");
+  const names = db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, businessId)).all();
+  const mentions = (v: { id: string; name: string }) => namesVendorFully(d, v.name) || distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).some((w) => ` ${normaliseName(d)} `.includes(` ${w} `));
+  const named = names.filter(mentions);
+  if (named.length > 0 && !(asked && named.some((v) => v.id === asked.id))) parts.push(`it names ${named.map((v) => v.name).join(" and ")}, not the payee sent`);
+  const stated = amountsIn(d).filter((x) => x.currency === a.currency);
+  const pick = extractAmount(d);
+  if (stated.length > 0 && !stated.some((x) => x.amountMinor === a.amountMinor) && !(pick && pick.currency === a.currency && pick.amountMinor === a.amountMinor)) {
+    parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
   }
-  return parts.length ? `Not what you asked about: ${parts.join(", and ")}. Send the payee and amount that are in the request` : null;
+  const ref = extractReference(d);
+  if (ref && a.reference && ref.toUpperCase() !== a.reference.toUpperCase() && !d.toUpperCase().includes(a.reference.toUpperCase())) parts.push(`it gives reference ${ref}, not the ${a.reference} sent`);
+  return parts.length ? `The agent's request text disagrees with the fields it sent: ${parts.join("; ")}. A person confirms which is right` : null;
 }
 
-/** The probe key: the supplier Checkrail resolved, else the name as normalised (review AG-7). */
-const probeKeyOf = (vendorId: string | null | undefined, payee: string) => (vendorId ? `ven:${vendorId}` : `name:${norm(payee)}`);
+/**
+ * The probe key: the supplier Checkrail resolved (else the name as normalised), the currency and the reference. Trying
+ * amount after amount for one job is looking for the line (review AG-7); a batch of different jobs is not (AG2-5).
+ */
+const probeKeyOf = (vendorId: string | null | undefined, payee: string, currency: string, reference: string | null) =>
+  `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${(reference ?? "").toUpperCase()}`;
 
 function probing(db: Db, agent: AgentKey, key: string, amountMinor: number): number {
   const recent = db.select({ amountMinor: agentChecks.amountMinor }).from(agentChecks)
     .where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.payeeKey, key), gte(agentChecks.createdAt, new Date(Date.now() - PROBE_WINDOW_MS).toISOString())))
     .all();
   return new Set([...recent.map((x) => x.amountMinor), amountMinor]).size;
+}
+
+/**
+ * The request text Checkrail keeps and reads: a header written from the fields, amount first and the supplier by the
+ * name on file, then the agent's own words quoted, never mistaken for ours (reviews AG-8, AG2-2, AG2-9). The agent's
+ * name is not in it: a name like "tour-desk" would read as a reference. The audit log records who asked.
+ */
+function requestTextFor(kind: string, payeeName: string, a: ReturnType<typeof validatePaymentArgs>): string {
+  const head = `[Outside agent ${kind}] Pay ${formatMoney(a.amountMinor, a.currency, { code: true })} to ${payeeName}${a.reference ? ` for ${a.reference}` : ""}.`;
+  return a.description ? `${head} The request as the agent received it: "${a.description.replace(/\s+/g, " ").replace(/"/g, "'")}"` : head;
 }
 
 // ---------- Output ----------
@@ -135,20 +178,37 @@ export function evidenceSourceOf(agent: AgentKey): "system" | "operator" {
   return agent.scopes.includes("attest") ? "system" : "operator";
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 /**
  * What goes back to an agent: no internal ids, no emails or account numbers, no other supplier's name, no runaway
- * length (review AG-6). `others` are the names of suppliers the agent did not ask about.
+ * length (review AG-6). `others` are the names of suppliers the agent did not ask about; `keep` the one it did.
+ * Names are matched as whole words with accents set aside, and a distinctive part of a name ("Maria" of "Maria
+ * Santos") counts too (review AG2-4). Reference-shaped tokens ("INV-2026-000123") keep their digits.
  */
-export function clean(message: string, others: string[] = []): string {
+export function clean(message: string, others: string[] = [], keep: string | null = null): string {
   let out = message
     .replace(/obligation obl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/\bobl_[a-z0-9]+/gi, "an earlier payment")
-    .replace(/[^\s@<>"',;()]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "the payee's PayPal account")
-    .replace(/\+?\d(?:[ .-]?\d){8,}/g, "[number]");
-  for (const name of [...others].sort((x, y) => y.length - x.length)) {
-    if (name.trim().length >= 3) out = out.replace(new RegExp(escapeRe(name), "gi"), "another supplier");
+    .replace(/[^\s@<>"',;()]+@[^\s@<>"',;()]+\.[^\s@<>"',;().]{2,}/gu, "the payee's PayPal account")
+    .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
+  const keepWords = new Set(keep ? normaliseName(keep).split(" ") : []);
+  const fulls = others.map((n) => normaliseName(n).split(" ").filter(Boolean)).filter((t) => t.join(" ").length >= 3).sort((x, y) => y.length - x.length);
+  const parts = new Set(others.flatMap((n) => distinctiveWords(n, keep ? [keep] : [])).filter((w) => !keepWords.has(w) && !isGenericWord(w)));
+  if (fulls.length || parts.size) {
+    const tokens = [...out.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, w: normaliseName(m[0]) }));
+    // The payee asked about is never cut: another supplier called "Rosa" leaves "Rosa Villanueva" whole.
+    const keepTokens = keep ? normaliseName(keep).split(" ").filter(Boolean) : [];
+    const kept = new Set<number>();
+    for (let i = 0; keepTokens.length && i < tokens.length; i++) if (keepTokens.every((w, j) => tokens[i + j]?.w === w)) keepTokens.forEach((_, j) => kept.add(i + j));
+    const spans: Array<[number, number]> = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (kept.has(i)) continue;
+      const full = fulls.find((f) => f.every((w, j) => tokens[i + j]?.w === w && !kept.has(i + j)));
+      if (full) {
+        spans.push([tokens[i].start, tokens[i + full.length - 1].end]);
+        i += full.length - 1;
+      } else if (parts.has(tokens[i].w)) spans.push([tokens[i].start, tokens[i].end]);
+    }
+    for (const [a, b] of spans.reverse()) out = `${out.slice(0, a)}another supplier${out.slice(b)}`;
   }
   return out.replace(/\s+/g, " ").trim().slice(0, 300);
 }
@@ -204,28 +264,30 @@ export interface CheckAnswer {
   note: string;
 }
 
+/** Judge on a copy of the books, with the agent's fields fixed and any disagreement in its text as a hold. */
+async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, kind: string) {
+  const asked = vendorNamed(db, biz.id, a.payee);
+  const disagreement = disagreementOf(db, biz.id, asked, a);
+  const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [] };
+  const r = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}`, text: requestTextFor(kind, asked?.name ?? a.payee, a), stated });
+  return { asked, disagreement, stated, r, payeeKey: probeKeyOf(asked?.id, a.payee, a.currency, a.reference) };
+}
+
 export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promise<CheckAnswer> {
   const a = validatePaymentArgs(raw);
   const biz = businessOf(db);
-  const asked = vendorNamed(db, biz.id, a.payee);
-  const r = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}` });
-  const others = otherNames(db, biz.id, [asked?.name, a.payee]);
+  const { asked, disagreement, r, payeeKey } = await judge(db, agent, biz, a, "check");
+  const others = otherNames(db, biz.id, [asked?.name]);
+  const keep = asked?.name ?? null;
   let verdict = r.verdict;
-  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(b.message, others) }));
-  const warnings = r.warnings.map((w) => ({ rule: w.rule, message: clean(w.message, others) }));
+  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(b.message, others, keep) }));
+  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message === disagreement ? "agent_mismatch" : w.rule, message: clean(w.message, others, keep) }));
 
-  const mismatch = mismatchOf(r, asked?.id ?? null, a);
-  if (mismatch) {
-    verdict = "block";
-    blocks.unshift({ rule: "agent_mismatch", message: mismatch });
-  }
-
-  // An agent trying amount after amount for one supplier is looking for the line. It does not get a "pay" that way.
-  const payeeKey = probeKeyOf(asked?.id ?? r.vendor?.id, a.payee);
+  // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
   const distinct = probing(db, agent, payeeKey, a.amountMinor);
   if (distinct >= PROBE_DISTINCT_AMOUNTS && verdict !== "block") {
     verdict = "hold";
-    warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payee in 15 minutes; a person confirms this one` });
+    warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payment in 15 minutes; a person confirms this one` });
   }
 
   const summary = clean(
@@ -233,6 +295,7 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
     : verdict === "pay" ? "Clear to pay: every rule passed within the limits this business set."
     : `A person must look first: ${warnings[0]?.message ?? "it needs approval"}.`,
     others,
+    keep,
   ).replace(/\.\.$/, ".");
   const amount = formatMoney(a.amountMinor, a.currency, { code: true });
   const checkId = log(db, { businessId: biz.id, agent: agent.name, tool: "check_payment", verdict, payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: JSON.stringify([...blocks, ...warnings].map((x) => x.rule)), obligationId: null, idempotencyKey: null });
@@ -287,7 +350,7 @@ function describe(db: Db, id: string): StatusAnswer {
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const policy = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) ? previewPolicy(db, id) : null;
-  const reasons = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(r.message, others)).slice(0, 6);
+  const reasons = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(r.message, others, vendor?.name ?? null)).slice(0, 6);
   const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"
@@ -315,7 +378,7 @@ function describe(db: Db, id: string): StatusAnswer {
   return {
     request_id: id,
     status,
-    summary: clean(summary, others).replace(/\.\.$/, "."),
+    summary: clean(summary, others, vendor?.name ?? null).replace(/\.\.$/, "."),
     payee: vendor?.name ?? null,
     amount,
     reference: ob.sourceRef,
@@ -351,12 +414,6 @@ function withdraw(db: Db, id: string, agent: AgentKey, reason: string): void {
   if (state && TRANSITIONS[state].includes("cancelled")) transition(db, id, "cancelled", `mcp:${agent.name}`, "agent.request_withdrawn", { reason });
 }
 
-/** The request text Checkrail keeps: who asked and what, then the agent's own words quoted, never mistaken for ours (review AG-8). */
-function requestTextFor(agent: AgentKey, claim: string, a: ReturnType<typeof validatePaymentArgs>): string {
-  const head = `[Outside agent ${agent.name}, request ${claim}] Pay ${a.payee} ${formatMoney(a.amountMinor, a.currency, { code: true })}${a.reference ? ` for ${a.reference}` : ""}.`;
-  return a.description ? `${head} The request as the agent received it: "${a.description.replace(/"/g, "'")}"` : head;
-}
-
 export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Promise<StatusAnswer & { replayed: boolean }> {
   if (!agent.scopes.includes("request")) throw new AgentInputError("This agent key may check payments but not request them");
   const a = validatePaymentArgs(raw);
@@ -367,25 +424,27 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
   return oneAtATime(biz.id, async () => {
     // A retry, or two calls racing, gets the one request this key stands for.
     const existing = db.select().from(agentChecks).where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.idempotencyKey, idem))).get();
-    if (existing) {
-      if (existing.payee !== a.payee || existing.amountMinor !== a.amountMinor || existing.currency !== a.currency) throw new AgentInputError("idempotency_key was already used for a different payment");
-      if (!existing.obligationId) throw new AgentInputError(existing.verdict === "refused" ? `That request was refused: ${existing.summary}` : "That request is still being created; ask payment_status again in a moment");
+    if (existing && existing.verdict === "refused" && !existing.obligationId) {
+      // Nothing was created under a refused key, so a corrected request may use it again (review AG2-10). The refusal
+      // stays in the log, and still counts towards the probe hold.
+      db.update(agentChecks).set({ idempotencyKey: null }).where(eq(agentChecks.id, existing.id)).run();
+    } else if (existing) {
+      if (existing.payee !== a.payee || existing.amountMinor !== a.amountMinor || existing.currency !== a.currency || (existing.reference ?? null) !== (a.reference ?? null)) throw new AgentInputError("idempotency_key was already used for a different payment");
+      if (!existing.obligationId) throw new AgentInputError("That request is still being created; ask payment_status again in a moment");
       return { ...describe(db, existing.obligationId), replayed: true };
     }
 
-    // Judge it on a copy first. A request that is not what the agent sent, or that follows a run of other amounts for
-    // the same supplier, is refused before anything is written to the books (review AG-1, AG-7).
+    // A request that follows a run of other amounts for the same job is refused before anything is written (AG-7).
     const asked = vendorNamed(db, biz.id, a.payee);
-    const preview = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}` });
-    const payeeKey = probeKeyOf(asked?.id ?? preview.vendor?.id, a.payee);
+    const payeeKey = probeKeyOf(asked?.id, a.payee, a.currency, a.reference);
     const refuse = (summary: string): never => {
       log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "refused", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: null, obligationId: null, idempotencyKey: idem });
       throw new AgentInputError(`Refused, and nothing was created: ${summary}`);
     };
-    const mismatch = mismatchOf(preview, asked?.id ?? null, a);
-    if (mismatch) refuse(`${mismatch}.`);
-    if (probing(db, agent, payeeKey, a.amountMinor) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payee in 15 minutes. Ask a person for the right figure and its record.");
+    if (probing(db, agent, payeeKey, a.amountMinor) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
 
+    // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person (AG2-1, AG2-3).
+    const disagreement = disagreementOf(db, biz.id, asked, a);
     const claim = log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "hold", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary: "Creating the request", rulesJson: null, obligationId: null, idempotencyKey: idem });
     let id: string;
     try {
@@ -393,10 +452,11 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
         businessId: biz.id,
         sourceType: "operator_instruction",
         sourceRef: a.reference,
-        rawInput: requestTextFor(agent, claim, a),
+        rawInput: requestTextFor(`request ${claim}`, asked?.name ?? a.payee, a),
         evidence: a.evidence,
         evidenceSource: evidenceSourceOf(agent),
         actor: `mcp:${agent.name}`,
+        stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [] },
       });
     } catch (e) {
       // Nothing half-made stays behind: no stuck key, no orphan draft (review AG-4).
@@ -406,13 +466,13 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
       throw new AgentInputError(`Checkrail could not create the request: ${clean(e instanceof Error ? e.message : "an error")}. Nothing was paid.`);
     }
 
-    // The books may read differently from the copy (a live reader can). The request must still be what was sent.
+    // The request in the books must be exactly what was sent. Fixed fields make that so; this is the belt to those braces.
     const ob = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
-    const after = mismatchOf({ vendor: ob.vendorId ? { id: ob.vendorId, name: "" } : null, amountMinor: ob.amountMinor, currency: ob.currency }, asked?.id ?? null, a);
-    if (after) {
-      withdraw(db, id, agent, after);
-      db.update(agentChecks).set({ obligationId: id, verdict: "refused", summary: `${after}.` }).where(eq(agentChecks.id, claim)).run();
-      throw new AgentInputError(`Refused, and the request was cancelled: ${after}.`);
+    if ((ob.vendorId ?? null) !== (asked?.id ?? null) || ob.amountMinor !== a.amountMinor || ob.currency !== a.currency || (ob.sourceRef ?? null) !== (a.reference ?? null)) {
+      const why = "the request in the books is not the payee, amount and reference sent";
+      withdraw(db, id, agent, why);
+      db.update(agentChecks).set({ obligationId: id, verdict: "refused", summary: `Refused: ${why}.` }).where(eq(agentChecks.id, claim)).run();
+      throw new AgentInputError(`Refused, and the request was cancelled: ${why}.`);
     }
     const answer = describe(db, id);
     const verdict = answer.status === "blocked" ? "block" : answer.status === "scheduled" || answer.status === "approved" ? "pay" : "hold";
@@ -437,8 +497,9 @@ export function lookupPayee(db: Db, raw: unknown) {
   const v = vendorNamed(db, biz.id, name);
   if (!v) {
     // Suggestions only for a real attempt at a name: four characters or more, sharing a whole word (review AG-6).
-    const words = new Set(norm(name).split(" ").filter((w) => w.length >= 3));
-    const close = norm(name).length < 4 ? [] : db.select({ name: vendors.name }).from(vendors).where(eq(vendors.businessId, biz.id)).all().map((x) => x.name).filter((n) => norm(n).split(" ").some((w) => words.has(w))).slice(0, 3);
+    // Generic words ("transport", "boats") name a kind of business, not one, so they suggest nothing (AG2-6).
+    const words = new Set(normaliseName(name).split(" ").filter((w) => w.length >= 3 && !isGenericWord(w)));
+    const close = normaliseName(name).length < 4 ? [] : db.select({ name: vendors.name }).from(vendors).where(eq(vendors.businessId, biz.id)).all().map((x) => x.name).filter((n) => normaliseName(n).split(" ").some((w) => words.has(w))).slice(0, 3);
     return { known: false, name: null, suggestions: close, note: "Checkrail does not pay a payee it does not know. A person adds and verifies new suppliers." };
   }
   const paidBefore = db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.vendorId, v.id), eq(obligations.state, "settled"))).get();

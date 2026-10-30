@@ -20,7 +20,7 @@ import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForM
 import { runObligationAgent } from "../ai/agent";
 import { listPayPalTransactionsRaw } from "../ai/paypalTools";
 import { matchPayPalHistory, type PayPalHistoryCheck } from "../domain/paypalHistory";
-import { addDays, extractInvoiceDates } from "../ai/extractor";
+import { addDays, extractInvoiceDates, paymentPartOf } from "../ai/extractor";
 import { localDateString, stateLabel } from "../format";
 import { getRails } from "../rails";
 import { buildAccountingRecord } from "../accounting/record";
@@ -50,6 +50,20 @@ export interface IngestInput {
   paymentKind?: "full" | "deposit" | "balance" | "part" | "advance" | null;
   /** Internal: the provenance each evidence row already had, when a payment is requested again. Never from a form. */
   evidenceProvenance?: string[];
+  /**
+   * Internal: the payee, amount, currency and reference a structured caller (an outside agent) sent as fields. They
+   * are the request: the reader describes and flags it, but never replaces them, so a verdict covers exactly what was
+   * sent (agent guard review AG2-1). `flags` are the caller's own concerns, each a hold. Never from a form.
+   */
+  stated?: StatedFields;
+}
+
+export interface StatedFields {
+  vendorId: string | null;
+  amountMinor: number;
+  currency: string;
+  sourceRef: string | null;
+  flags?: string[];
 }
 
 const SOURCE_TYPES: readonly SourceType[] = ["invoice", "job_completion", "operator_instruction", "booking"];
@@ -126,6 +140,12 @@ export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<s
       })
       .run();
     audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
+    if (rawInput.stated) {
+      const s = rawInput.stated;
+      if (!isValidAmountMinor(s.amountMinor) || !SUPPORTED_CURRENCIES.includes(s.currency)) throw new Error("Stated amount or currency is invalid");
+      const stated: StatedFields = { vendorId: s.vendorId ?? null, amountMinor: s.amountMinor, currency: s.currency, sourceRef: s.sourceRef ?? null, flags: (s.flags ?? []).map((f) => String(f).slice(0, 300)).slice(0, 5) };
+      audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.stated", detail: { ...stated } });
+    }
     for (const [n, e] of (input.evidence ?? []).entries()) {
       const carried = rawInput.evidenceProvenance?.[n];
       let provenance: string = carried && ["system", "operator", "document", "vendor"].includes(carried) ? carried : input.evidenceSource ?? "system";
@@ -183,6 +203,9 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   );
   const run = await runObligationAgent({ rawInput: ob.rawInput, sourceType: ob.sourceType, vendors: vendorProfiles, evidence: ev, documents: docs, businessName: biz.name, baseCurrency: biz.baseCurrency, vendorHistory });
   const ai = { ...run.interpretation };
+  // Fields a structured caller sent are the request; the reader's reading of them only describes it.
+  const statedRow = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
+  if (statedRow) applyStated(ai, JSON.parse(statedRow.detail ?? "{}") as StatedFields, vendorProfiles, ev, ob.rawInput);
   if (amended.has("amountMinor")) {
     ai.amountMinor = ob.amountMinor;
     ai.flags = ai.flags.filter((f) => !/amount differs|differs from/i.test(f));
@@ -246,6 +269,39 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   // 5. Autopilot: a clean payment inside the caps is scheduled for release after the cancel window.
   if (outcome.decision === "auto_execute" && mustGet(db, obligationId).state === "approved") {
     scheduleAutopilotRelease(db, obligationId);
+  }
+}
+
+/**
+ * Put the fields a structured caller sent in place of the reader's. The reader's own reading of the payee, amount and
+ * reference was taken from text the caller wrote, so its concerns about those figures are replaced by checks on the
+ * fields themselves; every other concern stays. Policy then judges exactly what was sent (agent guard review AG2-1).
+ */
+function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: VendorPayoutProfile[], ev: EvidenceItem[], rawInput: string): void {
+  const vendor = s.vendorId ? vendorProfiles.find((v) => v.id === s.vendorId) ?? null : null;
+  const otherFigure = ai.amountMinor !== s.amountMinor || ai.currency !== s.currency;
+  const differs = otherFigure || ai.vendorId !== (vendor?.id ?? null) || (ai.sourceRef ?? null) !== (s.sourceRef ?? null);
+  if (differs) {
+    const read = [ai.vendorName, ai.amountMinor && ai.currency ? fmt(ai.amountMinor, ai.currency) : null, ai.sourceRef].filter(Boolean).join(", ");
+    ai.notes = [...(ai.notes ?? []), `The requester's own fields are used${read ? `; the reader took ${read} from the text` : ""}`];
+  }
+  ai.vendorId = vendor?.id ?? null;
+  ai.vendorName = vendor?.name ?? null;
+  ai.amountMinor = s.amountMinor;
+  ai.currency = s.currency;
+  ai.sourceRef = s.sourceRef ?? null;
+  ai.flags = ai.flags.filter((f) => !/amount differs|differs from|Reference .* does not (match|appear)/i.test(f));
+  ai.missing = ai.missing.filter((m) => !/vendor name|amount and currency|invoice, job or booking reference/i.test(m));
+  const refs = ev.map((e) => e.reference).filter((r): r is string => Boolean(r) && !/^AGR-/i.test(r!));
+  if (s.sourceRef && refs.length > 0 && !refs.some((r) => r.toUpperCase() === s.sourceRef!.toUpperCase())) {
+    ai.flags.push(`Reference ${s.sourceRef} does not appear on any attached record (found ${[...new Set(refs)].join(", ")})`);
+  }
+  ai.flags.push(...(s.flags ?? []));
+  const totals = ev.filter((e) => e.currency === s.currency && e.amountMinor != null).map((e) => e.amountMinor!);
+  if (otherFigure) ai.paymentPart = paymentPartOf(rawInput, s.amountMinor, s.currency, totals);
+  if (differs) {
+    ai.description = `${vendor?.name ?? "Unknown payee"}${s.sourceRef ? ` (${s.sourceRef})` : ""}: ${fmt(s.amountMinor, s.currency)} as requested`;
+    ai.summary = `${vendor?.name ?? "A payee not on file"} is asked for ${fmt(s.amountMinor, s.currency)}${s.sourceRef ? ` for ${s.sourceRef}` : ""}. ${ai.flags.length === 0 ? "No concerns noted." : `${ai.flags.length} concern${ai.flags.length === 1 ? "" : "s"} noted.`}`;
   }
 }
 

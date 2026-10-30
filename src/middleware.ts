@@ -108,5 +108,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static/).*)"],
+  // /api/mcp is left out entirely: the route checks the agent key itself, and a matched request has its body copied
+  // (up to 10 MB) for the middleware before the route's own 64 KB limit can refuse it (agent guard review AG-3).
+  matcher: ["/((?!_next/static/|api/mcp$).*)"],
 };
