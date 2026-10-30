@@ -15,6 +15,7 @@ const trustOf = (scopes: string[]) => (scopes.includes("attest") ? TRUST.attest 
 
 function Verdict({ verdict }: { verdict: string }) {
   if (verdict === "block") return <TonePill tone="blocked">Blocked</TonePill>;
+  if (verdict === "refused") return <TonePill tone="blocked">Refused</TonePill>;
   if (verdict === "pay") return <TonePill tone="settled">Clear</TonePill>;
   return <TonePill tone="attention">A person looks</TonePill>;
 }
@@ -167,7 +168,7 @@ export default async function AgentsPage() {
                 <p className="num mt-1 flex items-center gap-1 break-all">
                   {url} <CopyButton value={url} label="Copy the endpoint" />
                 </p>
-                <p className="mt-1 text-xs text-ink-soft">{open ? "Open on this demo: an agent can call it without a key, as demo-visitor, on simulated rails." : "Each agent sends its key as Authorization: Bearer <key>."}</p>
+                <p className="mt-1 text-xs text-ink-soft">{open ? "Open on this demo: an agent can call it without a key, on simulated rails; each caller gets a name of its own." : "Each agent sends its key as Authorization: Bearer <key>."}</p>
               </div>
               <div>
                 <p className="dense text-ink-soft">Claude Code</p>

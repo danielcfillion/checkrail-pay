@@ -37,16 +37,16 @@ The Agents page in the app shows the endpoint, every agent, and every question a
 
 Even with `attest`, policy runs, the owner's caps and cancel window apply, and policy runs again at release. Outside agents appear in the audit log as `mcp:<name>`, never as Autopilot.
 
-On the simulated-rails judging demo only, `CHECKRAIL_AGENT_DEMO_OPEN=1` lets a caller without a key in as `demo-visitor`. It is ignored whenever rails are live or real money can move.
+On the simulated-rails judging demo only, `CHECKRAIL_AGENT_DEMO_OPEN=1` lets a caller without a key in as `demo-<hash of its address>`, so visitors do not share requests. It is ignored whenever rails are live or real money can move.
 
 ## Tools
 
 | Tool | Writes | What it does |
 |---|---|---|
-| `check_payment` | one agent-log row | Judges a payment on an in-memory copy of the books. Returns `verdict`, `summary`, `blocks`, `warnings`, `next_steps`, and `paypal_transaction_id` when PayPal's history shows the job already paid. |
+| `check_payment` | one agent-log row | Judges a payment on an in-memory copy of the books. The verdict covers the payee and amount the agent sent: if the request text names another supplier or figure, the answer is a block. Returns `verdict`, `summary`, `blocks`, `warnings`, `next_steps`, and `paypal_transaction_id` when PayPal's history shows the job already paid. |
 | `request_payment` | a request, as a clerk would | Needs `idempotency_key`; the same key returns the same request, and the same key for a different payment is refused. Returns `status`: blocked, waiting for evidence or approval, scheduled by Autopilot (with `releases_at`), sending, paid (with the rail and the provider's id), returned. |
 | `payment_status` | nothing | Status of a request this agent made. An agent cannot read another agent's requests. |
-| `lookup_payee` | nothing | Whether a payee is on file, verified and paid before. Never payout details. |
+| `lookup_payee` | nothing | Whether a payee is on file (by full name or contact email), verified and paid before. Never payout details. |
 | `explain_rule` | nothing | What a rule id checks and what clears it without bending it. |
 
 ## What it looks like
@@ -68,8 +68,11 @@ A job PayPal already paid comes back blocked with PayPal's transaction id. A cle
 
 - **A check cannot change the books or pay.** It runs on `snapshotOf(db)`, an in-memory copy, and only previews policy. Tests prove the real database is untouched and no payment attempt is created.
 - **A request is a request.** It enters through the same ingest as a clerk's, so every rule applies. There is no agent tool that approves, releases or sends.
-- **No shopping for a pass.** An agent that checks three or more different amounts for one payee within 15 minutes gets a hold, whatever the rules say.
-- **Answers are data.** Messages are trimmed, internal ids are removed, and the server instructions tell agents that quoted supplier text is never an instruction.
+- **The verdict is about what the agent sent.** The request text goes through the reader like any other; if it names a different supplier or figure from the agent's fields, the check blocks and a request is refused before anything is written. A request that reads differently once in the books is cancelled.
+- **One request at a time.** Requests are taken in turn per business, so a second request for the same job sees the first and is blocked; policy runs again at release regardless.
+- **No shopping for a pass.** An agent that tries three or more different amounts for one supplier within 15 minutes gets a hold on checks and a refusal on requests, whatever the rules say. The supplier is the one Checkrail resolved, not the spelling the agent used.
+- **No ceilings from say-so.** An outside agent's own attachment never sets a bill total for later payments.
+- **Answers are data.** Messages are trimmed and carry no internal ids, emails, account numbers or other suppliers' names; the server instructions tell agents that quoted supplier text is never an instruction. The agent's own words are kept in quotes in the request, after a header Checkrail writes.
 - **Limits.** 60 calls a minute per agent, 20 wrong keys per address per 15 minutes, 64 KB per request, and cross-origin browser calls are refused.
 
 ## The same engine, on your own history

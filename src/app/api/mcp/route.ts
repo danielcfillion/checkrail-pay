@@ -5,6 +5,7 @@ import { realMoneyEnv } from "@/lib/basicAuth";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 import { authenticateAgent, configuredAgentKeys, type AgentKey } from "@/lib/agent/keys";
 import { handleMcp, SUPPORTED_VERSIONS } from "@/lib/agent/mcp";
+import { createHash } from "node:crypto";
 import pkg from "../../../../package.json";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +16,8 @@ export const runtime = "nodejs";
  *
  * An agent authenticates with an agent key from CHECKRAIL_AGENT_KEYS as a bearer token. The middleware lets this one
  * path through without a login and the key is checked here. On the simulated-rails judging demo only,
- * CHECKRAIL_AGENT_DEMO_OPEN=1 admits callers without a key as the agent "demo-visitor", so a judge can add the URL to
- * an agent and try it; it is ignored whenever rails are live or real money can move.
+ * CHECKRAIL_AGENT_DEMO_OPEN=1 admits callers without a key as "demo-<hash of their address>", so a judge can add the
+ * URL to an agent and try it; it is ignored whenever rails are live or real money can move.
  */
 
 const BODY_LIMIT = 64 * 1024;
@@ -52,13 +53,17 @@ export async function POST(req: Request) {
     overLimit(badKeys, ip, BAD_KEY_LIMIT, 15 * 60_000);
     return deny(401, "Unknown agent key", { "WWW-Authenticate": 'Bearer realm="Checkrail Pay agents"' });
   }
-  if (!agent && open()) agent = { name: "demo-visitor", scopes: ["check", "request"], digest: Buffer.alloc(32) };
+  // Each keyless demo caller gets a name of its own, so one visitor cannot read another's requests or trip their
+  // probe hold (review AG-7). The address is hashed; it is never stored.
+  if (!agent && open()) agent = { name: `demo-${createHash("sha256").update(ip).digest("hex").slice(0, 8)}`, scopes: ["check", "request"], digest: Buffer.alloc(32) };
   if (!agent) return deny(401, "An agent key is required (Authorization: Bearer <key>)", { "WWW-Authenticate": 'Bearer realm="Checkrail Pay agents"' });
   // Open demo callers share one name, so they are limited per address as well.
-  if (overLimit(perAgent, agent.name === "demo-visitor" ? `demo:${ip}` : agent.name, PER_AGENT_LIMIT, 60_000)) return deny(429, "Slow down: at most 60 calls a minute per agent", { "Retry-After": "60" });
+  if (overLimit(perAgent, agent.name, PER_AGENT_LIMIT, 60_000)) return deny(429, "Slow down: at most 60 calls a minute per agent", { "Retry-After": "60" });
 
-  const raw = await req.text();
-  if (raw.length > BODY_LIMIT) return deny(413, "Request too large");
+  // Refuse an oversized body before reading it, and stop reading one that grows past the limit (review AG-3).
+  if (Number(req.headers.get("content-length") ?? 0) > BODY_LIMIT) return deny(413, "Request too large");
+  const raw = await readCapped(req, BODY_LIMIT);
+  if (raw === null) return deny(413, "Request too large");
   let message: unknown;
   try {
     message = JSON.parse(raw);
@@ -70,6 +75,25 @@ export async function POST(req: Request) {
   const reply = await handleMcp(message, { db: getDb(), agent, version: (pkg as { version: string }).version });
   if (!reply) return new Response(null, { status: 202 });
   return NextResponse.json(reply, { headers: { "MCP-Protocol-Version": version, "Cache-Control": "no-store" } });
+}
+
+/** The body as text, or null as soon as it passes `limit` bytes; the rest is never read. */
+async function readCapped(req: Request, limit: number): Promise<string | null> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export function GET() {

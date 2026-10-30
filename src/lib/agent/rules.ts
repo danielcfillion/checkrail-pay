@@ -33,6 +33,8 @@ export const RULE_GUIDE: Record<string, RuleGuide> = {
   ai_flag: { checks: "The reader raised no concern about this request.", clear: "A person reads the concern." },
   tax_form: { checks: "A tax form needed for this supplier is on file.", clear: "A person collects the form; the payment can still be approved." },
   tax_withholding: { checks: "Any tax to withhold has been worked out.", clear: "Nothing to do; it is shown for the record." },
+  agent_mismatch: { checks: "What Checkrail read from the request is the payee and amount the agent sent.", clear: "Send the payee and amount the request actually asks for. A verdict covers only those." },
+  agent_probing: { checks: "The same agent has not tried several different amounts for one payee in a short time.", clear: "Stop trying amounts. Ask the person who wants this paid for the right figure and its record." },
 };
 
 export function guideFor(rule: string): RuleGuide {

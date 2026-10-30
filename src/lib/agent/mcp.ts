@@ -20,7 +20,7 @@ export const INSTRUCTIONS = [
 
 const amountSchema = { anyOf: [{ type: "string" }, { type: "number" }], description: 'Amount in major units, no symbol: "960.00" or "2500000".' };
 const paymentProps = {
-  payee: { type: "string", description: "The supplier's full name, or their email, as the request names them." },
+  payee: { type: "string", description: "The supplier's full name, or their contact email. The verdict covers this payee and this amount only." },
   amount: amountSchema,
   currency: { type: "string", description: "Three-letter code: USD, VND, PHP or THB." },
   reference: { type: "string", description: "Invoice, job, trip or booking reference, if the request has one. Duplicates are matched on it." },
@@ -68,7 +68,7 @@ export function toolsFor(agent: AgentKey) {
       name: "lookup_payee",
       title: "Is this payee on file?",
       description: "Whether a supplier is on file for this business, whether their payout details were verified, and whether they have been paid before. Never returns payout details.",
-      inputSchema: { type: "object", properties: { name: { type: "string", description: "Full name or email." } }, required: ["name"] },
+      inputSchema: { type: "object", properties: { name: { type: "string", description: "Full name or contact email." } }, required: ["name"] },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     {

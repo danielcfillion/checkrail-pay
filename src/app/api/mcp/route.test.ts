@@ -73,6 +73,33 @@ describe("POST /api/mcp", () => {
     expect(GET().status).toBe(405);
   });
 
+  it("AG-3: refuses an oversized body by its declared length, and stops reading a streamed one", async () => {
+    const declared = await POST(new Request(URL_, { method: "POST", body: "{}", headers: { "content-type": "application/json", "content-length": String(50 * 1024 * 1024), ...auth } }));
+    expect(declared.status).toBe(413);
+    let pulled = 0;
+    const chunk = new Uint8Array(1024 * 1024).fill(32);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled++;
+        if (pulled > 50) c.close();
+        else c.enqueue(chunk);
+      },
+    });
+    const streamed = await POST(new Request(URL_, { method: "POST", body: stream, headers: { "content-type": "application/json", ...auth }, duplex: "half" } as RequestInit));
+    expect(streamed.status).toBe(413);
+    expect(pulled).toBeLessThan(5);
+  });
+
+  it("gives each keyless demo caller a name of its own", async () => {
+    vi.stubEnv("CHECKRAIL_AGENT_DEMO_OPEN", "1");
+    const call = (ip: string) => post(rpc("tools/call", { name: "check_payment", arguments: { payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" } }), { "x-forwarded-for": ip });
+    await call("203.0.113.7");
+    await call("198.51.100.9");
+    const names = getDb().select().from(agentChecks).all().map((c) => c.agent);
+    expect(new Set(names).size).toBe(2);
+    expect(names.every((n) => /^demo-[0-9a-f]{8}$/.test(n))).toBe(true);
+  });
+
   it("refuses an oversized body and reports bad JSON", async () => {
     expect((await post("x".repeat(70_000), auth)).status).toBe(413);
     expect((await post("{not json", auth)).status).toBe(400);

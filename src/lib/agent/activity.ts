@@ -27,7 +27,7 @@ export function agentSummary(db: Db = getDb(), sinceDays = 7): { agents: AgentRo
     const a = by.get(r.agent) ?? { name: r.agent, scopes: [], configured: false, lastSeen: null, checks: 0, blocked: 0, held: 0, cleared: 0, requests: 0 };
     if (r.tool === "request_payment") a.requests++;
     else a.checks++;
-    if (r.verdict === "block") a.blocked++;
+    if (r.verdict === "block" || r.verdict === "refused") a.blocked++;
     else if (r.verdict === "pay") a.cleared++;
     else a.held++;
     if (!a.lastSeen || r.createdAt > a.lastSeen) a.lastSeen = r.createdAt;
