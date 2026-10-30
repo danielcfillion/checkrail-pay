@@ -56,7 +56,7 @@ As of 29 Oct 2026:
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
-- **Tests:** 604 in 68 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 617 in 69 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -139,6 +139,20 @@ They describe the same purchase the same way. The settlement row uses the bill's
 
 Changed in practitioner round six (PR6-4): `netPaid` was the amount alone for Wise and the bank file, so it did not equal the money that left the account; an advance was classed as 310 in the CSV and 620 in the bills file; `description` was the reader's one-line summary of the request, cut at 120 characters; VND carried `.00`. If you already import the settlement CSV, `netPaid` for Wise and bank-file payments is now larger by the fee, and `description` and `accountCode` for advances differ from earlier rows.
 
+## Re-check your own past payments
+
+Before trusting Checkrail with new payments, run your last few months of supplier payments through the same rules, on your own machine, and see what it would have stopped. Nothing is paid and your real books are never opened: the run uses a throwaway in-memory database, simulated rails and the rule-based reader, whatever `.env` says.
+
+    npm run recheck -- --inspect private/payments.private.csv   # column names and row count, no values
+    npm run recheck -- --example-config                         # writes private/recheck.config.json to edit
+    npm run recheck                                             # flags, plus private/recheck-results.private.csv
+    npm run recheck -- --totals                                 # totals from the lines you confirmed
+
+- Inputs are CSV (from Excel: Save As, CSV UTF-8): a bank statement or payment list, and optionally the job records (dispatch sheet, bookings) that each payment should match. Day-first dates and Vietnamese number formats are read as written.
+- Each payment is judged on the date it was made, then recorded as paid, so a later payment for the same job is judged against it, and the 30-day same-amount check uses that day's clock.
+- Account numbers, phone numbers and email addresses are removed when the files are read. Everything stays in `private/`, which git ignores.
+- What comes out are flags, not findings. Mark each duplicate and overcharge `yes` or `no` in the results file; `--totals` counts only confirmed lines.
+
 ## Switching to live mode
 
 Everything runs with zero credentials on simulated rails. To move a rail or the agent to live, copy `.env.example` to `.env`, set the variables below and restart. In live mode a rail with missing or invalid credentials refuses to start instead of falling back to a mock, and the app refuses to open without logins.
@@ -191,7 +205,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-604 tests in 68 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+617 tests in 69 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 

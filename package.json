@@ -11,7 +11,8 @@
     "test": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run",
     "db:seed": "tsx scripts/seed.ts",
     "demo:replay": "tsx scripts/replay.ts",
-    "setup": "npm install && npm run db:seed"
+    "setup": "npm install && npm run db:seed",
+    "recheck": "tsx scripts/recheck.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
