@@ -34,6 +34,17 @@ export function openTestDb(): Db {
   return db;
 }
 
+/**
+ * An in-memory copy of a database, for evaluating a payment without changing the real books: everything written to the
+ * copy (a draft request, an audit row, a scheduled release) disappears with it. Nothing reads back from it into `db`.
+ */
+export function snapshotOf(db: Db): Db {
+  const source = (db as unknown as { $client: Database.Database }).$client;
+  const sqlite = new Database(source.serialize());
+  sqlite.pragma("foreign_keys = ON");
+  return drizzle(sqlite, { schema });
+}
+
 export function closeDb(): void {
   _sqlite?.close();
   _sqlite = null;
