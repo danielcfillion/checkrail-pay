@@ -12,7 +12,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "demo:replay": "tsx scripts/replay.ts",
     "setup": "npm install && npm run db:seed",
-    "recheck": "tsx scripts/recheck.ts"
+    "recheck": "tsx scripts/recheck.ts",
+    "mcp": "tsx scripts/mcp.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

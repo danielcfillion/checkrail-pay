@@ -40,7 +40,12 @@ export function openTestDb(): Db {
  */
 export function snapshotOf(db: Db): Db {
   const source = (db as unknown as { $client: Database.Database }).$client;
-  const sqlite = new Database(source.serialize());
+  const image = source.serialize();
+  // The app's database runs in WAL mode, and that is recorded in the file header (bytes 18 and 19 = 2). An in-memory
+  // copy has no WAL file, so it refuses every write until the header says rollback journal (1).
+  image[18] = 1;
+  image[19] = 1;
+  const sqlite = new Database(image);
   sqlite.pragma("foreign_keys = ON");
   return drizzle(sqlite, { schema });
 }
