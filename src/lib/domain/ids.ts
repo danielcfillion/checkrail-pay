@@ -36,47 +36,86 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       const k = m[0].toUpperCase();
       out.add(k);
       // JOB-HG4D-0914 and trip sheet HG-4D-0914 name the same departure: normalise by stripping the prefix and dashes.
-      const core = k.replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)-/, "").replace(/-/g, "");
+      // An agreement number stays an agreement number (AGR...), so the exclusions for shared contracts apply (AG4-2).
+      const core = k.replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR)-/, "").replace(/-/g, "");
       if (core.length >= 6) out.add(`~${core}`);
+      for (const f of canonicalForms(k)) out.add(`~${f}`);
       // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
       const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
       if (reissue) {
-        const base = reissue[1].replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)-/, "").replace(/-/g, "");
+        const base = reissue[1].replace(/^(INV|JOB|BK|PO|REF|TRIP|TOUR)-/, "").replace(/-/g, "");
         if (base.length >= 6) out.add(`~${base}`);
+        for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
       }
     }
   }
   return [...out].map((k) => k.toLowerCase());
 }
 
-const REF_PREFIX = /^(INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)/;
+/**
+ * A reference folded for comparison: look-alike letters to Latin, accents and Đ set aside, "№" dropped, "INVOICE"
+ * read as "INV", upper case. Letters of other scripts are kept, not deleted (agent guard review AG4-3).
+ */
+function foldRef(ref: string): string {
+  return foldConfusables(ref.replace(/№/g, " ")).normalize("NFKD").replace(/\p{M}/gu, "").replace(/Đ/g, "D").replace(/đ/g, "d").toUpperCase().replace(/^INVOICE(?=[^\p{L}]|$)/u, "INV").trim();
+}
+
+/** Letters and digits of a folded reference, two ways: digit runs kept apart and without leading zeros, and, for a long number, all run together. */
+function formsOf(t: string): string[] {
+  const runs = t.match(/\p{L}+|\d+/gu) ?? [];
+  let dotted = "";
+  runs.forEach((r, i) => {
+    const digits = /^\d+$/.test(r);
+    if (digits && i > 0 && /^\d+$/.test(runs[i - 1])) dotted += ".";
+    dotted += digits ? r.replace(/^0+(?=\d)/, "") : r;
+  });
+  const out = [dotted];
+  const compact = runs.join("");
+  if ((compact.match(/\d/g) ?? []).length >= 8) out.push(compact);
+  return out.filter((f) => f.replace(/\./g, "").length >= 3 && /\d/.test(f)).map((f) => f.toLowerCase());
+}
 
 /**
- * The one form a reference is compared in, whatever separators it was written with: look-alike letters folded, case
- * ignored, everything but letters and digits dropped, the INV/JOB/... prefix dropped. "JOB-HG4D-0914", "JOB HG4D
- * 0914", "job_hg4d_0914" and "JOBHG4D0914" are all "hg4d0914" (agent guard review AG3-1). Null under four characters.
+ * The forms a reference is compared in, whatever separators, case, leading zeros or look-alike letters it was written
+ * with (agent guard reviews AG3-1, AG4-1): "INV-0152", "INV_152", "inv152" and "INV#152" share "inv152", and
+ * "JOB-HG4D-0914", "JOBHG4D0914" and the trip sheet's "HG-4D-0914" share "hg4d914". Only JOB, TRIP and TOUR are set
+ * aside as a prefix (they name the departure); INV, PO, BK, REF and AGR stay, so "INV-1182" is not "PO-1182" (AG4-3).
+ * Two numbers kept apart by a separator stay apart ("2026-1-12" is not "2026-11-2"). Empty when nothing is left.
  */
+export function canonicalForms(ref: string | null | undefined): string[] {
+  if (!ref) return [];
+  const t = foldRef(ref);
+  const out: string[] = [];
+  const prefixed = t.match(/^(JOB|TRIP|TOUR)([^\p{L}\p{N}]*)(.*)$/u);
+  if (prefixed && prefixed[3]) out.push(...formsOf(prefixed[3]));
+  out.push(...formsOf(t));
+  return [...new Set(out)];
+}
+
+/** The first comparison form of a reference, or null (see canonicalForms). */
 export function canonicalRef(ref: string | null | undefined): string | null {
-  if (!ref) return null;
-  const core = foldConfusables(ref).toUpperCase().replace(/[^A-Z0-9]/g, "").replace(REF_PREFIX, "");
-  return core.length >= 4 ? core.toLowerCase() : null;
+  return canonicalForms(ref)[0] ?? null;
 }
 
 /**
  * The keys a stated reference is matched on, beside the job identifiers jobKeys finds in text: the reference as
- * written, its canonical form, and the canonical form of the original when it carries a re-issue suffix after a
- * separator ("10234-B", "INV 0152 R", "INV-0834-REV2" also key 10234, 0152, 0834).
+ * written, its comparison forms, and those of the original when it carries a re-issue suffix after a separator
+ * ("10234-B", "INV 0152 R", "INV-0834-REV2" also key 10234, inv152, inv834).
  */
 export function sourceRefKeys(ref: string | null | undefined): string[] {
   if (!ref) return [];
-  const t = foldConfusables(ref).toUpperCase().trim();
-  const out = new Set<string>([t.toLowerCase()]);
-  const canon = canonicalRef(t);
-  if (canon) out.add(`~${canon}`);
-  const reissue = t.match(/^(.*\d{3,6})[^A-Z0-9]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
-  const base = reissue ? canonicalRef(reissue[1]) : null;
-  if (base) out.add(`~${base}`);
+  const t = foldRef(ref);
+  const out = new Set<string>([foldConfusables(ref).toLowerCase().trim()]);
+  for (const f of canonicalForms(t)) out.add(`~${f}`);
+  const reissue = t.match(/^(.*\d{3,6})[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/u);
+  if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
   return [...out];
+}
+
+/** The re-issue base of a reference when it has one, else its first comparison form: what a probe for one job keys on. */
+export function jobOfRef(ref: string | null | undefined): string | null {
+  const keys = sourceRefKeys(ref).filter((k) => k.startsWith("~"));
+  return keys.length ? keys[keys.length - 1].slice(1) : null;
 }
 
 /**

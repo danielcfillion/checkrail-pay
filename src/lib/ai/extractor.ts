@@ -67,8 +67,8 @@ export function paymentPartOf(text: string, amountMinor: number, currency: strin
 }
 
 /** Every amount stated in a text, with its currency, in the order written. */
-export function amountsIn(text: string): Array<{ amountMinor: number; currency: string }> {
-  return findAmounts(text.slice(0, MAX_REQUEST_CHARS)).sort((a, b) => a.index - b.index).map(({ amountMinor, currency }) => ({ amountMinor, currency }));
+export function amountsIn(text: string): Array<{ amountMinor: number; currency: string; index: number; length: number }> {
+  return findAmounts(text.slice(0, MAX_REQUEST_CHARS)).sort((a, b) => a.index - b.index);
 }
 
 function findAmounts(text: string): Found[] {

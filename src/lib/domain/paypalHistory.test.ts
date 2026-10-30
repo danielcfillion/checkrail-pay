@@ -37,3 +37,14 @@ describe("PayPal's own history", () => {
     expect(matchPayPalHistory(body(line("P1", "-1.00", "JOB-HG4D-0914", "m@x.co")), ids, null).matches).toEqual([]);
   });
 });
+
+describe("PayPal's own history, however the note was typed (agent guard review AG4-4)", () => {
+  it("finds the job in a hand-typed note", async () => {
+    const { sourceRefKeys } = await import("./ids");
+    const want = [...jobKeys("JOB-HG4D-0914"), ...sourceRefKeys("JOB-HG4D-0914")];
+    for (const note of ["JOB HG4D 0914 guide fee", "JOBHG4D0914", "HG4D-0914 Maria", "job_hg4d_0914"]) {
+      expect(matchPayPalHistory(body(line("7XJ", "-180.00", note, "m@x.co")), want, "m@x.co").matches, note).toHaveLength(1);
+    }
+    expect(matchPayPalHistory(body(line("7XK", "-180.00", "guide fee 180 for October", "m@x.co")), want, "m@x.co").matches).toHaveLength(0);
+  });
+});

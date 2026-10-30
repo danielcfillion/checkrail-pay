@@ -1,4 +1,21 @@
-import { foldConfusables, jobKeys, sourceRefKeys } from "./ids";
+import { canonicalForms, foldConfusables, jobKeys, sourceRefKeys } from "./ids";
+
+/**
+ * References in a free-text PayPal note however they were typed ("JOB HG4D 0914 guide fee", "job_hg4d_0914"): the
+ * comparison forms of every run of one to four words. A payment made in the PayPal app by hand is the case this
+ * catches (agent guard review AG4-4). Only forms of five characters or more, so a bare amount never matches.
+ */
+function noteRefKeys(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const words = text.slice(0, 500).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const out = new Set<string>();
+  for (let i = 0; i < words.length; i++) {
+    for (let n = 1; n <= 4 && i + n <= words.length; n++) {
+      for (const f of canonicalForms(words.slice(i, i + n).join("-"))) if (f.replace(/\./g, "").length >= 5) out.add(`~${f}`);
+    }
+  }
+  return [...out];
+}
 
 /**
  * PayPal's own record of money already sent, checked deterministically before a payment: not by the model, and not
@@ -76,7 +93,7 @@ export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: str
     if (!(value < 0)) continue;
     if (!["S", "P"].includes((t.transaction_status ?? "").toUpperCase())) continue;
     if ((r.payer_info?.email_address ?? "").trim().toLowerCase() !== email) continue;
-    const hit = [...jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id), ...sourceRefKeys(t.invoice_id)].find((k) => wanted.has(k) && !k.startsWith("agr-") && !k.startsWith("~agr"));
+    const hit = [...jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id), ...sourceRefKeys(t.invoice_id), ...noteRefKeys(t.transaction_note), ...noteRefKeys(t.transaction_subject)].find((k) => wanted.has(k) && !k.startsWith("agr-") && !k.startsWith("~agr"));
     if (!hit) continue;
     matches.push({
       transactionId: t.transaction_id,

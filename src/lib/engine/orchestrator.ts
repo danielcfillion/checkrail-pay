@@ -208,10 +208,13 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   const ai = { ...run.interpretation };
   // Fields a structured caller sent are the request; the reader's reading of them only describes it.
   const statedRow = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
-  if (statedRow) applyStated(ai, JSON.parse(statedRow.detail ?? "{}") as StatedFields, vendorProfiles, ev, ob.rawInput, amended);
+  const rulesReader = run.engine !== "claude";
+  if (statedRow) applyStated(ai, JSON.parse(statedRow.detail ?? "{}") as StatedFields, vendorProfiles, ev, ob.rawInput, changedByPerson(db, obligationId), rulesReader);
   if (amended.has("amountMinor")) {
     ai.amountMinor = ob.amountMinor;
-    ai.flags = ai.flags.filter((f) => !/amount differs|differs from/i.test(f));
+    // The rules reader's own sentence about the figure it read is moot once a person set it. A live reader's concerns
+    // stay, however they are worded (agent guard review AG4-5).
+    if (rulesReader) ai.flags = ai.flags.filter((f) => !/^Requested amount differs from /.test(f));
   }
   if (amended.has("currency")) ai.currency = ob.currency;
   if (amended.has("sourceRef")) {
@@ -275,12 +278,33 @@ export async function processObligation(db: Db, obligationId: string): Promise<v
   }
 }
 
+/** The fields a person changed to a different value (an amendment that sets the same value changes nothing). */
+function changedByPerson(db: Db, obligationId: string): Set<string> {
+  const out = new Set<string>();
+  for (const a of db.select({ detail: auditEntries.detailJson, actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.amended"))).all()) {
+    if (!a.actor.startsWith("user:")) continue;
+    const d = JSON.parse(a.detail ?? "{}") as { patch?: Record<string, unknown>; previous?: Record<string, unknown> };
+    for (const [k, v] of Object.entries(d.patch ?? {})) if (v !== (d.previous ?? {})[k]) out.add(k);
+  }
+  return out;
+}
+
+/** Which fields an outside agent's own concern is about, by the sentence the guard writes for each. */
+export const AGENT_FLAG_PREFIX = "The agent's request text disagrees with the fields it sent";
+function agentFlagFields(f: string): string[] {
+  if (!f.startsWith(AGENT_FLAG_PREFIX)) return [];
+  if (/not the payee sent/.test(f)) return ["vendorId"];
+  if (/not the reference /.test(f)) return ["sourceRef"];
+  if (/\bstates\b.*\bsent\b/.test(f)) return ["amountMinor", "currency"];
+  return ["vendorId", "amountMinor", "currency", "sourceRef"];
+}
+
 /**
  * Put the fields a structured caller sent in place of the reader's. The reader's own reading of the payee, amount and
  * reference was taken from text the caller wrote, so its concerns about those figures are replaced by checks on the
  * fields themselves; every other concern stays. Policy then judges exactly what was sent (agent guard review AG2-1).
  */
-function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: VendorPayoutProfile[], ev: EvidenceItem[], rawInput: string, amended: Set<string>): void {
+function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: VendorPayoutProfile[], ev: EvidenceItem[], rawInput: string, changed: Set<string>, rulesReader: boolean): void {
   const vendor = s.vendorId ? vendorProfiles.find((v) => v.id === s.vendorId) ?? null : null;
   const otherFigure = ai.amountMinor !== s.amountMinor || ai.currency !== s.currency;
   const differs = otherFigure || ai.vendorId !== (vendor?.id ?? null) || (ai.sourceRef ?? null) !== (s.sourceRef ?? null);
@@ -293,17 +317,18 @@ function applyStated(ai: AiInterpretation, s: StatedFields, vendorProfiles: Vend
   ai.amountMinor = s.amountMinor;
   ai.currency = s.currency;
   ai.sourceRef = s.sourceRef ?? null;
-  // Only the rules reader's own two sentences about the figures it read are dropped. Any other concern, from any
-  // reader, stays a hold, however it is worded (agent guard review AG3-2).
-  ai.flags = ai.flags.filter((f) => !/^Requested amount differs from /.test(f) && !/^Reference \S+ does not appear on any attached record/.test(f));
+  // Only the rules reader's own two sentences about the figures it read are dropped. A live reader's concerns, and
+  // any other, stay a hold however they are worded (agent guard reviews AG3-2, AG4-5).
+  if (rulesReader) ai.flags = ai.flags.filter((f) => !/^Requested amount differs from /.test(f) && !/^Reference \S+ does not appear on any attached record/.test(f));
   ai.missing = ai.missing.filter((m) => !/vendor name|amount and currency|invoice, job or booking reference/i.test(m));
   const refs = ev.map((e) => e.reference).filter((r): r is string => Boolean(r) && !/^AGR-/i.test(r!));
-  if (s.sourceRef && refs.length > 0 && !refs.some((r) => r.toUpperCase() === s.sourceRef!.toUpperCase())) {
+  const sentKeys = new Set(sourceRefKeys(s.sourceRef).filter((k) => k.startsWith("~")));
+  if (s.sourceRef && refs.length > 0 && !refs.some((r) => r.toUpperCase() === s.sourceRef!.toUpperCase() || sourceRefKeys(r).some((k) => sentKeys.has(k)))) {
     ai.flags.push(`Reference ${s.sourceRef} does not appear on any attached record (found ${[...new Set(refs)].join(", ")})`);
   }
-  // The caller's own concerns compare its fields with its words. Once a person has corrected a field, that
-  // comparison is about a figure no longer on the request (AG3-5).
-  if (!["vendorId", "amountMinor", "currency", "sourceRef"].some((f) => amended.has(f))) ai.flags.push(...(s.flags ?? []));
+  // The caller's own concerns compare its fields with its words, one concern per field. A concern stays until a person
+  // has actually changed the field it is about (AG3-5, AG4-6).
+  ai.flags.push(...(s.flags ?? []).filter((f) => !agentFlagFields(f).some((k) => changed.has(k))));
   const totals = ev.filter((e) => e.currency === s.currency && e.amountMinor != null).map((e) => e.amountMinor!);
   if (otherFigure) ai.paymentPart = paymentPartOf(rawInput, s.amountMinor, s.currency, totals);
   if (differs) {
@@ -364,7 +389,9 @@ function statedAgain(db: Db, ob: typeof obligations.$inferSelect): StatedFields 
   const row = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, ob.id), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
   if (!row || !ob.amountMinor || !ob.currency) return undefined;
   const s = JSON.parse(row.detail ?? "{}") as StatedFields;
-  return { vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, flags: s.flags ?? [], trusted: s.trusted === true };
+  // A concern a person resolved by correcting its field does not come back with the repayment (AG4-9).
+  const changed = changedByPerson(db, ob.id);
+  return { vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, flags: (s.flags ?? []).filter((f) => !agentFlagFields(f).some((k) => changed.has(k))), trusted: s.trusted === true };
 }
 
 export async function repayRefunded(db: Db, obligationId: string, actor: string): Promise<string> {
@@ -491,9 +518,17 @@ function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
 }
 
 /** The job identifiers this request names: its reference, its text, its evidence and its documents. */
+/**
+ * Reference keys from records that name one job (an invoice, a job sheet, a receipt). A contract, booking or rate
+ * sheet is shared by many payments to the vendor, so its reference names no single job (agent guard review AG4-2).
+ */
+function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>): string[] {
+  return ev.filter((e) => ["invoice", "job_sheet", "receipt"].includes(e.kind)).flatMap((e) => sourceRefKeys(e.reference));
+}
+
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
-  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...ev.flatMap((e) => sourceRefKeys(e.reference))])];
+  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...jobRecordRefKeys(ev)])];
 }
 
 /**
@@ -607,9 +642,9 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
         .map((p) => {
           // Identity of the underlying job comes from everything that names it, including the document text:
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
-          const ev = db.select({ reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
+          const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
           const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
-          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...ev.flatMap((e) => sourceRefKeys(e.reference))])] };
+          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...ev.flatMap((e) => [e.reference, e.label, e.excerpt]), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
@@ -624,7 +659,8 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   );
   const myEvidence = listEvidence(db, obligationId);
   // Exact references on this obligation (its own and its evidence's), checked against other payees' obligations.
-  const myRefs = new Set([ob.sourceRef, ...myEvidence.map((e) => e.reference)].filter((r): r is string => Boolean(r)).map((r) => r.toUpperCase()));
+  // Compared in every form a reference is compared in, so a respelled reference still shows on another vendor (AG4-8).
+  const myRefs = new Set([ob.sourceRef, ...myEvidence.map((e) => e.reference)].filter((r): r is string => Boolean(r)).flatMap((r) => [r.toUpperCase(), ...sourceRefKeys(r).filter((k) => k.startsWith("~"))]));
   const otherVendorRefs = ob.vendorId && myRefs.size
     ? db
         .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, state: obligations.state, vendorName: vendors.name })
@@ -632,7 +668,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
         .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
         .where(and(eq(obligations.businessId, ob.businessId), ne(obligations.vendorId, ob.vendorId), ne(obligations.id, obligationId)))
         .all()
-        .filter((o) => o.state !== "cancelled" && o.state !== "failed" && o.sourceRef && myRefs.has(o.sourceRef.toUpperCase()))
+        .filter((o) => o.state !== "cancelled" && o.state !== "failed" && o.sourceRef && (myRefs.has(o.sourceRef.toUpperCase()) || sourceRefKeys(o.sourceRef).some((k) => k.startsWith("~") && myRefs.has(k))))
         .map((o) => ({ obligationId: o.obligationId, vendorName: o.vendorName, reference: o.sourceRef!, state: o.state }))
     : [];
   const myJobKeys = ownJobKeys(db, ob, myEvidence);
@@ -929,8 +965,10 @@ export async function amendObligation(db: Db, obligationId: string, actor: strin
   // Approvals given before the correction were for different numbers; they no longer count.
   db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
   // A requester's own comparison of its fields with its words is about fields a person has now set (AG3-5).
-  const corrected = patch.amountMinor != null || patch.currency != null || patch.sourceRef != null || patch.vendorId != null;
-  const flags = (JSON.parse(ob.aiFlagsJson ?? "[]") as string[]).filter((f) => !(patch.amountMinor != null && /amount differs/i.test(f)) && !(patch.sourceRef && /Reference .* does not match/i.test(f)) && !(corrected && f.startsWith("The agent's request text disagrees with the fields it sent")));
+  const changed = new Set<string>((["amountMinor", "currency", "sourceRef", "vendorId"] as const).filter((k) => patch[k] != null && patch[k] !== ob[k]));
+  // Only the rules reader's own sentences are moot after a correction; a live reader's concerns stay (AG4-5).
+  const byRules = db.select({ actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "ai.interpreted"))).orderBy(desc(auditEntries.seq)).get()?.actor === "ai:rules";
+  const flags = (JSON.parse(ob.aiFlagsJson ?? "[]") as string[]).filter((f) => !(byRules && changed.has("amountMinor") && /^Requested amount differs from /.test(f)) && !(byRules && changed.has("sourceRef") && /^Reference \S+ does not (match|appear)/.test(f)) && !agentFlagFields(f).some((k) => changed.has(k)));
   db.update(obligations).set({ ...patch, aiFlagsJson: JSON.stringify(flags), updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   audit(db, { obligationId, actor, action: "obligation.amended", detail: { patch, note: note ?? null, previous: { amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId } } });
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.resolved", { note: note ?? null });

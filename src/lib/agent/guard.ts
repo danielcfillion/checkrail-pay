@@ -4,12 +4,12 @@ import { agentChecks, obligations, paymentAttempts, settlements, vendors } from 
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
-import { canonicalRef, jobKeys, sourceRefKeys } from "../domain/ids";
+import { canonicalRef, jobKeys, jobOfRef, sourceRefKeys } from "../domain/ids";
 import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendorNames";
 import { amountsIn, extractAmount } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { ingestObligation, previewPolicy } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, ingestObligation, previewPolicy } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
@@ -131,34 +131,40 @@ function vendorNamed(db: Db, businessId: string, payee: string) {
   return same.length === 1 ? same[0] : null;
 }
 
-/** Words that make a stated figure a rate: "a day", "per guest", "/night", "x 2", "at USD 95". */
-const RATE_WORDS = /\b(?:per|a|each)\s+(?:day|night|person|guest|pax|trip|hour|vehicle)\b|\/\s?(?:day|night|pax|person|guest)\b|\bx\s?\d|\d\s?x\b|×|\bat\s+(?:USD|PHP|VND|THB|\$|₱)/i;
-
 /**
  * Does the amount sent follow from the figures stated: one of them, the difference of two (a total less a deposit),
- * or, where the text states a rate, a whole number of that rate (two days at USD 95)?
+ * or a stated rate times counts the text itself states ("2 days at USD 95", "9 guests x 2 nights x USD 18"), and then
+ * only when no stated total says otherwise (agent guard reviews AG3-5, AG4-7).
  */
-function amountFollows(sent: number, stated: number[], text: string): boolean {
-  if (stated.includes(sent)) return true;
-  if (RATE_WORDS.test(text) && stated.some((x) => x > 0 && sent % x === 0 && sent / x <= 31)) return true;
-  return stated.some((x) => stated.some((y) => x - y === sent));
+function amountFollows(sent: number, stated: Array<{ amountMinor: number; index: number; length: number }>, text: string, total: number | null): boolean {
+  const figures = stated.map((x) => x.amountMinor);
+  if (figures.includes(sent)) return true;
+  if (figures.some((x) => figures.some((y) => x - y === sent))) return true;
+  if (total != null && total !== sent) return false;
+  let rest = text;
+  for (const x of [...stated].sort((p, q) => q.index - p.index)) rest = `${rest.slice(0, x.index)} ${rest.slice(x.index + x.length)}`;
+  const counts = [...rest.matchAll(/(?<![\d.,])(\d{1,3})(?![\d]|[.,]\d|\s?%)/g)].map((m) => Number(m[1])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
+  const products = new Set<number>(counts);
+  for (const p of [...products]) for (const q of counts) products.add(p * q);
+  return figures.some((x) => x > 0 && sent % x === 0 && products.has(sent / x));
 }
 
-/** The leading letters of a reference ("CEB" of CEB-2D-1024, "INV" of INV-2026-0177): two references of one family name the same kind of thing. */
-const familyOf = (ref: string) => (ref.toUpperCase().match(/^[A-Z]+/)?.[0] ?? "");
+/** The leading letters of a reference in its comparison form ("ceb" of CEB-2D-1024 and of JOB-CEB3D-1102). */
+const familyOf = (ref: string) => (canonicalRef(ref) ?? "").match(/^\p{L}+/u)?.[0] ?? "";
+
+const PAY_PHRASE = /\b(?:pay|paid to|payable to|send|transfer|remit|wire|release(?:\s+(?:the\s+)?(?:fee|payment|money|funds|it))?\s+to|owed to|settle with)\b/gi;
 
 /**
- * Where the agent's own description disagrees with the fields it sent, or null. Only the description is read, never
- * the header Checkrail writes from the fields (review AG2-3). It disagrees when:
- *  - the supplier it asks to pay (the one named right after "pay", "send", "transfer") is not the payee sent, or it
- *    names suppliers and never the payee and asks to pay one of them;
- *  - it states amounts and the amount sent does not follow from them, in any currency (AG3-4, AG3-5);
- *  - it names a reference of the same family as the one sent that is a different job (CEB-3D-1102 for CEB-2D-1024).
+ * Where the agent's own description disagrees with the fields it sent: one sentence per field, or none. Only the
+ * description is read, never the header Checkrail writes from the fields (review AG2-3). It disagrees when:
+ *  - the supplier it asks to pay (named right after "pay", "payable to", "release the fee to", ...) is not the payee;
+ *  - it states amounts, in any currency, and the amount sent does not follow from them (AG3-4, AG3-5, AG4-7);
+ *  - it names another job of the same kind as the reference sent (CEB-3D-1102 for CEB-2D-1024), however written.
  * Disagreement is a hold for a person, never a reason to change a field.
  */
-function disagreementOf(db: Db, businessId: string, asked: { id: string; name: string } | null, a: ReturnType<typeof validatePaymentArgs>): string | null {
+function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: string } | null, a: ReturnType<typeof validatePaymentArgs>): string[] {
   const d = a.description;
-  if (!d) return null;
+  if (!d) return [];
   const parts: string[] = [];
   const names = db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, businessId)).all();
   const mentionAt = (text: string, v: { id: string; name: string }): number => {
@@ -167,34 +173,36 @@ function disagreementOf(db: Db, businessId: string, asked: { id: string; name: s
     const hits = [full && t.indexOf(` ${full} `), ...distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).map((w) => t.indexOf(` ${w} `))].filter((i): i is number => typeof i === "number" && i >= 0);
     return hits.length ? Math.min(...hits) : -1;
   };
-  // Who the words ask to pay: the first supplier named within a few words after a paying verb.
-  let payTo: { id: string; name: string } | null = null;
-  for (const m of d.matchAll(/\b(?:pay|paid to|send|transfer|remit|wire)\b/gi)) {
+  // Who the words ask to pay: the first supplier named within a few words after a paying phrase.
+  for (const m of d.matchAll(PAY_PHRASE)) {
     const window = d.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
     const hit = names.map((v) => ({ v, at: mentionAt(window, v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
     if (hit) {
-      payTo = hit.v;
+      if (hit.v.id !== asked?.id) parts.push(`it asks to pay ${hit.v.name}, not the payee sent`);
       break;
     }
   }
-  if (payTo && payTo.id !== asked?.id) parts.push(`it asks to pay ${payTo.name}, not the payee sent`);
   const stated = amountsIn(d);
+  const shorthand = stated.length === 0 ? extractAmount(d, a.currency) : null;
   if (stated.length > 0) {
-    const same = stated.filter((x) => x.currency === a.currency).map((x) => x.amountMinor);
+    const same = stated.filter((x) => x.currency === a.currency);
     const pick = extractAmount(d);
-    const follows = same.length > 0 && (amountFollows(a.amountMinor, same, d) || (pick?.currency === a.currency && pick.amountMinor === a.amountMinor));
+    const total = pick && pick.currency === a.currency && /\b(total|sum|balance due|amount due)\b|=/i.test(d) ? pick.amountMinor : null;
+    const follows = same.length > 0 && (amountFollows(a.amountMinor, same, d, total) || (pick?.currency === a.currency && pick.amountMinor === a.amountMinor));
     if (!follows) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
+  } else if (shorthand && shorthand.amountMinor !== a.amountMinor) {
+    parts.push(`it states ${formatMoney(shorthand.amountMinor, a.currency, { code: true })}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
   }
   if (a.reference) {
-    const keysOf = (r: string) => new Set([...sourceRefKeys(r), ...jobKeys(r)]);
-    const sent = keysOf(a.reference);
-    const ids = jobKeys(d).filter((k) => !k.startsWith("~"));
-    const mentionsSent = ids.some((k) => [...keysOf(k)].some((x) => sent.has(x)));
+    const sent = new Set([...sourceRefKeys(a.reference), ...jobKeys(a.reference)].filter((k) => k.startsWith("~")));
+    // Job identifiers however typed: the dashed ones jobKeys finds, and runs of letters and digits like CEB3D1102.
+    const ids = [...new Set([...jobKeys(d).filter((k) => !k.startsWith("~")), ...(d.match(/\b[\p{L}]{2,6}[-_./ ]?\d[\p{L}\p{N}]*(?:[-_./]\p{L}*\d[\p{L}\p{N}]*)*\b/gu) ?? [])])];
+    const same = (k: string) => [...sourceRefKeys(k), ...jobKeys(k)].some((x) => x.startsWith("~") && sent.has(x));
     const family = familyOf(a.reference);
-    const other = family ? ids.find((k) => familyOf(k) === family) : undefined;
-    if (!mentionsSent && other) parts.push(`it names ${other.toUpperCase()}, not the reference ${a.reference} sent`);
+    const other = family ? ids.find((k) => familyOf(k) === family && !same(k)) : undefined;
+    if (other && !ids.some(same)) parts.push(`it names ${other.toUpperCase()}, not the reference ${a.reference} sent`);
   }
-  return parts.length ? `The agent's request text disagrees with the fields it sent: ${parts.join("; ")}. A person confirms which is right` : null;
+  return parts.map((p) => `${AGENT_FLAG_PREFIX}: ${p}. A person confirms which is right`);
 }
 
 /**
@@ -202,7 +210,7 @@ function disagreementOf(db: Db, businessId: string, asked: { id: string; name: s
  * amount after amount for one job is looking for the line (review AG-7); a batch of different jobs is not (AG2-5).
  */
 const probeKeyOf = (vendorId: string | null | undefined, payee: string, currency: string, reference: string | null) =>
-  `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${canonicalRef(reference) ?? (reference ?? "").toLowerCase()}`;
+  `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${jobOfRef(reference) ?? (reference ?? "").toLowerCase()}`;
 
 function probing(db: Db, agent: AgentKey, key: string, amountMinor: number): number {
   const recent = db.select({ amountMinor: agentChecks.amountMinor }).from(agentChecks)
@@ -241,10 +249,12 @@ const wordsIn = (s: string) => [...s.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((m) =
  */
 export function clean(message: string, others: string[] = [], keep: string | null = null): string {
   let out = message
+    .normalize("NFKC")
     .replace(/obligation obl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/\bobl_[a-z0-9]+/gi, "an earlier payment")
     .replace(/[^\s@<>"',;()]+@[^\s@<>"',;()]+\.[^\s@<>"',;().]{2,}/gu, "the payee's PayPal account")
-    .replace(/\bG[A-Z0-9]{50,60}\b/g, "[payout account]")
+    .replace(/\b[GM][A-Z0-9]{50,75}\b/g, "[payout account]")
+    .replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/g, "[payout account]")
     .replace(/\*{2,}\s?\d{2,}/g, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
   const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];
@@ -252,7 +262,9 @@ export function clean(message: string, others: string[] = [], keep: string | nul
   const otherWordSets = others.map((n) => wordsIn(n).map((t) => t.w));
   const parts = new Set(otherWordSets.flat().filter((w) => [...w].length >= 3 && !keepWords.includes(w) && !isGenericWord(w)));
   if (fulls.length || parts.size) {
-    const tokens = wordsIn(out);
+    // A word inside a reference ("TAM" of INV-TAM-0834) is part of the reference, not a name: it stays (AG4-11).
+    const inRef = [...out.matchAll(/[\p{L}\p{N}]+(?:[-_/.][\p{L}\p{N}]+)+/gu)].filter((m) => /\d/.test(m[0])).map((m) => [m.index!, m.index! + m[0].length] as const);
+    const tokens = wordsIn(out).filter((t) => !inRef.some(([a, b]) => t.start >= a && t.end <= b));
     // The payee asked about is never cut: another supplier called "Rosa" leaves "Rosa Villanueva" whole.
     const kept = new Set<number>();
     for (let i = 0; keepWords.length && i < tokens.length; i++) if (keepWords.every((w, j) => tokens[i + j]?.w === w)) keepWords.forEach((_, j) => kept.add(i + j));
@@ -324,21 +336,21 @@ export interface CheckAnswer {
 /** Judge on a copy of the books, with the agent's fields fixed and any disagreement in its text as a hold. */
 async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, kind: string) {
   const asked = vendorNamed(db, biz.id, a.payee);
-  const disagreement = disagreementOf(db, biz.id, asked, a);
-  const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [], trusted: agent.scopes.includes("attest") };
+  const concerns = disagreementsOf(db, biz.id, asked, a);
+  const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") };
   const r = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}`, text: requestTextFor(kind, asked?.name ?? a.payee, a), stated });
-  return { asked, disagreement, stated, r, payeeKey: probeKeyOf(asked?.id, a.payee, a.currency, a.reference) };
+  return { asked, stated, r, payeeKey: probeKeyOf(asked?.id, a.payee, a.currency, a.reference) };
 }
 
 export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promise<CheckAnswer> {
   const a = validatePaymentArgs(raw);
   const biz = businessOf(db);
-  const { asked, disagreement, r, payeeKey } = await judge(db, agent, biz, a, "check");
+  const { asked, r, payeeKey } = await judge(db, agent, biz, a, "check");
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
   const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(b.message, others, keep) }));
-  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message === disagreement ? "agent_mismatch" : w.rule, message: clean(w.message, others, keep) }));
+  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(w.message, others, keep) }));
 
   // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
   const distinct = probing(db, agent, payeeKey, a.amountMinor);
@@ -501,7 +513,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
     if (probing(db, agent, payeeKey, a.amountMinor) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
 
     // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person (AG2-1, AG2-3).
-    const disagreement = disagreementOf(db, biz.id, asked, a);
+    const concerns = disagreementsOf(db, biz.id, asked, a);
     const claim = log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "hold", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary: "Creating the request", rulesJson: null, obligationId: null, idempotencyKey: idem });
     let id: string;
     try {
@@ -513,7 +525,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
         evidence: a.evidence,
         evidenceSource: evidenceSourceOf(agent),
         actor: `mcp:${agent.name}`,
-        stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: disagreement ? [disagreement] : [], trusted: agent.scopes.includes("attest") },
+        stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") },
       });
     } catch (e) {
       // Nothing half-made stays behind: no stuck key, no orphan draft (review AG-4).

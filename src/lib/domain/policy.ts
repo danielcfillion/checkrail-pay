@@ -1,7 +1,7 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { statedRateAboveContract, statedRatesFor, UNIT_NAME } from "./statedRate";
 import { localDateString } from "../format";
-import { foldConfusables, hasConfusables, lookalikeWords, mixesScripts, sourceRefKeys } from "./ids";
+import { foldConfusables, hasConfusables, jobKeys, lookalikeWords, mixesScripts, sourceRefKeys } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -253,7 +253,7 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       const ownRef = obligation.sourceRef ? refKey(obligation.sourceRef) : undefined;
       const independentKeys = [...myKeys].filter((k) => k !== ownRef && !k.startsWith("~") && k !== ownRef?.replace(/^(inv|job|bk|po|ref|trip|tour)-/, ""));
       // The reference's own keys, in every form it is compared in, are not a separate job identifier.
-      const ownRefKeys = new Set(sourceRefKeys(obligation.sourceRef));
+      const ownRefKeys = new Set([...sourceRefKeys(obligation.sourceRef), ...jobKeys(obligation.sourceRef)]);
       const hasOwnJobId = independentKeys.filter((k) => !ownRefKeys.has(k)).length > 0 || [...myKeys].some((k) => k.startsWith("~") && !ownRefKeys.has(k));
       const since = Date.now() - 30 * 86_400_000;
       const sameAmount = obligation.amountMinor && !hasOwnJobId
