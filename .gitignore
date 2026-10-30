@@ -42,3 +42,9 @@ yarn-error.log*
 next-env.d.ts
 data/
 .env
+
+# Real business data for the anonymised re-check. Never committed: totals only leave this folder.
+private/
+*.private.csv
+*.private.xlsx
+*.private.json
