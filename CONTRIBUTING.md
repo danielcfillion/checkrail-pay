@@ -6,7 +6,7 @@ Checkrail Pay is built under a two-lane model. Knowing which lane a change belon
 
 **AI builder lane.** AI agents (Claude Code and similar) do the bulk of the engineering: domain logic, UI, tests, docs, mock adapters, scripts. They work from a written plan, run the tests and the deterministic replay (`npm run demo:replay`), and commit locally. They never hold credentials and never run against a live rail.
 
-**Human gate lane.** A person does what only a person can: creates accounts, holds secrets, approves money-path changes, runs live mode, records the video, submits forms. The open items live in `HUMAN_ACTION_QUEUE.md`, in priority order, with a "what to return" column so the builder lane can continue from the result.
+**Human gate lane.** A person does what only a person can: creates accounts, holds secrets, approves money-path changes, runs live mode, records the video, submits forms. The maintainer keeps the open items in a private queue, in priority order, each with a "what to return" note so the builder lane can continue from the result.
 
 The lanes run in parallel. A builder never blocks on a human task if there is anything else to do; a human never does work an agent could have done.
 

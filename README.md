@@ -52,11 +52,11 @@ As of 29 Oct 2026:
 - **Recorded Claude readings for the hosted demo.** Claude's readings of the six opening requests, recorded from a live run on 28 Oct 2026 (`claude-sonnet-5-5`, PayPal sandbox), are kept in `src/lib/demo/recordedReadings.ts` for the request page to show, labelled as recorded. Display only: on the hosted demo the decision still comes from the rule-based reader and the policy rules.
 - **Read from PayPal (Books):** reconciles from Transaction Search and ties a returned payout to its payout by reference id. Tested against fakes; needs live PayPal keys.
 - **Stellar PYUSD: simulated.** The adapter is written to the Stellar SDK and has never run on testnet.
-- **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 11 unit tests pass. Not deployed to testnet, not called by the app yet.
+- **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 20 unit tests pass. Not deployed to testnet, not called by the app yet.
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
-- **Tests:** 592 in 67 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 604 in 68 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 

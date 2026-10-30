@@ -52,7 +52,7 @@ So for a live take, do one of these, at least three hours before recording (Tran
 2. Or record this one beat on simulated rails and caption it "Simulated PayPal rail" for the length of the beat.
 
 Two more live-mode checks, because Transaction Search covers the last 31 days:
-- **JOB-HG4D-0921 (money shot one).** Until about 12 Nov 2026 the sandbox still holds the 12 Oct payout for JOB-HG4D-0921. If the PayPal record matches on the recipient email, the clean request is blocked as already paid and money shot one fails. Rehearse it: if it blocks, record after the 12 Oct payout has left the 31-day range, or reseed with a new job id for the clean request (builder task). This depends on which Transaction Search field carries the recipient email (see `HUMAN_ACTION_QUEUE.md`, H16).
+- **JOB-HG4D-0921 (money shot one).** Until about 12 Nov 2026 the sandbox still holds the 12 Oct payout for JOB-HG4D-0921. If the PayPal record matches on the recipient email, the clean request is blocked as already paid and money shot one fails. Rehearse it: if it blocks, record after the 12 Oct payout has left the 31-day range, or reseed with a new job id for the clean request (builder task). This depends on which Transaction Search field carries the recipient email (a check that needs the sandbox keys, run once on the maintainer's machine).
 - **If the row reads "PayPal's transaction history could not be read",** Transaction search is off on the PayPal app. The block then comes from this app's own history only, and the voiceover must say "this app's history", not "PayPal's records".
 
 ## Fallback for the unclaimed shot (1:58 to 2:12)
