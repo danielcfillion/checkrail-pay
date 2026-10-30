@@ -1,8 +1,7 @@
 import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getBusiness, getVendorDetail, listSettlements } from "@/lib/queries";
-import { toBaseOrZero } from "@/lib/fx";
+import { getBusiness, getVendorDetail, listSettlements, paidSummary } from "@/lib/queries";
 import { countryName, formatDate, formatMoneySymbol, railLabel, roleLabel, truncateMiddle } from "@/lib/format";
 import { ObligationTable } from "@/components/ObligationList";
 import { EmptyState, KeyValue, Panel, RailTag } from "@/components/ui";
@@ -31,8 +30,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
   const v = d.vendor;
   const settlements = listSettlements().filter((s) => s.obligation.vendorId === v.id);
   const base = getBusiness()?.baseCurrency ?? "USD";
-  const paid = settlements.reduce((a, s) => a + toBaseOrZero(s.grossMinor, s.grossCurrency, base), 0);
-  const fees = settlements.reduce((a, s) => a + toBaseOrZero(s.feeMinor, s.grossCurrency, base), 0);
+  const { paidMinor: paid, feesMinor: fees, refundedMinor: refunded } = paidSummary(settlements.map((s) => ({ ...s, state: s.obligation.state })), base);
   const open = d.obligations.filter((o) => !["settled", "cancelled", "refunded"].includes(o.state));
   const viewer = await getViewer();
   const db = getDb();
@@ -68,6 +66,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
           <div>
             <dt className="dense text-ink-soft">Paid to date</dt>
             <dd className="wide num text-xl">{formatMoneySymbol(paid, base)}</dd>
+            {refunded ? <dd className="num text-xs text-ink-soft">{formatMoneySymbol(refunded, base)} came back</dd> : null}
           </div>
           <div>
             <dt className="dense text-ink-soft">Fees</dt>

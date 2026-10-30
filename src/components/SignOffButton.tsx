@@ -9,7 +9,7 @@ export function SignOffButton({ throughSeq, attention }: { throughSeq: number; a
       label="Sign off"
       busyLabel="Signing off"
       tone="primary"
-      confirmText={attention ? `${attention} item${attention === 1 ? "" : "s"} above still need${attention === 1 ? "s" : ""} a look. Signing off records that you have seen them.` : "Records that you reviewed everything on this page."}
+      confirmText={`${attention ? `${attention} item${attention === 1 ? "" : "s"} above still need${attention === 1 ? "s" : ""} a look. Signing off records that you have seen them.` : "Signing off records that you reviewed everything on this page."} Nothing is recorded until you press Yes.`}
       action={() => signOffCloseAction(throughSeq)}
     />
   );

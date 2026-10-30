@@ -171,6 +171,11 @@ export function stateLabel(state: string | null | undefined): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
+/** Engine text names a state in brackets ("... used by obl_x (awaiting_approval)"); people read its label, not the code. */
+export function humaniseStates(text: string): string {
+  return text.replace(/\((drafted|needs_evidence|verified|awaiting_approval|approved|blocked|execution_pending|sent|settled|failed|refunded|disputed|cancelled)\)/g, (_m, st: string) => `(${stateLabel(st).toLowerCase()})`);
+}
+
 /**
  * What each audit action did, as a verb phrase with no subject, so it reads after the actor ("The rule-based reader read the
  * request", "Policy held it for approval") and on its own in a column. Never repeat the actor here.
@@ -422,4 +427,10 @@ export function parseDateInput(text: string): string | null {
   m = s.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
   if (m) return ymd(+m[3], +m[2], +m[1]);
   return null;
+}
+
+/** "1000.00" as "1,000.00": thousands separators on a decimal string, for amounts the books already carry as text. */
+export function groupThousands(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === "") return "";
+  return String(v).replace(/^(-?)(\d+)(\.\d+)?$/, (_m, sign: string, whole: string, frac?: string) => `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${frac ?? ""}`);
 }

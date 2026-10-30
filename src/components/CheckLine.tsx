@@ -94,7 +94,7 @@ export function CheckLine({ state, variant = "compact", hasAccounting, blockedAt
         <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2" style={{ background: pos.inactive ? "var(--rule)" : "var(--rule-strong)" }} />
         {/* travelled portion */}
         {!pos.inactive && brokenAt === null && (
-          <div className="dl-marker absolute left-0 top-1/2 h-0.5 -translate-y-1/2" style={{ background: fill, width: `${stationOffset(shown)}%`, transition: "width 600ms cubic-bezier(0.4,0,0.2,1)" }} />
+          <div className="dl-fill absolute left-0 top-1/2 h-0.5 -translate-y-1/2" style={{ background: fill, width: `${stationOffset(shown)}%` }} />
         )}
         {!pos.inactive && brokenAt !== null && (
           <div className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2" style={{ background: "var(--ink)", width: `calc(${stationOffset(brokenAt)}% - 14px)` }} />

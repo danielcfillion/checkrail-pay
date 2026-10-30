@@ -1,4 +1,5 @@
 import { formatDate, formatMoney, railLabel } from "@/lib/format";
+import { checkStatement, type ReaderView } from "./check-statement";
 
 /** Severity of the decision on a payment request: red, amber, green, or neutral for states with nothing to decide. */
 export type DecisionTone = "blocked" | "attention" | "settled" | "neutral";
@@ -22,6 +23,8 @@ export type EarlierPayment = { id: string; vendorName: string | null; sourceRef:
 
 export type DecisionInput = {
   state: string;
+  /** Who is being paid, for the Approve button and the phone bar. */
+  vendorName?: string | null;
   amountMinor: number | null;
   currency: string | null;
   blockedReason: string | null;
@@ -36,6 +39,8 @@ export type DecisionInput = {
   releaseAt?: string | null;
   /** The earlier payment a duplicate block points at, looked up by the page. */
   earlier?: EarlierPayment | null;
+  /** The reading the page shows under "What the agent read". The band may not call the checks clear over its concerns. */
+  reader?: ReaderView | null;
 };
 
 export type Decision = {
@@ -53,7 +58,18 @@ export type Decision = {
   note?: string | null;
   /** Further policy reasons the card states through its note, so "Policy also found" does not count them again. */
   alsoStated?: string[];
+  /** A short label for the card's corner when something besides the rules is open ("1 reader concern"). */
+  chip?: string | null;
+  /** One line under the button saying what it will and will not do. */
+  actionHint?: string | null;
+  /** A warning triangle in place of the tone's own icon, for a green-by-state band that still carries something to read. */
+  icon?: "warn";
+  /** What the phone bar says in place of the title: who and how much, so the bar is enough to decide from. */
+  barText?: string | null;
 };
+
+/** A payee name short enough for a button: the first 28 characters, then an ellipsis. */
+const shortName = (n: string) => (n.length > 28 ? `${n.slice(0, 27).trimEnd()}…` : n);
 
 /** Whether this viewer may take the card's action. The server checks again. */
 export function allowedAction(a: PrimaryAction, perms: { approve: boolean; pay: boolean; amend: boolean }, approveRefusal: string | null | undefined): boolean {
@@ -234,32 +250,43 @@ function blockedDecision(i: DecisionInput): Decision {
 function approvalDecision(i: DecisionInput): Decision {
   const reasons = i.policyReasons.map((r) => r.replace(/^New since approval: /, ""));
   const reason = reasons[0] ?? null;
-  const warnings = i.rules.filter((r) => !r.passed && r.severity === "warn");
-  const action: PrimaryAction = { kind: "approve", label: "Approve" };
+  // The boilerplate "evidence supplied by operator" warning goes last, so a specific reason (a unit price above the
+  // contract rate, a payee not named in full) is what the headline says.
+  const warnings = i.rules.filter((r) => !r.passed && r.severity === "warn").sort((a, b) => Number(a.ruleId === "evidence_provenance") - Number(b.ruleId === "evidence_provenance"));
   const matched = i.rules.find((r) => r.ruleId === "amount_matches_evidence" && r.passed);
   const route = i.quote && i.quote.receiveAmountMinor !== null ? `${railLabel(i.quote.rail)} delivers ${formatMoney(i.quote.receiveAmountMinor, i.quote.receiveCurrency)}.` : "";
   const evidenceLine = [matched ? `${tidyDates(matched.message)}.` : "", route].filter(Boolean).join(" ") || "Check the evidence and the route below.";
-  const base = { tone: "attention" as const, statedReason: reason, action };
+  // What the checks may claim: "Every check passed." only when the rules and the reading both are clean.
+  const checks = checkStatement({ rules: i.rules, reader: i.reader });
+  const chip = checks.chip;
+  // The button names what it does: who is paid and how much. Approving does not send anything.
+  const who = i.vendorName ? shortName(i.vendorName) : null;
+  const money = i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : null;
+  const action: PrimaryAction = { kind: "approve", label: money && who ? `Approve ${money} to ${who}` : "Approve" };
+  const base = { tone: "attention" as const, statedReason: reason, action, chip, actionHint: "Does not send money. Policy checks again, then it is ready to pay.", barText: money && who ? `${who}, ${money}` : null };
+  // Only a clear result is silent on the other branches; anything open is said first.
+  const lead = (line: string) => (checks.kind === "clear" ? line : `${checks.text} ${line}`);
 
   let m = reason?.match(new RegExp(`^Amount exceeds auto-execute threshold ${MONEY}`));
-  if (m) return { ...base, title: `Needs your approval: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: warnings.length ? evidenceLine : `Every check passed. ${evidenceLine}` };
+  if (m) return { ...base, title: `Needs your approval: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: `${checks.text} ${evidenceLine}` };
   m = reason?.match(new RegExp(`^Amount exceeds dual-approval threshold ${MONEY}; (\\d+) more`));
-  if (m) return { ...base, title: `Needs ${m[3] === "1" ? "a second approval" : `${m[3]} approvals`}: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: evidenceLine };
+  if (m) return { ...base, title: `Needs ${m[3] === "1" ? "a second approval" : `${m[3]} approvals`}: above ${shortMoney(toMinor(m[2]), m[1])}`, evidence: lead(evidenceLine) };
   m = reason?.match(new RegExp(`^Amount exceeds the autopilot per-payment cap ${MONEY}`));
-  if (m) return { ...base, title: `Needs your approval: above the autopilot cap of ${shortMoney(toMinor(m[2]), m[1])}`, evidence: evidenceLine };
-  if (reason && /daily cap/.test(reason)) return { ...base, title: "Needs your approval: over the daily cap", evidence: tidyDates(reason) + "." };
-  if (reason && /^Only the vendor's own documents/.test(reason)) return { ...base, title: `Needs your approval: only the vendor's own invoice supports ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this amount"}`, evidence: "No job sheet, booking or rate card confirms it." };
-  if (reason && /^First payment to this vendor/.test(reason)) return { ...base, title: "Needs your approval: first payment to this vendor", evidence: evidenceLine };
-  if (reason && /times this vendor's usual/.test(reason)) return { ...base, title: `Needs your approval: ${reason.split(":")[0]}`, evidence: evidenceLine };
-  if (reason && /review everything/.test(reason)) return { ...base, title: "Needs your approval: you review every payment", evidence: evidenceLine };
+  if (m) return { ...base, title: `Needs your approval: above the autopilot cap of ${shortMoney(toMinor(m[2]), m[1])}`, evidence: lead(evidenceLine) };
+  if (reason && /daily cap/.test(reason)) return { ...base, title: "Needs your approval: over the daily cap", evidence: lead(tidyDates(reason) + ".") };
+  if (reason && /^Only the vendor's own documents/.test(reason)) return { ...base, title: `Needs your approval: only the vendor's own invoice supports ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this amount"}`, evidence: lead("No job sheet, booking or rate card confirms it.") };
+  if (reason && /^First payment to this vendor/.test(reason)) return { ...base, title: "Needs your approval: first payment to this vendor", evidence: lead(evidenceLine) };
+  if (reason && /times this vendor's usual/.test(reason)) return { ...base, title: `Needs your approval: ${reason.split(":")[0]}`, evidence: lead(evidenceLine) };
+  if (reason && /review everything/.test(reason)) return { ...base, title: "Needs your approval: you review every payment", evidence: lead(evidenceLine) };
   if (warnings.length) {
     return {
       ...base,
+      chip: checks.kind === "warnings" ? null : chip,
       title: `Needs your approval: ${warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`} on ${i.amountMinor !== null ? formatMoney(i.amountMinor, i.currency) : "this request"}`,
       evidence: `${tidyDates(warnings[0].message)}.${warnings.length > 1 ? " The rest are listed first under Policy." : ""}`,
     };
   }
-  return { ...base, title: "Needs your approval", evidence: reason ? `${tidyDates(reason)}.` : evidenceLine };
+  return { ...base, title: "Needs your approval", evidence: reason ? lead(`${tidyDates(reason)}.`) : lead(evidenceLine) };
 }
 
 /** The decision a person is looking at on a payment request, stated once, with the one action that moves it on. */
@@ -276,9 +303,14 @@ export function decide(i: DecisionInput): Decision {
       const rail = i.selectedRail ?? i.availableRails[0] ?? null;
       const passed = i.rules.filter((r) => r.passed).length;
       const delivered = i.quote && i.quote.receiveAmountMinor !== null ? ` Recipient gets ${formatMoney(i.quote.receiveAmountMinor, i.quote.receiveCurrency)} by ${railLabel(i.quote.rail)}, fee ${formatMoney(i.quote.feeMinor, i.quote.sendCurrency)}.` : "";
-      const checks = i.rules.length ? (passed === i.rules.length ? `All ${passed} checks passed.` : `${passed} of ${i.rules.length} checks passed; the rest were approved.`) : "";
+      // The same rule as the approval band: "All N checks passed" only when the reading holds no open concern either.
+      const st = checkStatement({ rules: i.rules, reader: i.reader });
+      const readerOpen = st.kind === "reader" || st.kind === "low_confidence" || st.kind === "blocked";
+      const checks = readerOpen ? st.text : i.rules.length ? (passed === i.rules.length ? `All ${passed} checks passed.` : `${passed} of ${i.rules.length} checks passed; the rest were approved.`) : "";
       const scheduled = i.releaseAt ? " Autopilot sends it when the cancel window ends." : "";
-      return { tone: "settled", title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null };
+      // Green only when nothing is open: a statement that is not clear (a reader concern, low confidence, an approved warning) makes the band amber, with a warning icon and the chip.
+      const open = st.kind !== "clear";
+      return { tone: open ? "attention" : "settled", icon: open ? "warn" : undefined, title: `Ready to pay: ${amount}`, evidence: `${checks}${delivered}${scheduled}`.trim(), action: rail ? { kind: "pay", rail, label: `Pay with ${railLabel(rail)}` } : null, statedReason: null, chip: open ? st.chip : null };
     }
     case "settled": {
       const s = i.settlement;

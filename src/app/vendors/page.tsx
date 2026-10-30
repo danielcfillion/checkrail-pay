@@ -1,5 +1,6 @@
 import { runAs } from "@/lib/engine/requestContext";
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { listVendors } from "@/lib/queries";
 import { countryName, formatDate, roleLabel } from "@/lib/format";
 import { EmptyState, Money, PageHeader, Panel, RailTag, RelativeTime } from "@/components/ui";
@@ -60,7 +61,7 @@ export default async function VendorsPage() {
             <thead>
               <tr>
                 <th scope="col">Vendor</th>
-                <th scope="col">Role</th>
+                <th scope="col" className="max-sm:hidden">Role</th>
                 <th scope="col" className="hidden sm:table-cell">
                   Country
                 </th>
@@ -85,13 +86,14 @@ export default async function VendorsPage() {
               {vendors.map((v) => (
                 <tr key={v.id} className="row-link relative">
                   <td className="font-medium">
-                    <Link href={`/vendors/${v.id}`} className="after:absolute after:inset-0 after:content-['']">
+                    <Link href={`/vendors/${v.id}`} className={`after:absolute after:inset-0 after:content-[''] ${TOUCH_INLINE}`}>
                       {v.name}
                     </Link>
                     {v.openCount ? <span className="num ml-2 text-xs text-ink-soft">{v.openCount} open</span> : null}
                     {v.status === "blocked" ? <span className="ml-2 text-xs font-medium text-attention">blocked</span> : null}
+                    <span className="block text-xs font-normal text-ink-soft sm:hidden">{roleLabel(v.role)}</span>
                   </td>
-                  <td className="text-ink-soft">{roleLabel(v.role)}</td>
+                  <td className="text-ink-soft max-sm:hidden">{roleLabel(v.role)}</td>
                   <td className="hidden text-ink-soft sm:table-cell">{countryName(v.country)}</td>
                   <td className="hidden md:table-cell">
                     <span className="flex flex-wrap gap-1.5">
@@ -101,7 +103,7 @@ export default async function VendorsPage() {
                     </span>
                   </td>
                   <td className="num hidden text-ink-soft lg:table-cell">{v.verifiedAt ? formatDate(v.verifiedAt) : "not verified"}</td>
-                  <td className="r">
+                  <td className="r whitespace-nowrap">
                     <Money minor={v.paidMinor} currency="USD" />
                   </td>
                   <td className="hidden text-ink-soft sm:table-cell">

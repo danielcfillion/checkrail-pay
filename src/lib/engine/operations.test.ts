@@ -66,7 +66,7 @@ describe("day-to-day operations", () => {
     const before = preventedTotal(db).minor;
     const { importDepartures, setRate } = await import("./rates");
     setRate(db, DEMO_BUSINESS_ID, as("minh"), "ven_bayan", { unit: "trip", rateMinor: 9_000, currency: "USD", validFrom: "2026-01-01" });
-    importDepartures(db, DEMO_BUSINESS_ID, as("lan"), "code,start,end,guests,vendor,unit,quantity\nEN-2D-1101,2026-11-01,2026-11-02,8,Bayan Island Boats,trip,2");
+    importDepartures(db, DEMO_BUSINESS_ID, as("minh"), "code,start,end,guests,vendor,unit,quantity\nEN-2D-1101,2026-11-01,2026-11-02,8,Bayan Island Boats,trip,2");
     const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", rawInput: "Bayan Island Boats invoice INV-BAY-1101 for EN-2D-1101: 2 bangka trips, USD 240.", evidence: [{ kind: "invoice", label: "Invoice INV-BAY-1101", amountMinor: 24_000, currency: "USD", reference: "INV-BAY-1101", excerpt: "Bayan Island Boats, EN-2D-1101, 2 trips, USD 240.00" }], actor: "user:lan" });
     expect(ob(id).state).toBe("blocked");
     expect(preventedTotal(db).minor - before).toBe(6_000);

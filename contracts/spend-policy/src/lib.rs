@@ -5,11 +5,17 @@
 //! Checkrail Pay runs can only *propose* a payment. The chain itself then enforces what the app enforces today in its
 //! database:
 //!
-//! * a per-payment cap and a rolling 24-hour cap (scheduled payments count against it),
+//! * a per-payment cap and a rolling 24-hour cap (scheduled payments count against it; released spend is kept in
+//!   hourly steps, so a payment counts for 24 to 25 hours and the list stays small however many payments are released),
 //! * a payee allow-list that only the owner can change,
-//! * a cancel window: a proposed payment can be released only after it, and the owner can cancel it until then,
+//! * a cancel window of at least `MIN_CANCEL_WINDOW` seconds: a proposed payment can be released only after it, and the
+//!   owner can cancel it until then,
 //! * an owner pause key (the agent may also pause, the safe direction, but only the owner can resume),
-//! * idempotency: a payment id can be used once, so a retried proposal never pays twice.
+//! * idempotency: a payment id can be used once, so a retried proposal never pays twice,
+//! * expiry: a proposal that nobody releases lapses `PROPOSAL_LIFE` seconds after its window, and anyone can sweep it so
+//!   it stops counting against the daily cap.
+//!
+//! Storage time-to-live is extended on every call, so an idle contract is not archived while it holds funds.
 //!
 //! Release is permissionless after the window: anyone (a keeper, the app's heartbeat) can trigger it, and every check
 //! runs again at that moment. A compromised server or a confused model therefore cannot overspend, pay a stranger or
@@ -17,7 +23,18 @@
 
 use soroban_sdk::{contract, contracterror, contractevent, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec};
 
+const HOUR: u64 = 3_600;
 const DAY: u64 = 86_400;
+/// The shortest cancel window the owner can set. Zero would switch the owner's brake off while the docs still say it exists.
+pub const MIN_CANCEL_WINDOW: u64 = 60;
+/// How long a proposal stays releasable after its cancel window. A compromised agent cannot park proposals that hold
+/// the daily cap forever: once expired, anyone can sweep them (`expire`).
+pub const PROPOSAL_LIFE: u64 = 3 * DAY;
+
+/// Storage time-to-live, in ledgers (about 5 seconds each): topped up to 60 days whenever it falls under 30.
+const LEDGERS_PER_DAY: u32 = 17_280;
+const TTL_THRESHOLD: u32 = 30 * LEDGERS_PER_DAY;
+const TTL_EXTEND_TO: u32 = 60 * LEDGERS_PER_DAY;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -35,6 +52,9 @@ pub enum Error {
     BadLimits = 10,
     NotOwnerOrAgent = 11,
     MemoTooLong = 12,
+    OwnerIsAgent = 13,
+    Expired = 14,
+    NotExpired = 15,
 }
 
 #[contracttype]
@@ -54,6 +74,7 @@ pub enum Status {
     Pending,
     Released,
     Cancelled,
+    Expired,
 }
 
 #[contracttype]
@@ -63,6 +84,7 @@ pub struct Payment {
     pub amount: i128,
     pub proposed_at: u64,
     pub release_at: u64,
+    pub expires_at: u64,
     pub status: Status,
     pub memo: String,
 }
@@ -113,9 +135,46 @@ pub struct Cancelled {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpiredEvent {
+    #[topic]
+    pub id: BytesN<32>,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PausedChanged {
     pub paused: bool,
     pub by: Address,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeChanged {
+    #[topic]
+    pub payee: Address,
+    pub allowed: bool,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LimitsChanged {
+    pub per_payment_cap: i128,
+    pub daily_cap: i128,
+    pub cancel_window: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentChanged {
+    pub agent: Address,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Withdrawn {
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
 }
 
 #[contract]
@@ -123,6 +182,16 @@ pub struct SpendPolicy;
 
 fn cfg(env: &Env) -> Config {
     env.storage().instance().get(&Key::Config).unwrap()
+}
+
+/// Keep the contract's storage alive: the instance entry (config, pause flag, pending total, spends) and, where a call
+/// touches one, a payment or payee entry. Archived state would stall the contract until someone restored it.
+fn keep_alive(env: &Env) {
+    env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+fn keep_payment(env: &Env, key: &Key) {
+    env.storage().persistent().extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 fn paused(env: &Env) -> bool {
@@ -133,14 +202,22 @@ fn pending_total(env: &Env) -> i128 {
     env.storage().instance().get(&Key::Pending).unwrap_or(0)
 }
 
-/// Released spend in the last 24 hours, with older entries dropped so storage stays bounded.
+fn hour_start(t: u64) -> u64 {
+    t - t % HOUR
+}
+
+/// Released spend still counted against the daily cap, with older entries dropped. Spends are kept as one total per
+/// hour (`at` is the start of the hour), so the list never holds more than 25 entries however many payments are
+/// released: an attacker who proposes thousands of tiny payments cannot grow it until the instance entry fills and
+/// the owner's controls stop working. A payment counts for 24 to 25 hours, never fewer, so the cap is never looser
+/// than a true rolling day.
 fn recent_spends(env: &Env) -> (Vec<Spend>, i128) {
-    let now = env.ledger().timestamp();
+    let floor = hour_start(env.ledger().timestamp());
     let all: Vec<Spend> = env.storage().instance().get(&Key::Spends).unwrap_or(Vec::new(env));
     let mut kept = Vec::new(env);
     let mut total: i128 = 0;
     for s in all.iter() {
-        if s.at + DAY > now {
+        if s.at + DAY >= floor {
             total += s.amount;
             kept.push_back(s);
         }
@@ -148,12 +225,27 @@ fn recent_spends(env: &Env) -> (Vec<Spend>, i128) {
     (kept, total)
 }
 
+/// Add a released amount to the current hour's total, or start the next hour's entry. Ledger time only moves forward,
+/// so only the last entry can be the current hour.
+fn record_spend(spends: &mut Vec<Spend>, now: u64, amount: i128) {
+    let at = hour_start(now);
+    let n = spends.len();
+    if n > 0 {
+        let last = spends.get(n - 1).unwrap();
+        if last.at == at {
+            spends.set(n - 1, Spend { at, amount: last.amount + amount });
+            return;
+        }
+    }
+    spends.push_back(Spend { at, amount });
+}
+
 fn is_allowed(env: &Env, payee: &Address) -> bool {
     env.storage().persistent().get(&Key::Allowed(payee.clone())).unwrap_or(false)
 }
 
-fn check_limits(per_payment_cap: i128, daily_cap: i128) -> Result<(), Error> {
-    if per_payment_cap <= 0 || daily_cap <= 0 || per_payment_cap > daily_cap {
+fn check_limits(per_payment_cap: i128, daily_cap: i128, cancel_window: u64) -> Result<(), Error> {
+    if per_payment_cap <= 0 || daily_cap <= 0 || per_payment_cap > daily_cap || cancel_window < MIN_CANCEL_WINDOW {
         return Err(Error::BadLimits);
     }
     Ok(())
@@ -162,13 +254,18 @@ fn check_limits(per_payment_cap: i128, daily_cap: i128) -> Result<(), Error> {
 #[contractimpl]
 impl SpendPolicy {
     pub fn __constructor(env: Env, owner: Address, agent: Address, token: Address, per_payment_cap: i128, daily_cap: i128, cancel_window: u64) -> Result<(), Error> {
-        check_limits(per_payment_cap, daily_cap)?;
+        check_limits(per_payment_cap, daily_cap, cancel_window)?;
+        // One key for both roles would let the agent cancel, resume and re-allow-list its own payments.
+        if owner == agent {
+            return Err(Error::OwnerIsAgent);
+        }
         env.storage().instance().set(&Key::Config, &Config { owner, agent, token, per_payment_cap, daily_cap, cancel_window });
         Ok(())
     }
 
     /// The agent proposes a payment. Nothing moves until `release` after the cancel window.
     pub fn propose(env: Env, id: BytesN<32>, payee: Address, amount: i128, memo: String) -> Result<u64, Error> {
+        keep_alive(&env);
         let c = cfg(&env);
         c.agent.require_auth();
         if paused(&env) {
@@ -196,7 +293,10 @@ impl SpendPolicy {
         }
         let now = env.ledger().timestamp();
         let release_at = now + c.cancel_window;
-        env.storage().persistent().set(&Key::Payment(id.clone()), &Payment { payee: payee.clone(), amount, proposed_at: now, release_at, status: Status::Pending, memo });
+        let expires_at = release_at + PROPOSAL_LIFE;
+        env.storage().persistent().set(&Key::Payment(id.clone()), &Payment { payee: payee.clone(), amount, proposed_at: now, release_at, expires_at, status: Status::Pending, memo });
+        keep_payment(&env, &Key::Payment(id.clone()));
+        env.storage().persistent().extend_ttl(&Key::Allowed(payee.clone()), TTL_THRESHOLD, TTL_EXTEND_TO);
         env.storage().instance().set(&Key::Pending, &(pending + amount));
         Proposed { id, payee, amount, release_at }.publish(&env);
         Ok(release_at)
@@ -204,6 +304,7 @@ impl SpendPolicy {
 
     /// Anyone may release a payment once its window has passed. Every check runs again here.
     pub fn release(env: Env, id: BytesN<32>) -> Result<(), Error> {
+        keep_alive(&env);
         let c = cfg(&env);
         let key = Key::Payment(id.clone());
         let mut p: Payment = env.storage().persistent().get(&key).ok_or(Error::UnknownPayment)?;
@@ -216,6 +317,9 @@ impl SpendPolicy {
         let now = env.ledger().timestamp();
         if now < p.release_at {
             return Err(Error::WindowOpen);
+        }
+        if now > p.expires_at {
+            return Err(Error::Expired);
         }
         if !is_allowed(&env, &p.payee) {
             return Err(Error::NotAllowed);
@@ -230,8 +334,9 @@ impl SpendPolicy {
         // State first, then the transfer: if the transfer fails the whole invocation is rolled back.
         p.status = Status::Released;
         env.storage().persistent().set(&key, &p);
+        keep_payment(&env, &key);
         env.storage().instance().set(&Key::Pending, &(pending_total(&env) - p.amount));
-        spends.push_back(Spend { at: now, amount: p.amount });
+        record_spend(&mut spends, now, p.amount);
         env.storage().instance().set(&Key::Spends, &spends);
         token::Client::new(&env, &c.token).transfer(&env.current_contract_address(), &p.payee, &p.amount);
         Released { id, payee: p.payee, amount: p.amount }.publish(&env);
@@ -240,6 +345,7 @@ impl SpendPolicy {
 
     /// The owner cancels a proposed payment during (or after) its window, before release.
     pub fn cancel(env: Env, id: BytesN<32>) -> Result<(), Error> {
+        keep_alive(&env);
         let c = cfg(&env);
         c.owner.require_auth();
         let key = Key::Payment(id.clone());
@@ -254,8 +360,29 @@ impl SpendPolicy {
         Ok(())
     }
 
+    /// Anyone may sweep a proposal that lapsed unreleased: it stops counting against the daily cap and cannot be
+    /// released any more. Nothing moves; this only frees what a stuck proposal was holding.
+    pub fn expire(env: Env, id: BytesN<32>) -> Result<(), Error> {
+        keep_alive(&env);
+        let key = Key::Payment(id.clone());
+        let mut p: Payment = env.storage().persistent().get(&key).ok_or(Error::UnknownPayment)?;
+        if p.status != Status::Pending {
+            return Err(Error::NotPending);
+        }
+        if env.ledger().timestamp() <= p.expires_at {
+            return Err(Error::NotExpired);
+        }
+        p.status = Status::Expired;
+        env.storage().persistent().set(&key, &p);
+        keep_payment(&env, &key);
+        env.storage().instance().set(&Key::Pending, &(pending_total(&env) - p.amount));
+        ExpiredEvent { id }.publish(&env);
+        Ok(())
+    }
+
     /// Owner or agent can pause (the safe direction). Proposals and releases stop until the owner resumes.
     pub fn pause(env: Env, by: Address) -> Result<(), Error> {
+        keep_alive(&env);
         let c = cfg(&env);
         if by != c.owner && by != c.agent {
             return Err(Error::NotOwnerOrAgent);
@@ -267,6 +394,7 @@ impl SpendPolicy {
     }
 
     pub fn resume(env: Env) {
+        keep_alive(&env);
         let c = cfg(&env);
         c.owner.require_auth();
         env.storage().instance().set(&Key::Paused, &false);
@@ -275,33 +403,55 @@ impl SpendPolicy {
 
     /// Only the owner adds or removes payees, so a changed payout address needs the owner, not the agent.
     pub fn set_payee(env: Env, payee: Address, allowed: bool) {
+        keep_alive(&env);
         cfg(&env).owner.require_auth();
         if allowed {
-            env.storage().persistent().set(&Key::Allowed(payee), &true);
+            env.storage().persistent().set(&Key::Allowed(payee.clone()), &true);
+            env.storage().persistent().extend_ttl(&Key::Allowed(payee.clone()), TTL_THRESHOLD, TTL_EXTEND_TO);
         } else {
-            env.storage().persistent().remove(&Key::Allowed(payee));
+            env.storage().persistent().remove(&Key::Allowed(payee.clone()));
         }
+        PayeeChanged { payee, allowed }.publish(&env);
     }
 
     pub fn set_limits(env: Env, per_payment_cap: i128, daily_cap: i128, cancel_window: u64) -> Result<(), Error> {
+        keep_alive(&env);
         let mut c = cfg(&env);
         c.owner.require_auth();
-        check_limits(per_payment_cap, daily_cap)?;
+        check_limits(per_payment_cap, daily_cap, cancel_window)?;
         c.per_payment_cap = per_payment_cap;
         c.daily_cap = daily_cap;
         c.cancel_window = cancel_window;
         env.storage().instance().set(&Key::Config, &c);
+        LimitsChanged { per_payment_cap, daily_cap, cancel_window }.publish(&env);
+        Ok(())
+    }
+
+    /// The owner replaces a lost or leaked agent key. Payments the old key proposed stay scheduled; the owner can
+    /// cancel them, and every check still runs at release.
+    pub fn set_agent(env: Env, agent: Address) -> Result<(), Error> {
+        keep_alive(&env);
+        let mut c = cfg(&env);
+        c.owner.require_auth();
+        if agent == c.owner {
+            return Err(Error::OwnerIsAgent);
+        }
+        c.agent = agent.clone();
+        env.storage().instance().set(&Key::Config, &c);
+        AgentChanged { agent }.publish(&env);
         Ok(())
     }
 
     /// The owner can always take the money back. Checkrail never holds funds.
     pub fn withdraw(env: Env, to: Address, amount: i128) -> Result<(), Error> {
+        keep_alive(&env);
         let c = cfg(&env);
         c.owner.require_auth();
         if amount <= 0 {
             return Err(Error::BadAmount);
         }
         token::Client::new(&env, &c.token).transfer(&env.current_contract_address(), &to, &amount);
+        Withdrawn { to, amount }.publish(&env);
         Ok(())
     }
 

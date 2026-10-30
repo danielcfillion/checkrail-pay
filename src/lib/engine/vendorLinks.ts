@@ -6,6 +6,8 @@ import { billBalance } from "./bills";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { fmt } from "../domain/policy";
+import { senderOutlayMinor } from "../domain/routing";
+import type { Rail } from "../domain/types";
 import { formatDate, railLabel } from "../format";
 import { requirePermission, type Actor } from "./users";
 import { uploadDocument } from "./attachments";
@@ -61,6 +63,8 @@ export interface Remittance {
   language: "en" | "vi";
   /** Tax kept back and paid to the tax office instead, when any. */
   withheld: string | null;
+  /** The rail's fee, when it comes out of the amount the vendor is sent (Stellar) instead of being paid on top: "USD 13.25". */
+  feeDeducted?: string | null;
   /** Paid to the agreed rate, less than invoiced: what was invoiced, so the vendor sees the difference is deliberate. */
   shortPaid: { invoiced: string; basis: string } | null;
   /** For an invoice paid in parts: its total, every part and credit so far, and what is left. */
@@ -81,19 +85,35 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     reference: ob.sourceRef ?? ob.id,
     amount: fmt(ob.amountMinor ?? 0, ob.currency ?? "USD"),
     received: st?.receivedMinor != null && st.receivedCurrency ? fmt(st.receivedMinor, st.receivedCurrency) : null,
-    rail: v.country === "VN" ? railVi(st?.rail ?? ob.selectedRail) : railLabel(st?.rail ?? ob.selectedRail),
+    rail: v.country === "VN" ? railVi(st?.rail ?? ob.selectedRail) : railEn(st?.rail ?? ob.selectedRail),
     date: formatDate(st?.settledAt ?? ob.updatedAt),
     providerRef: st?.externalId ?? null,
     status: ob.state === "settled" ? "paid" : "on its way",
     language: v.country === "VN" ? "vi" : "en",
     withheld: ob.withheldMinor ? fmt(ob.withheldMinor, ob.currency ?? "USD") : null,
+    feeDeducted: st && st.feeMinor > 0 && senderOutlayMinor({ rail: st.rail as Rail, sendAmountMinor: st.grossMinor, feeMinor: st.feeMinor }) === st.grossMinor ? fmt(st.feeMinor, st.grossCurrency) : null,
     shortPaid: shortPaidOf(db, ob),
     history: ob.billId ? billHistory(db, ob.billId, ob.id) : null,
   };
 }
 
+/** How the money reaches a Vietnamese vendor. A bank file and Wise both land as a bank transfer, so the vendor reads the same words for both. */
 function railVi(rail: string | null): string {
-  return rail === "bank_file" ? "chuyển khoản ngân hàng" : rail === "wise" ? "chuyển khoản qua Wise" : railLabel(rail);
+  return rail === "bank_file" || rail === "wise" ? "chuyển khoản ngân hàng" : railLabel(rail);
+}
+
+/** The same for everyone else: a bank file is a bank transfer; Wise is named because it shows on their statement. */
+function railEn(rail: string | null): string {
+  return rail === "bank_file" ? "bank transfer" : rail === "wise" ? "Wise bank transfer" : railLabel(rail);
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "27 Oct 2026" as day/month/year, the way a Vietnamese message writes a date. Anything else is returned as it came. */
+function dateVi(d: string): string {
+  const m = d.match(/^(\d{1,2}) ([A-Za-z]{3}) (\d{4})$/);
+  const month = m ? MONTHS.indexOf(m[2]) + 1 : 0;
+  return m && month ? `${m[1].padStart(2, "0")}/${String(month).padStart(2, "0")}/${m[3]}` : d;
 }
 
 function shortPaidOf(db: Db, ob: typeof obligations.$inferSelect): Remittance["shortPaid"] {
@@ -121,23 +141,47 @@ export function remittanceMessage(r: Remittance, url: string): string {
 }
 
 /**
- * One message per vendor, however many of their payments went out together (a bank file merges them into one
- * transfer). "Paid" only once the provider or the bank has confirmed; until then it says the money is on its way.
+ * One message per vendor, however many of their payments went out together. Payments are grouped by rail and by
+ * whether the money has arrived, and each group is one sentence, so a vendor paid by PayPal and by bank transfer is
+ * told which reference came which way. "Paid" only once the provider or the bank has confirmed; until then the
+ * sentence says the money is on its way.
  */
 export function remittanceMessageFor(rs: Remittance[], urls: string[]): string {
   const r = rs[0];
-  const paid = rs.every((x) => x.status === "paid");
-  const sameCurrency = rs.every((x) => x.amount.split(" ")[0] === r.amount.split(" ")[0]);
-  const total = rs.length > 1 && sameCurrency ? fmt(rs.reduce((a, x) => a + Math.round(Number(x.amount.split(" ")[1].replace(/,/g, "")) * 100), 0), r.amount.split(" ")[0]) : r.amount;
-  const refs = rs.map((x) => x.reference).join(", ");
-  const amount = rs.length > 1 && !sameCurrency ? rs.map((x) => `${x.amount} (${x.reference})`).join(", ") : total;
+  const vi = r.language === "vi";
+  const groups: Array<{ rail: string; paid: boolean; items: Remittance[] }> = [];
+  for (const x of rs) {
+    const paid = x.status === "paid";
+    const g = groups.find((y) => y.rail === x.rail && y.paid === paid);
+    if (g) g.items.push(x);
+    else groups.push({ rail: x.rail, paid, items: [x] });
+  }
+  // What has arrived is said first.
+  groups.sort((a, b) => Number(b.paid) - Number(a.paid));
+  const sentences = groups.map((g) => {
+    const first = g.items[0];
+    const currency = first.amount.split(" ")[0];
+    const sameCurrency = g.items.every((x) => x.amount.split(" ")[0] === currency);
+    const amount = g.items.length > 1 && sameCurrency ? fmt(g.items.reduce((a, x) => a + Math.round(Number(x.amount.split(" ")[1].replace(/,/g, "")) * 100), 0), currency) : g.items.length > 1 ? g.items.map((x) => `${x.amount} (${x.reference})`).join(", ") : first.amount;
+    const oneDate = g.items.every((x) => x.date === first.date);
+    const refs = g.items.map((x) => (g.paid && !oneDate ? `${x.reference} (${vi ? dateVi(x.date) : x.date})` : x.reference)).join(", ");
+    const when = g.paid && oneDate ? (vi ? ` ngày ${dateVi(first.date)}` : ` on ${first.date}`) : "";
+    const provider = first.providerRef && g.items.length === 1 ? (vi ? ` (mã giao dịch ${first.providerRef})` : ` (reference ${first.providerRef})`) : "";
+    const listed = g.items.length > 1 && !sameCurrency;
+    if (vi) return `${r.businessName} ${g.paid ? "đã thanh toán" : "đang chuyển"} ${amount}${listed ? "" : ` cho ${refs}`} qua ${g.rail}${when}${provider}.`;
+    return `${r.businessName} ${g.paid ? "has paid" : "is sending"} ${amount}${listed ? "" : ` for ${refs}`} by ${g.rail}${when}${provider}.`;
+  });
   const links = urls.join(" ");
   const shorts = rs.filter((x) => x.shortPaid);
   const left = rs.length === 1 && r.history ? r.history.left : null;
   const taxed = rs.length === 1 && r.withheld ? r : null;
-  if (r.language === "vi")
-    return `Chào ${r.vendorName}, ${r.businessName} ${paid ? "đã thanh toán" : "đang chuyển"} ${amount} cho ${refs} qua ${r.rail}${paid ? ` ngày ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (mã giao dịch ${r.providerRef})` : ""}.${taxed ? ` Thuế khấu trừ ${taxed.withheld} đã nộp cho cơ quan thuế; bạn nhận ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
-  return `Hi ${r.vendorName}, ${r.businessName} ${paid ? "has paid" : "is sending"} ${amount} for ${refs} by ${r.rail}${paid ? ` on ${r.date}` : ""}${r.providerRef && rs.length === 1 ? ` (reference ${r.providerRef})` : ""}.${taxed ? ` ${taxed.withheld} was withheld for tax and paid to the tax office; you receive ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
+  // A fee taken out of the amount means the vendor receives less than invoiced: say so, per payment, whatever the rail.
+  const fees = rs.filter((x) => x.feeDeducted);
+  const feeVi = fees.map((x) => ` ${rs.length > 1 ? `Với ${x.reference}: ` : ""}phí ${x.feeDeducted} đã được trừ vào số tiền${x.received ? `; bạn nhận ${x.received}` : ""}.`).join("");
+  const feeEn = fees.map((x) => ` ${rs.length > 1 ? `For ${x.reference}, a` : "A"} ${x.feeDeducted} fee was deducted from the amount${x.received ? `; you receive ${x.received}` : ""}.`).join("");
+  if (vi)
+    return `Chào ${r.vendorName}, ${sentences.join(" ")}${feeVi}${taxed ? ` Thuế khấu trừ ${taxed.withheld} đã nộp cho cơ quan thuế; bạn nhận ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Hóa đơn ${x.reference} ghi ${x.shortPaid!.invoiced}; chúng tôi thanh toán theo giá đã thỏa thuận (${x.shortPaid!.basis}).`).join("")}${left ? ` Còn lại: ${left}.` : ""} Chi tiết: ${links}`;
+  return `Hi ${r.vendorName}, ${sentences.join(" ")}${feeEn}${taxed ? ` ${taxed.withheld} was withheld for tax and paid to the tax office; you receive ${taxed.received ?? ""}.` : ""}${shorts.map((x) => ` Your invoice ${x.reference} says ${x.shortPaid!.invoiced}; we paid the agreed rate (${x.shortPaid!.basis}).`).join("")}${left ? ` Left on the invoice: ${left}.` : ""} Details: ${links}`;
 }
 
 export interface EvidenceRequestView {

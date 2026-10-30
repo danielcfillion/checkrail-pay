@@ -8,6 +8,7 @@ import { startOfLocalDay } from "./format";
 import { actorCan, type Actor } from "./engine/users";
 import { toBaseOrZero } from "./fx";
 import { approvalGate } from "./engine/orchestrator";
+import { billRecordOf } from "./engine/bills";
 
 /**
  * Read models for the operator dashboard. Plain functions over the DB, no
@@ -56,6 +57,8 @@ export function getObligationDetail(id: string, db: Db = getDb()) {
     policyRules: latestPolicyRules(id, db),
     agentRun: latestAgentRun(id, db),
     payoutException: row.o.state === "sent" ? latestPayoutException(id, db) : null,
+    /** The bill this payment's evidence was written from, when it was (see billRecordOf). */
+    billRecord: billRecordOf(db, id),
   };
 }
 
@@ -84,16 +87,37 @@ function latestPolicyRules(id: string, db: Db) {
   return (JSON.parse(e.detailJson) as { rules: Array<{ ruleId: string; passed: boolean; severity: string; message: string }> }).rules ?? [];
 }
 
+/**
+ * What a vendor has been paid, in the base currency: settled payments whose money stayed with them. A payment that came
+ * back (a reversed or unclaimed payout) is not paid; it is shown apart as refunded. Its fee is left out only for PayPal,
+ * which returns the fee with an unclaimed or reversed payout; a bank, Wise or Stellar fee was spent and is not returned.
+ */
+export function paidSummary(rows: Array<{ grossMinor: number; feeMinor: number; grossCurrency: string; state: string; rail: string }>, base: string): { paidMinor: number; feesMinor: number; refundedMinor: number } {
+  let paidMinor = 0;
+  let feesMinor = 0;
+  let refundedMinor = 0;
+  for (const r of rows) {
+    if (r.state === "refunded") {
+      refundedMinor += toBaseOrZero(r.grossMinor, r.grossCurrency, base);
+      if (r.rail !== "paypal") feesMinor += toBaseOrZero(r.feeMinor, r.grossCurrency, base);
+    } else {
+      paidMinor += toBaseOrZero(r.grossMinor, r.grossCurrency, base);
+      feesMinor += toBaseOrZero(r.feeMinor, r.grossCurrency, base);
+    }
+  }
+  return { paidMinor, feesMinor, refundedMinor };
+}
+
 export function listVendors(db: Db = getDb()) {
   const vs = db.select().from(vendors).orderBy(vendors.name).all();
   return vs.map((v) => {
     const obs = db.select({ state: obligations.state, amountMinor: obligations.amountMinor }).from(obligations).where(eq(obligations.vendorId, v.id)).all();
-    const st = db.select({ gross: settlements.grossMinor, currency: settlements.grossCurrency, rail: settlements.rail, settledAt: settlements.settledAt }).from(settlements).innerJoin(obligations, eq(obligations.id, settlements.obligationId)).where(eq(obligations.vendorId, v.id)).orderBy(desc(settlements.settledAt)).all();
+    const st = db.select({ gross: settlements.grossMinor, fee: settlements.feeMinor, currency: settlements.grossCurrency, rail: settlements.rail, settledAt: settlements.settledAt, state: obligations.state }).from(settlements).innerJoin(obligations, eq(obligations.id, settlements.obligationId)).where(eq(obligations.vendorId, v.id)).orderBy(desc(settlements.settledAt)).all();
     return {
       ...v,
       obligationCount: obs.length,
       openCount: obs.filter((o) => !["settled", "cancelled", "refunded"].includes(o.state)).length,
-      paidMinor: st.reduce((a, s) => a + toBaseOrZero(s.gross, s.currency, getBusiness(db)?.baseCurrency ?? "USD"), 0),
+      paidMinor: paidSummary(st.map((s) => ({ grossMinor: s.gross, feeMinor: s.fee, grossCurrency: s.currency, state: s.state, rail: s.rail })), getBusiness(db)?.baseCurrency ?? "USD").paidMinor,
       lastPaidAt: st[0]?.settledAt ?? null,
       railsUsed: Array.from(new Set(st.map((s) => s.rail))) as Rail[],
     };
@@ -229,9 +253,10 @@ export function getOverview(db: Db = getDb()) {
 }
 
 /** Approved and scheduled by autopilot: the agent will send it, so it does not need a person. */
-function scheduled(r: ObligationRow): boolean {
+export function isScheduled(r: { state: string; releaseAt: string | null }): boolean {
   return r.state === "approved" && !!r.releaseAt;
 }
+const scheduled = isScheduled;
 
 /** For a blocked mismatch, how much the block saved: requested minus evidenced amount, if positive. */
 function mismatchDelta(r: ObligationRow): number {
@@ -316,6 +341,8 @@ export function waitingIdsFor(actor: Actor, db: Db = getDb()): string[] {
   const open = db.select().from(obligations).where(inArray(obligations.state, ["awaiting_approval", "approved", "blocked", "needs_evidence", "failed"])).all();
   const mayApprove = actorCan(actor, "approve");
   for (const o of open) {
+    // A payment autopilot has scheduled waits on the agent, not on a person (a person may still cancel it).
+    if (isScheduled(o)) continue;
     if (o.state === "awaiting_approval" && mayApprove) {
       const mine = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, o.id), eq(approvals.decision, "approved"), eq(approvals.actor, actor.id))).get();
       if (mine || approvalGate(db, o.id, actor.id).refusal) continue;

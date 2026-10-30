@@ -12,7 +12,7 @@ import type { AccountingPayload } from "./record";
  *   Contact            <- vendorName (+ country on the address)
  *   Invoice (ACCPAY)   <- reference, billDate, description, grossAmount/grossCurrency, accountCode
  *   Payment            <- paymentDate, netPaid, bank account for the rail (PayPal clearing / Stellar treasury)
- *   Bank fee line      <- feeAmount on a "Bank fees" account, so gross, fee and net reconcile
+ *   Bank fee line      <- feeAmount on a "Bank fees" account, so gross, fee and net reconcile (netPaid is what left the account on every rail)
  */
 export interface AccountingAdapter {
   readonly destination: "xero" | "quickbooks" | "csv";
@@ -46,15 +46,16 @@ export function toXeroPayment(r: AccountingPayload, bankAccountCode: string) {
 }
 
 /**
- * A separate fee spend exists only when the fee left the bank account on top of the bill (PayPal).
- * On the Stellar path the fee is deducted from the amount in transit, so the payer's cash out equals the
- * bill and the recipient bears the fee; booking a second spend would double count it.
+ * A separate fee spend exists whenever the fee left the bank account on top of the bill: PayPal, Wise and the bank
+ * file, so the payment plus the fee equals netPaid. On the Stellar path the fee is deducted from the amount in
+ * transit, so the payer's cash out equals the bill and the recipient bears the fee; booking a second spend would
+ * double count it.
  */
 export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: string) {
-  if (Number(r.feeAmount) === 0 || r.rail !== "paypal") return null;
+  if (Number(r.feeAmount) === 0 || r.rail === "stellar") return null;
   return {
     Type: "SPEND",
-    Contact: { Name: r.rail === "paypal" ? "PayPal" : "Stellar network / anchor" },
+    Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : "Bank transfer fee" },
     Date: r.paymentDate,
     BankAccount: { Code: bankAccountCode },
     Reference: `fee ${r.reference}`,

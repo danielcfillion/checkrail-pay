@@ -134,7 +134,9 @@ async function pdfText(bytes: Buffer): Promise<string | null> {
   const path = await import("node:path");
   const script = path.join(process.cwd(), "scripts", "pdf-text.mjs");
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [`--max-old-space-size=${PDF_HEAP_MB}`, script], { stdio: ["pipe", "pipe", "ignore"] });
+    // The child parses a file anyone can upload. It gets a bare environment, not the server's: a pdf.js escape would
+    // otherwise find the Anthropic key, the PayPal secret, the Stellar seed and the data key in process.env.
+    const child = spawn(process.execPath, [`--max-old-space-size=${PDF_HEAP_MB}`, script], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH ?? "", NODE_ENV: "production" } });
     let out = "";
     let done = false;
     const finish = (v: string | null) => {

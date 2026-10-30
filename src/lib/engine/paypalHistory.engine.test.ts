@@ -41,11 +41,13 @@ describe("PayPal's own records decide", () => {
     expect(db.select().from(obligations).where(eq(obligations.id, id)).get()!.blockedReason ?? "").not.toMatch(/PayPal transaction/);
   });
 
-  it("when PayPal cannot be read it says so and does not block", async () => {
+  it("when PayPal cannot be read it says so, does not block, and sends the payment to a person (SEC5-5)", async () => {
     history = "";
     const id = await kalaw("JOB-KAL3D-1020");
     const o = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
     expect(o.blockedReason ?? "").not.toMatch(/PayPal/);
     expect(JSON.parse(o.paypalHistoryJson!)).toMatchObject({ ok: false, error: "HTTP 403" });
+    expect(o.policyDecision).toBe("require_approval");
+    expect(o.policyReasonsJson ?? "").toMatch(/PayPal's records could not be read \(HTTP 403\)/);
   });
 });

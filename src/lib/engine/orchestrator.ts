@@ -3,9 +3,9 @@ import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, bills } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
 import { toBaseMinor, toBaseOrZero } from "../fx";
-import { decryptField } from "../crypto/dataKey";
+import { decryptField, keyedDigest } from "../crypto/dataKey";
 import { billBalance, closeIfDone, createBill, findBill } from "./bills";
-import { expectedAmount } from "./rates";
+import { expectedAmount, rateCardsForPolicy } from "./rates";
 import { assertOpenPeriod } from "./books";
 import { taxFormWarning, withholdingFor } from "./taxes";
 import { currentLogin, humanOf } from "./requestContext";
@@ -387,8 +387,11 @@ function moveTo(db: Db, obligationId: string, target: ObligationState, outcome: 
 /** Hash of the fields that decide where a payment lands. Same parts as the seed uses for vendors.detailsHash. */
 export function payoutHashOf(v: { paypalEmail: string | null; stellarAccount: string | null; bankLabel: string | null; bankAccountEnc?: string | null; bankCode?: string | null; bankAccountNumber?: string | null }): string {
   // A full account number joins the hash only when there is one, so details hashed before bank rails existed still match.
+  // It joins as a keyed digest, never raw: the stored hash sits next to the masked label (last four digits), and a
+  // plain hash of the number would let anyone with the database file find it by search without the data key.
   const account = v.bankAccountNumber ?? (v.bankAccountEnc ? decryptField(v.bankAccountEnc) : null);
-  return hashPayoutDetails(account ? [v.paypalEmail, v.stellarAccount, v.bankLabel, `${v.bankCode ?? ""}:${account}`] : [v.paypalEmail, v.stellarAccount, v.bankLabel]);
+  const bank = `${v.bankCode ?? ""}:${account}`;
+  return hashPayoutDetails(account ? [v.paypalEmail, v.stellarAccount, v.bankLabel, keyedDigest("payout-hash", bank)] : [v.paypalEmail, v.stellarAccount, v.bankLabel]);
 }
 
 /** Names of other vendors in the same business paid to the same PayPal email, Stellar account or bank account. */
@@ -466,7 +469,46 @@ function simulatedPayPalHistory(db: Db, businessId: string): string {
   return JSON.stringify({ transaction_details: details, total_items: details.length });
 }
 
+/**
+ * Evaluate policy for an obligation without writing anything: no audit row, no change to the stored decision, no
+ * superseded approvals. Pages that only look (a payment run, a list) use this; a GET must not change the record.
+ */
+/**
+ * PayPal reports a returned, reversed or refunded payout as a failed attempt. Retrying it re-approves the same
+ * obligation, so the "a payment to these details came back" rule would never see it (it looks at other obligations).
+ * True when this obligation's own attempt came back after the details were last verified.
+ */
+function cameBackOnItsOwn(db: Db, obligationId: string, verifiedAt: string | null): boolean {
+  return db
+    .select({ status: paymentAttempts.status, externalStatus: paymentAttempts.externalStatus, errorMessage: paymentAttempts.errorMessage, updatedAt: paymentAttempts.updatedAt })
+    .from(paymentAttempts)
+    .where(eq(paymentAttempts.obligationId, obligationId))
+    .all()
+    .some((a) => a.status === "failed" && /RETURNED|REVERSED|REFUNDED/i.test(`${a.externalStatus ?? ""} ${a.errorMessage ?? ""}`) && (!verifiedAt || a.updatedAt > verifiedAt));
+}
+
+export function previewPolicy(db: Db, obligationId: string): PolicyOutcome {
+  return evaluateOutcome(db, obligationId).outcome;
+}
+
+/** Evaluate policy and record the result: the stored decision, tax kept back, superseded approvals and an audit row. */
 export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
+  const { outcome, withholding } = evaluateOutcome(db, obligationId);
+  db.update(obligations).set({ withheldMinor: withholding?.withheldMinor ?? null, withholdingNote: withholding?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
+  if (outcome.unacknowledged?.length) {
+    // The approvals were given over a different set of warnings. They no longer count; a person looks again.
+    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
+    audit(db, { obligationId, actor: "policy", action: "approval.superseded", detail: { reason: "new warnings since approval", rules: outcome.unacknowledged } });
+  }
+  db.update(obligations)
+    .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
+    .where(eq(obligations.id, obligationId))
+    .run();
+  audit(db, { obligationId, actor: "policy", action: "policy.evaluated", detail: { decision: outcome.decision, rules: outcome.rules } });
+  return outcome;
+}
+
+function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome; withholding: ReturnType<typeof withholdingFor> } {
   const ob = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, ob.businessId)).get()!;
   const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
@@ -474,7 +516,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -520,27 +562,27 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     .reduce((sum, o) => sum + inBase(o.amountMinor, o.currency), 0);
   // Tax kept back from this payment, recomputed with every policy run so a corrected amount or a new form counts.
   const withholding = vendorRow && ob.amountMinor && ob.currency ? withholdingFor(policy, biz.country, vendorRow, ob.amountMinor, ob.currency) : null;
-  db.update(obligations).set({ withheldMinor: withholding?.withheldMinor ?? null, withholdingNote: withholding?.reason ?? null }).where(eq(obligations.id, obligationId)).run();
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
   const outcome = evaluatePolicy(policy, {
-    obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId },
+    obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId, createdAt: ob.createdAt },
     vendor,
     evidence: myEvidence,
     ai,
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, billId: p.billId })),
+    priorSourceRefs: prior.map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
     invoiceDate: ob.invoiceDate,
     today: localDateString(),
     // A payout to these same details came back since they were last verified: likely a dead address.
     paypalHistory: ob.paypalHistoryJson ? (JSON.parse(ob.paypalHistoryJson) as PayPalHistoryCheck) : null,
-    returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? null) : null,
+    returnedToSameDetails: vendorRow ? (prior.find((p) => p.state === "refunded" && p.payoutHash === vendorRow.detailsHash && (!vendorRow.verifiedAt || p.updatedAt > vendorRow.verifiedAt))?.obligationId ?? (cameBackOnItsOwn(db, obligationId, vendorRow.verifiedAt) ? obligationId : null)) : null,
     expectation: vendor && ob.currency ? expectedAmount(db, ob.businessId, vendor.id, myJobKeys, ob.currency) : null,
+    vendorRates: vendor ? rateCardsForPolicy(db, vendor.id) : undefined,
     withholding,
     taxFormWarning: vendorRow ? taxFormWarning(biz.country, vendorRow) : null,
     jobKeys: myJobKeys,
@@ -554,17 +596,7 @@ export function runPolicy(db: Db, obligationId: string): PolicyOutcome {
     vendorRecentMinor,
     businessRecentMinor,
   });
-  if (outcome.unacknowledged?.length) {
-    // The approvals were given over a different set of warnings. They no longer count; a person looks again.
-    db.update(approvals).set({ decision: "superseded" }).where(and(eq(approvals.obligationId, obligationId), eq(approvals.decision, "approved"))).run();
-    audit(db, { obligationId, actor: "policy", action: "approval.superseded", detail: { reason: "new warnings since approval", rules: outcome.unacknowledged } });
-  }
-  db.update(obligations)
-    .set({ policyDecision: outcome.decision, policyReasonsJson: JSON.stringify(outcome.reasons), blockedReason: outcome.decision === "block" ? outcome.reasons[0] ?? null : null, updatedAt: now() })
-    .where(eq(obligations.id, obligationId))
-    .run();
-  audit(db, { obligationId, actor: "policy", action: "policy.evaluated", detail: { decision: outcome.decision, rules: outcome.rules } });
-  return outcome;
+  return { outcome, withholding };
 }
 
 /**
@@ -708,6 +740,14 @@ export function approveObligation(db: Db, obligationId: string, actor: string, n
   if (unseen.length) {
     audit(db, { obligationId, actor, action: "approval.refused", detail: { reason: "warnings not shown when the person approved", unseen: unseen.map(warningFingerprint) } });
     throw new Error(`Something changed since this page was checked: ${unseen.map((r) => r.message).join("; ")}. Read it, then approve again.`);
+  }
+  // Approval does not bypass policy, so approving something that is blocked now records nothing but a misleading "approved
+  // by": the page this came from is out of date (the amount, vendor or reference changed since it was shown). Refuse, move
+  // the request to where policy puts it, and let the refreshed page say why.
+  if (before.decision === "block") {
+    moveTo(db, obligationId, targetState(before, ob.state as ObligationState), before);
+    audit(db, { obligationId, actor, action: "approval.refused", detail: { reason: "blocked by policy at the moment of approval", reasons: before.reasons } });
+    throw new Error(`This request changed since the page was loaded and is now blocked: ${before.reasons[0] ?? "see the request"}. No approval was recorded.`);
   }
   const acknowledged = before.rules.filter((r) => r.severity === "warn" && !r.passed).map(warningFingerprint);
   db.insert(approvals).values({ id: newId("apr"), obligationId, actor, decision: "approved", note: note ?? null, acknowledgedJson: JSON.stringify(acknowledged), login: currentLogin(), createdAt: now() }).run();
@@ -1050,6 +1090,22 @@ export async function resolveManually(db: Db, obligationId: string, actor: strin
     } catch {
       return "sent";
     }
+  }
+  // "Nothing moved" is the one claim that frees the payment to be paid again under a new key, so where the rail can be
+  // asked it is checked, not taken on a person's word alone: a payout the provider already knows means the money may
+  // have moved, and the person records it as found instead. A rail that cannot be read right now blocks the claim too.
+  // The strict lookup where a rail has one (PayPal's plain lookup reads an outage as "nothing found", which is right for a
+  // replay, which the provider's own idempotency protects, and wrong here).
+  const asked = getRails()[attempt.rail as Rail];
+  const lookup = asked.findByIdempotencyKeyStrict ?? asked.findByIdempotencyKey;
+  if (lookup) {
+    let known: { batchId: string } | null;
+    try {
+      known = await lookup.call(asked, attempt.idempotencyKey);
+    } catch {
+      throw new Error("Could not ask the provider whether this payment exists just now; try again in a minute. Nothing was changed");
+    }
+    if (known) throw new Error(`The provider already has a payout for this attempt (${known.batchId}); record it as found instead of paying again. Nothing was changed`);
   }
   db.update(paymentAttempts).set({ status: "failed", errorMessage: `Confirmed by ${actor} that nothing moved${resolution.note ? `: ${resolution.note}` : ""}`, updatedAt: now() }).where(eq(paymentAttempts.id, attempt.id)).run();
   transition(db, obligationId, "failed", actor, "execution.resolved_by_hand", { attemptId: attempt.id, nothingMoved: true, note: resolution.note ?? null });

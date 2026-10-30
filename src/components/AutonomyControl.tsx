@@ -65,8 +65,8 @@ export function AutonomyControl({ view }: { view: AutonomyView }) {
 
   const describe: Record<Level, { name: string; body: string }> = {
     review: { name: "Review everything", body: "The agent reads, checks and routes each request. A person approves and sends every one." },
-    assist: { name: "Assist", body: `Clean requests up to ${view.symbol}${pretty(view.autoApproveMinor)} are approved for you. A person presses send.` },
-    autopilot: { name: "Autopilot", body: "Clean requests within your caps are sent by the agent after a cancel window. You read the daily close." },
+    assist: { name: "Assist", body: `Requests the rules pass, up to ${view.symbol}${pretty(view.autoApproveMinor)}, are approved for you. A person presses send.` },
+    autopilot: { name: "Autopilot", body: "Requests the rules pass, within your caps, are sent by the agent after a cancel window. You read the daily close." },
   };
 
   return (

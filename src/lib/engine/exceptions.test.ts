@@ -51,7 +51,7 @@ describe("exception paths", () => {
     const vid = await duc();
     verifyVendorChange(db, DEMO_BUSINESS_ID, as("minh"), pendingChanges(db, DEMO_BUSINESS_ID)[0].id, "callback");
     setRate(db, DEMO_BUSINESS_ID, as("minh"), vid, { unit: "vehicle_day", rateMinor: 120_000_000, currency: "VND", validFrom: "2026-01-01" });
-    importDepartures(db, DEMO_BUSINESS_ID, as("lan"), "code,start,end,guests,vendor,unit,quantity\nHG-3D-1023,2026-10-23,2026-10-25,6,Hoang Van Duc,vehicle_day,3");
+    importDepartures(db, DEMO_BUSINESS_ID, as("minh"), "code,start,end,guests,vendor,unit,quantity\nHG-3D-1023,2026-10-23,2026-10-25,6,Hoang Van Duc,vehicle_day,3");
     const id = await invoice("INV-DUC-002", 4_500_000);
     expect(ob(id).state).toBe("blocked");
     // The suggested correction is the rate-card figure, not the amount that was just blocked.
@@ -69,7 +69,7 @@ describe("exception paths", () => {
 
   it("never measures a cash advance against the guide's day rate, and voids an advance cancelled before payment", async () => {
     const advance = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "advance", reference: "ADV-HG3D-1023", totalMinor: 30_000, currency: "USD", note: "Fuel and tickets for HG-3D-1023" });
-    importDepartures(db, DEMO_BUSINESS_ID, as("lan"), "code,start,end,guests,vendor,unit,quantity\nHG-3D-1023,2026-10-23,2026-10-25,6,Maria Santos,day,3");
+    importDepartures(db, DEMO_BUSINESS_ID, as("minh"), "code,start,end,guests,vendor,unit,quantity\nHG-3D-1023,2026-10-23,2026-10-25,6,Maria Santos,day,3");
     const id = await payBill(db, DEMO_BUSINESS_ID, as("lan"), advance, 30_000);
     expect(ob(id).state).not.toBe("blocked");
     expect(rules(id).join(" ")).not.toMatch(/Rate card/);

@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { viewEvidenceRequest } from "@/lib/engine/vendorLinks";
 import { EvidenceUpload } from "@/components/EvidenceUpload";
+import { PublicFrame } from "@/components/PublicFrame";
 import { VendorHeader } from "@/components/VendorHeader";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export default async function EvidencePage({ params }: { params: Promise<{ token
   const { token } = await params;
   const v = viewEvidenceRequest(getDb(), token);
   return (
-    <>
+    <PublicFrame>
       <VendorHeader payer={v?.businessName} />
       <h1 className="text-2xl font-semibold tracking-tight">{v ? "We need one document to pay you" : "Link not available"}</h1>
       {!v ? (
@@ -20,14 +21,19 @@ export default async function EvidencePage({ params }: { params: Promise<{ token
       ) : (
         <>
           <p className="mt-2 text-ink-soft">
-            {v.vendorName}, to pay {v.amount} for {v.reference}, they need: {v.needed.join("; ")}.
+            {v.vendorName}, to pay you <span className="num">{v.amount}</span> for <span className="num">{v.reference}</span>, {v.businessName} needs:
           </p>
+          <ul className="mt-1 list-disc space-y-1 pl-5">
+            {v.needed.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
           {v.note ? <p className="mt-2">&ldquo;{v.note}&rdquo;</p> : null}
           <div className="mt-6">
             <EvidenceUpload token={token} />
           </div>
         </>
       )}
-    </>
+    </PublicFrame>
   );
 }

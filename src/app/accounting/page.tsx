@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getSystemModes, listAccountingSyncs } from "@/lib/queries";
-import { formatDate, formatDateTime, pluralise } from "@/lib/format";
+import { formatDate, formatDateTime, groupThousands, pluralise } from "@/lib/format";
 import { EmptyState, PageHeader, RailTag } from "@/components/ui";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { DemoVisit } from "@/components/DemoProgress";
@@ -9,6 +9,7 @@ import { xeroBillRows } from "@/lib/accounting/xeroBills";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { auditEntries, obligations } from "@/lib/db/schema";
+import { ZERO_DECIMAL_CURRENCIES } from "@/lib/domain/money";
 import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,9 @@ export default function AccountingPage() {
   // One currency across every record: say it once in the column headers, not in every cell.
   const currencies = [...new Set(rows.map((r) => r.payload.grossCurrency ?? "USD"))];
   const single = currencies.length === 1 ? currencies[0] : null;
-  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? String(v) : `${cur} ${v}`);
+  // Thousands separators for every amount, and whole units for a currency without decimals, whatever the record stored.
+  const shown = (v: string | number, cur: string) => (ZERO_DECIMAL_CURRENCIES.has(cur) && Number.isFinite(Number(v)) ? Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 }) : groupThousands(v));
+  const amount = (v: string | number | null | undefined, cur: string) => (v == null || v === "" ? "" : single ? shown(v, cur) : `${cur} ${shown(v, cur)}`);
   // Bills changed here after they went to Xero: the accountant makes the same change there.
   const changed = getDb()
     .select({ obligationId: auditEntries.obligationId, at: auditEntries.createdAt, detail: auditEntries.detailJson, ref: obligations.sourceRef })
@@ -41,7 +44,7 @@ export default function AccountingPage() {
         title="Accounting"
         lede={
           <>
-            One record per settled payment: gross, fee, net and the account code. {pending.length ? `${pluralise(pending.length, "record")} waiting to be exported.` : "Everything exported."} Destination today is {system.accounting === "xero" ? "Xero" : "CSV"}.
+            One record per settled payment: gross, fee, net (what left the bank account) and the account code. {pending.length ? `${pluralise(pending.length, "record")} waiting to be exported.` : "Everything exported."} Destination today is {system.accounting === "xero" ? "Xero" : "CSV"}.
           </>
         }
         actions={
@@ -88,14 +91,14 @@ export default function AccountingPage() {
                 <Link href={`/obligations/${r.obligationId}`} className="block min-h-11 px-4 py-3 active:bg-paper">
                   <span className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 truncate font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</span>
-                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${p.grossAmount}`}</span>
+                    <span className="num shrink-0 whitespace-nowrap font-medium">{p.grossAmount == null || p.grossAmount === "" ? "" : `${cur} ${shown(p.grossAmount, cur)}`}</span>
                   </span>
                   <span className="mt-1 flex items-center gap-2 text-xs">
                     <span className="num min-w-0 truncate text-ink-soft">
                       {p.reference ?? r.obligation.sourceRef ?? "no reference"}
                       {p.accountCode ? `, ${p.accountCode}` : ""}
                     </span>
-                    <span className={`dense ml-auto shrink-0 ${tone}`}>{status}</span>
+                    <span className={`dense ml-auto inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 ${tone}`} style={{ background: r.status === "pending" ? "var(--attention-soft)" : r.status === "failed" ? "var(--blocked-soft)" : "var(--settled-soft)" }}>{status}</span>
                   </span>
                 </Link>
               </li>
@@ -127,7 +130,7 @@ export default function AccountingPage() {
                 <th scope="col" className="hidden md:table-cell">
                   Destination
                 </th>
-                <th scope="col" className="hidden xl:table-cell">
+                <th scope="col" className="hidden 2xl:table-cell">
                   Queued
                 </th>
               </tr>
@@ -139,14 +142,14 @@ export default function AccountingPage() {
                 return (
                   <tr key={r.id}>
                     <td>
-                      <span className={`dense whitespace-nowrap ${r.status === "pending" ? "text-attention" : r.status === "failed" ? "text-blocked" : "text-settled"}`}>{r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status}</span>
+                      <span className={`dense inline-flex h-5 items-center whitespace-nowrap rounded-sm px-1.5 ${r.status === "pending" ? "bg-attention-soft text-attention" : r.status === "failed" ? "bg-blocked-soft text-blocked" : "bg-settled-soft text-settled"}`}>{r.status === "pending" ? "Waiting" : r.status === "failed" ? "Failed" : r.status === "exported" ? "Exported" : r.status}</span>
                     </td>
                     <td className="num whitespace-nowrap">
                       <Link href={`/obligations/${r.obligationId}`} className="hover:underline">
                         {p.reference ?? r.obligation.sourceRef ?? "none"}
                       </Link>
                     </td>
-                    <td className="font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
+                    <td className="min-w-[12rem] font-medium">{p.vendorName ?? r.vendorName ?? "Unknown vendor"}</td>
                     <td className="hidden sm:table-cell">
                       <RailTag rail={p.rail} />
                     </td>
@@ -154,14 +157,14 @@ export default function AccountingPage() {
                     <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
                     <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
                     <td className="hidden text-ink-soft lg:table-cell">
-                      <span className="block max-w-[12rem] truncate" title={p.accountCode ?? undefined}>
+                      <span className="block max-w-[6rem] truncate" title={p.accountCode ?? undefined}>
                         {p.accountCode ?? ""}
                       </span>
                     </td>
                     <td className="hidden whitespace-nowrap text-ink-soft md:table-cell" title={r.externalRef ?? undefined}>
                       {destinationLabel(r.destination, r.externalRef)}
                     </td>
-                    <td className="num hidden whitespace-nowrap text-ink-soft xl:table-cell" title={formatDateTime(r.createdAt)}>
+                    <td className="num hidden whitespace-nowrap text-ink-soft 2xl:table-cell" title={formatDateTime(r.createdAt)}>
                       {formatDate(r.createdAt)}
                     </td>
                   </tr>

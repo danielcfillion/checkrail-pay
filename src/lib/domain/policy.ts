@@ -1,6 +1,7 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
+import { statedRateAboveContract, statedRatesFor, UNIT_NAME } from "./statedRate";
 import { localDateString } from "../format";
-import { foldConfusables, hasConfusables } from "./ids";
+import { foldConfusables, hasConfusables, lookalikeWords, mixesScripts } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -178,14 +179,33 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // R4c: the business's own rate card and departure say what this job costs. More than that is blocked; a match is
   // support that does not come from the vendor, which Autopilot needs (see below).
   let rateCardMatch = false;
+  let rateCardNotYet: string | null = null;
   if (exp) {
     const slack = Math.floor((exp.expectedMinor * policy.amountToleranceBps) / 10_000);
     const asked = obligation.amountMinor!;
     const fullJob = bill ? bill.totalMinor : asked;
     if (fullJob > exp.expectedMinor + slack) rules.push(block("expected_amount", `Rate card and departure ${exp.departureCode} say ${fmt(exp.expectedMinor, exp.currency)} (${exp.basis}); this asks for ${fmt(fullJob, obligation.currency!)}`));
     else {
-      rateCardMatch = true;
+      // The rate card says what a finished job costs; it does not show the job was done. It counts as support only
+      // once the departure has ended, so nothing is paid on a trip that has not run without a person.
+      if (exp.endDate && input.today && exp.endDate > input.today) rateCardNotYet = exp.endDate;
+      else rateCardMatch = true;
       rules.push(pass("expected_amount", `Within the rate card for ${exp.departureCode}: ${exp.basis} = ${fmt(exp.expectedMinor, exp.currency)}`));
+    }
+  }
+
+  // R4d: a unit price the invoice or request states ("4 days at USD 220") against the vendor's own rate card. It needs no
+  // departure on file, which is when an inflated rate is easiest to miss: many invoices arrive before the manifest does.
+  // A warning only: the card may be stale. Skipped when the departure's rate card already blocked this payment.
+  if (vendor && input.vendorRates?.length && input.paymentKind !== "advance" && !rules.some((r) => r.ruleId === "expected_amount" && !r.passed)) {
+    const texts = [input.requestText ?? "", ...evidence.flatMap((e) => [e.label, e.excerpt ?? ""])];
+    const f = statedRateAboveContract(statedRatesFor(texts, vendor.name, otherNames), input.vendorRates, input.invoiceDate ?? input.today ?? null, policy.amountToleranceBps);
+    if (f) {
+      const stated = UNIT_NAME[f.statedUnit];
+      const card = UNIT_NAME[f.rateUnit];
+      // Ahead of the boilerplate "evidence supplied by operator" warning, so the specific reason heads the list and the Inbox.
+      const at = rules.findIndex((r) => r.ruleId === "evidence_provenance");
+      rules.splice(at < 0 ? rules.length : at, 0, warn("stated_unit_rate", `The invoice charges ${fmt(f.statedMinor, f.currency)} per ${stated}; the contract rate is ${fmt(f.rateMinor, f.currency)} per ${card} (${fmt(f.overMinor, f.currency)} more over ${f.quantity} ${card}${f.quantity === 1 ? "" : "s"}). Check it against the contract before approving`));
     }
   }
 
@@ -209,7 +229,15 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   //   c) same vendor, same amount, settled in the last 30 days with no shared identifier: a warning that forces approval.
   {
     // Earlier payments on the same bill are its other parts; the bill check above stops them adding up to too much.
-    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && p.state !== "cancelled" && p.state !== "failed" && p.state !== "refunded" && !(bill && p.billId === bill.id));
+    // Which other requests count as "already used": money that is committed (approved, in flight, paid, disputed) always
+    // does, in any order, so a later payment still stops an earlier request paying the same job twice. A request still
+    // open counts only if it is earlier than this one, so the original is never blocked by its own duplicate. A blocked,
+    // cancelled, failed or refunded request never counts: it will not pay, so it must not stop the one it duplicates.
+    // Nor does one still drafted or waiting for evidence: it cannot be paid yet, so a vendor's re-sent invoice with its
+    // evidence is the real request. If the unsupported one later gains evidence, any committed payment on the job blocks it.
+    const committed = ["approved", "execution_pending", "sent", "settled", "disputed"];
+    const earlier = (p: { obligationId: string; createdAt?: string }) => !p.createdAt || !obligation.createdAt || p.createdAt < obligation.createdAt || (p.createdAt === obligation.createdAt && p.obligationId < obligation.id);
+    const live = input.priorSourceRefs.filter((p) => p.obligationId !== obligation.id && !["cancelled", "failed", "refunded", "blocked"].includes(p.state) && !(bill && p.billId === bill.id) && (committed.includes(p.state) || (!["drafted", "needs_evidence"].includes(p.state) && earlier(p))));
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;
@@ -254,10 +282,17 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     } else if (h.matches.length) {
       for (const m of h.matches.slice(0, 3)) rules.push(block("paypal_history", `PayPal transaction ${m.transactionId} on ${m.date} already paid ${fmt(m.amountMinor, m.currency)} for ${m.matched} to ${m.email}`));
     } else if (h.ok) rules.push(pass("paypal_history", "PayPal's own records show no payment for this job in the last 31 days"));
-    else rules.push(pass("paypal_history", `PayPal's records could not be read (${h.error ?? "no answer"}); this app's own payment history was checked`));
+    // A read that failed, or that was cut short, is not a clean bill: only this app's own history was checked, so a person
+    // confirms the vendor was not already paid from PayPal directly.
+    else rules.push(warn("paypal_history", `PayPal's records could not be read (${h.error ?? "no answer"}); only this app's own payment history was checked, so confirm the vendor was not already paid from PayPal`));
   }
   if (!obligation.sourceRef) rules.push(warn("reference_present", "No reference supplied; duplicate check relied on job identifiers and amount"));
+  else if (mixesScripts(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} mixes letters from different scripts, so it could not be compared with earlier references; check it is not a re-issue of a job already paid`));
   else if (hasConfusables(obligation.sourceRef)) rules.push(warn("reference_present", `Reference ${obligation.sourceRef} contains look-alike letters from another script or hidden characters; it was compared as ${foldConfusables(obligation.sourceRef)}`));
+
+  // A reference hidden behind a look-alike letter in the request or its records is not found by the duplicate checks.
+  const lookalikes = lookalikeWords(input.requestText, ...evidence.flatMap((e) => [e.label, e.excerpt, e.reference]));
+  if (lookalikes.length) rules.push(warn("reference_lookalike", `${lookalikes.slice(0, 3).join(", ")} mixes look-alike letters from another script or hidden characters, so it could not be compared with earlier jobs; check it is not a re-issue of a job already paid`));
 
   // R6: recipient details changed since verification
   if (policy.blockOnRecipientChange && vendor) {
@@ -344,7 +379,12 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
   // vendor did not write supports it: a job sheet, booking or purchase order from the business's systems, or the
   // rate card. This holds at every autonomy level.
   const independent = rateCardMatch || evidence.some((e) => (e.provenance ?? "system") === "system" && ["job_sheet", "booking", "purchase_order"].includes(e.kind));
-  const selfAttested = (): PolicyOutcome => ({ decision: "require_approval", reasons: ["Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"], rules });
+  const selfAttested = (): PolicyOutcome => ({
+    decision: "require_approval",
+    reasons: [rateCardNotYet && exp ? `The rate card confirms this amount, but departure ${exp.departureCode} does not end until ${rateCardNotYet}; nothing is paid on a trip that has not run without a person, so a person approves this one` : "Only the vendor's own documents support this amount; it is paid without a person only when a job sheet, booking or the rate card confirms it, so a person approves this one"],
+    rules,
+    selfAttested: true,
+  });
   // A cash advance is money out before anything is delivered, backed only by the record the business typed itself:
   // a person approves every one, at every autonomy level (and never the person who prepared it, while someone else can).
   if (input.paymentKind === "advance" && input.approvalsCount < 1) {

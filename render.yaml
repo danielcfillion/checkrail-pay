@@ -57,6 +57,19 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
+      # Login throttle key. Render's edge (Cloudflare, then Render's load balancers) appends to X-Forwarded-For and
+      # Render documents no other client address header, so the app keys on the last X-Forwarded-For entry. If that
+      # turns out to be a shared edge address, one visitor's wrong passwords could lock out every judge. To check:
+      # set CHECKRAIL_LOG_CLIENT_IP to "1", redeploy, try one wrong password, and read the "[checkrail] failed login"
+      # line in the logs. If a header such as cf-connecting-ip shows the visitor's own address, set
+      # CHECKRAIL_CLIENT_IP_HEADER to its name; then set CHECKRAIL_LOG_CLIENT_IP back to "0".
+      - key: CHECKRAIL_LOG_CLIENT_IP
+        value: "0"
+      # The judging login is published, so a correct password is let in even when the visitor's address is over its
+      # wrong-password limit. Without this, if every visitor shares one throttle key, eleven wrong passwords from
+      # anyone would lock every judge out for 15 minutes. Never set this where the login is a secret.
+      - key: CHECKRAIL_THROTTLE_SPARES_VALID
+        value: "1"
       # Autopilot heartbeat runs inside the single web process.
       - key: AUTOPILOT_HEARTBEAT_SECONDS
         value: "15"

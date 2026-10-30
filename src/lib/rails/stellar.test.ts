@@ -182,6 +182,15 @@ describe("StellarRail duplicate protection (H2)", () => {
   });
 });
 
+describe("StellarRail.findByIdempotencyKey (SEC5-4)", () => {
+  it("finds a successful payment whose memo carries the key, ignores failed ones and other keys, and does not hide an outage", async () => {
+    const { rail: r } = rail({ pages: [[rec({ successful: false, hash: "H-FAILED" }), rec({ memo: "ffffffff JOB-9", hash: "H-OTHER" }), rec({ hash: "H-MINE", memo: `JOB-1 ${KEY.slice(0, 8)}` })]] });
+    expect(await r.findByIdempotencyKey(KEY)).toEqual({ batchId: "H-MINE", batchStatus: "success" });
+    expect(await rail({ pages: [[rec({ successful: false })]] }).rail.findByIdempotencyKey(KEY)).toBeNull();
+    await expect(rail({ historyError: new Error("horizon 503") }).rail.findByIdempotencyKey(KEY)).rejects.toThrow(/horizon 503/);
+  });
+});
+
 describe("StellarRail submission outcomes (C1)", () => {
   it("result codes mean the network rejected it: failed, with the codes surfaced (op_no_trust)", async () => {
     const { rail: r } = rail({ submit: async () => { throw Object.assign(new Error("Request failed"), { response: { data: { extras: { result_codes: { transaction: "tx_failed", operations: ["op_no_trust"] } } } } }); } });

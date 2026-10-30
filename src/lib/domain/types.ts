@@ -191,6 +191,8 @@ export interface PolicyInput {
     currency: string | null;
     sourceRef: string | null;
     vendorId: string | null;
+    /** ISO time it was received; with each earlier request's, decides which of two open duplicates is the original. */
+    createdAt?: string;
   };
   vendor: VendorPayoutProfile | null;
   evidence: EvidenceItem[];
@@ -206,7 +208,9 @@ export interface PolicyInput {
   withholding?: { rule: string; withheldMinor: number; reason: string } | null;
   taxFormWarning?: string | null;
   /** What the business's own rate card and departure records say this job should cost (see engine/rates.ts). */
-  expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string } | null;
+  expectation?: { departureCode: string; expectedMinor: number; currency: string; basis: string; endDate?: string } | null;
+  /** The vendor's rate cards, for checking a unit price the invoice states ("4 days at USD 220") against the contract whether or not the departure is on file (see engine/rates.ts). */
+  vendorRates?: Array<{ unit: string; rateMinor: number; currency: string; validFrom: string; validTo: string | null }>;
   /** The bill this payment settles all or part of, with what other payments and credits already cover. */
   bill?: { id: string; vendorId: string; reference: string; kind: string; status: string; totalMinor: number; currency: string; coveredMinor: number } | null;
   /** Source refs of other obligations for the same vendor in the lookback window (for duplicate detection). */
@@ -219,6 +223,8 @@ export interface PolicyInput {
     keys?: string[];
     /** ISO time of last update, for the same-amount recency check. */
     updatedAt?: string;
+    /** ISO time it was received, to tell an earlier request from a later one. */
+    createdAt?: string;
     /** Bill the earlier obligation paid against: payments on the same bill are parts of one invoice, not duplicates. */
     billId?: string | null;
   }>;
@@ -274,6 +280,8 @@ export interface PolicyOutcome {
   rules: PolicyRuleResult[];
   /** Warnings that were not on screen when the existing approval was given. Their presence voids that approval. */
   unacknowledged?: string[];
+  /** The payment goes to a person only because nothing but the vendor's own say-so (or a rate card for a trip that has not run) supports it. */
+  selfAttested?: boolean;
 }
 
 export interface RouteQuote {
@@ -362,6 +370,8 @@ export interface PaymentRail {
   getStatus(externalId: string): Promise<SettlementStatus>;
   /** Optional: does the provider already know this idempotency key? Used to reconcile an attempt whose outcome was unknown before replaying it. */
   findByIdempotencyKey?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
+  /** Optional: the same question where an outage must not read as "nothing found" (it throws unless the answer is definitive). Asked before a person's "nothing moved" frees a payment to be paid again. */
+  findByIdempotencyKeyStrict?(key: string): Promise<{ batchId: string; batchStatus: string | null } | null>;
   /** Optional: does this provider id belong to the attempt with this idempotency key? null when the provider could not be asked. */
   externalIdMatchesKey?(externalId: string, key: string): Promise<boolean | null>;
   /** Optional: money available to send in this currency. null when the provider cannot be asked (no permission, outage). */

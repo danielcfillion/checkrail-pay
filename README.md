@@ -56,7 +56,7 @@ As of 29 Oct 2026:
 - **Wise:** beta adapter, never run.
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
-- **Tests:** 426 in 55 files. **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 592 in 67 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -83,7 +83,7 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 
 - Autonomy removes the approval step and nothing else. A mismatched amount, an already-paid job, changed payout details, missing evidence, a disabled corridor, the two-person rule above USD 5,000 and the per-vendor daily cap stop a payment at every level (`src/lib/engine/autopilot.test.ts`).
 - Autopilot limits: USD 500 per payment, USD 2,000 per rolling 24 hours across the business, a 10-minute cancel window and a pause that applies at once (defaults; the owner changes them).
-- Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents.
+- Autopilot never sends a first payment to a vendor, an amount at least 3 times the vendor's usual, a payment a person approved, or one backed only by the vendor's own documents. What counts as support that is not the vendor's (a job sheet, booking or purchase order from a connected system, or the rate card and departures) can be set or changed only by an approver or the owner, never by the clerk who prepares the payment. A rate card confirms a payment only once the departure it names has ended: nothing is paid without a person on a trip that has not run.
 - Policy runs again at release. If anything changed in the cancel window, no rail is called and the refusal shows in the Daily close.
 - The Daily close (`/close`) lists what needs a look first, then what autopilot sent, what people sent and spend against the cap. Sign off writes an audit entry of exactly what was on the page.
 
@@ -127,6 +127,17 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - The bank file is a generic CSV to map to each bank's template. Xero is a file import.
 - The autopilot heartbeat assumes one server process. SQLite, logins in an environment variable.
 - The agent shares a PayPal app that has Payouts scope. Use a separate read-only app before real money.
+
+## The two files for the bookkeeper
+
+- **Xero bills file** (Accounting, "Export new bills"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill.
+- **Settlement CSV** (Accounting, "Export CSV"): one row per settled payment, for matching to the bank feed.
+
+They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (310 guides and drivers, 320 homestays and hotels, 400 creators, 429 other), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` starts with the same code the bills file carries and adds the usual name.
+
+`netPaid` is what left the bank account, on every rail: the amount sent plus the fee for PayPal, Wise and the bank file, which charge their fee on top. Only Stellar takes its fee out of the amount, so its net is the amount, and the `feeAmount` on a Stellar row is borne by the vendor, not paid by the business. The vendor's remittance message and advice say so ("a USD 13.25 fee was deducted from the amount; you receive PHP 45,664.99"). A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
+
+Changed in practitioner round six (PR6-4): `netPaid` was the amount alone for Wise and the bank file, so it did not equal the money that left the account; an advance was classed as 310 in the CSV and 620 in the bills file; `description` was the reader's one-line summary of the request, cut at 120 characters; VND carried `.00`. If you already import the settlement CSV, `netPaid` for Wise and bank-file payments is now larger by the fee, and `description` and `accountCode` for advances differ from earlier rows.
 
 ## Switching to live mode
 
@@ -180,7 +191,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-426 tests in 55 files. `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+604 tests in 68 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 

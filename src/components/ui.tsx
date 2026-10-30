@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { formatMoney, formatMoneySymbol, railLabel, stateLabel, timeAgo, formatDateTime } from "@/lib/format";
+import { formatMoney, formatMoneySymbol, humaniseStates, railLabel, stateLabel, timeAgo, formatDateTime } from "@/lib/format";
 import { STATION_LABELS, type Station } from "./checkline-model";
 
 /* Small, server-safe presentational pieces. */
@@ -165,7 +165,7 @@ export function RowLink({ href, children, className = "" }: { href: string; chil
 
 /** Turns "obligation obl_abc123" in a policy message into a link that reads "an earlier payment": people do not read ids. */
 export function Linkified({ text }: { text: string }): ReactNode {
-  const parts = text.replace(/\bobligation (obl_[a-z0-9]+)/gi, "$1").split(/(obl_[a-z0-9]+)/i);
+  const parts = humaniseStates(text.replace(/\bobligation (obl_[a-z0-9]+)/gi, "$1")).split(/(obl_[a-z0-9]+)/i);
   return parts.map((p, i) =>
     /^obl_[a-z0-9]+$/i.test(p) ? (
       <Link key={i} href={`/obligations/${p}`} className="link">

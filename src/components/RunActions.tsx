@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { cancelRunAction, releaseRunAction, removeRunItemAction } from "@/app/actions";
+import { approveAction, cancelRunAction, releaseRunAction, removeRunItemAction } from "@/app/actions";
 import { useToast } from "./Toast";
 import { ConfirmButton } from "./ConfirmButton";
 
@@ -38,6 +38,33 @@ export function RemoveItem({ runId, itemId }: { runId: string; itemId: string })
       }
     >
       Remove
+    </button>
+  );
+}
+
+/**
+ * Approve one waiting item without leaving the run. It sends the fingerprints of the warnings this page showed, the same
+ * way the payment page does, so the approval covers exactly what the person saw: a warning that appeared since is refused.
+ */
+export function ApproveItem({ obligationId, fingerprints, label }: { obligationId: string; fingerprints: string[]; label: string }) {
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  const { toast } = useToast();
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-primary"
+      disabled={pending}
+      aria-label={label}
+      onClick={() =>
+        start(async () => {
+          const r = await approveAction(obligationId, undefined, fingerprints);
+          toast(r.message, r.ok ? "ok" : "error");
+          router.refresh();
+        })
+      }
+    >
+      {pending ? "Approving" : "Approve"}
     </button>
   );
 }

@@ -5,14 +5,14 @@ import { notFound } from "next/navigation";
 import { getBusiness, getObligationDetail, listVendors } from "@/lib/queries";
 import { toBaseMinor } from "@/lib/fx";
 import { billBalance } from "@/lib/engine/bills";
-import { bills as billsTable, obligations as obligationsTable } from "@/lib/db/schema";
-import { and, eq, gt } from "drizzle-orm";
+import { bills as billsTable } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { getViewer } from "@/lib/viewer";
 import { approvalGate, dualControlGap } from "@/lib/engine/orchestrator";
 import { InvoiceDates } from "@/components/InvoiceDates";
 import { getDb } from "@/lib/db";
 import type { Rail } from "@/lib/domain/types";
-import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, railLabel, roleLabel, sourceTypeLabel, truncateMiddle } from "@/lib/format";
+import { countryName, evidenceKindLabel, formatDate, formatDateTime, formatMoney, formatMoneySymbol, humaniseActor, railLabel, roleLabel, sourceTypeLabel, truncateMiddle } from "@/lib/format";
 import { ActionBar } from "@/components/ActionBar";
 import { VendorLinkButton } from "@/components/VendorLinkButton";
 import { ObligationStageProvider, StageCheckLine } from "@/components/ObligationStage";
@@ -23,9 +23,11 @@ import { CopyButton } from "@/components/CopyButton";
 import { ScheduledReleases } from "@/components/ScheduledReleases";
 import { KeyValue, Money, RailTag, StatePill } from "@/components/ui";
 import { DecisionCard } from "@/components/DecisionCard";
+import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE } from "@/components/check-statement";
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
-import { amountAsRead, correctionLine, RECORDED_LABEL, selectRecordedReading, summaryWithoutCount } from "@/components/agent-reading";
+import { correctionLine, RECORDED_LABEL, summaryWithoutCount } from "@/components/agent-reading";
+import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
 
@@ -75,8 +77,11 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const shownWarnings = d.policyRules.filter((r) => r.severity === "warn" && !r.passed).map((r) => warningFingerprint(r as PolicyRuleResult));
   const firstId = (o.blockedReason ?? "").match(/\b(obl_[a-z0-9]+)\b/i)?.[1];
   const caption = o.state === "blocked" && o.blockedReason ? checkLineCaption(o.blockedReason, earlier) : undefined;
+  // The reading the page shows under "What the agent read" is the one the band has to agree with.
+  const { recorded, reader } = readingFor(d);
   const decision: Decision = decide({
     state: o.state,
+    vendorName: o.vendorName,
     amountMinor: o.amountMinor,
     currency: o.currency,
     blockedReason: o.blockedReason,
@@ -89,6 +94,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
     settlement: d.settlement,
     releaseAt: o.releaseAt,
     earlier: firstId ? earlier.get(firstId) ?? null : null,
+    reader,
   });
   // An agent concern that only restates a failing amount check is the same reason twice: Policy keeps the check.
   const amountBlocked = d.policyRules.some((r) => !r.passed && r.severity === "block" && (r.ruleId === "amount_matches_evidence" || r.ruleId === "expected_amount"));
@@ -102,6 +108,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
   const otherBlocks = otherFailing.filter((r) => r.severity === "block").length;
   const otherWarnings = otherFailing.length - otherBlocks;
   const perm = { approve: perms?.approve ?? true, pay: perms?.pay ?? true, amend: perms?.amend ?? true };
+  const readerOpen = Boolean(reader && (reader.concerns.length + reader.missing.length > 0 || (reader.confidence !== null && reader.confidence < DEFAULT_MIN_CONFIDENCE)));
   const cardCarriesPrimary = Boolean(decision.action && allowedAction(decision.action, perm, approveRefusal));
   // "What you are deciding", as one line on the decision card.
   const deciding = ["awaiting_approval", "blocked", "needs_evidence"].includes(o.state)
@@ -115,10 +122,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
         alsoFound: { blocks: otherBlocks, warnings: otherWarnings },
       })
     : null;
-  // A live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
-  const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
-  const newer = o.vendorId && o.sourceRef ? getDb().select({ id: obligationsTable.id }).from(obligationsTable).where(and(eq(obligationsTable.vendorId, o.vendorId), eq(obligationsTable.sourceRef, o.sourceRef), gt(obligationsTable.createdAt, o.createdAt))).get() : undefined;
-  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  // `recorded` above is a live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
   const corrected = correctionLine(d.audit, o.currency);
   const toolCtx = { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length };
   const concernLine = concernsElsewhere || missingElsewhere ? `${[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. ${d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} listed under Policy.` : null;
@@ -138,7 +142,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">
               {o.vendorId ? (
-                <Link href={`/vendors/${o.vendorId}`} className="hover:underline">
+                <Link href={`/vendors/${o.vendorId}`} className={`hover:underline ${TOUCH_INLINE}`}>
                   {o.vendorName ?? "Unknown vendor"}
                 </Link>
               ) : (
@@ -198,7 +202,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                     <p className="dense text-ink-soft">
                       {evidenceKindLabel(e.kind)}
                       {e.reference ? <span className="num">, {e.reference}</span> : null}
-                      {e.provenance === "operator" ? <span className="text-attention">, typed by operator</span> : null}
+                      {e.provenance === "operator" ? <span className="text-attention">{d.billRecord?.evidenceIds.includes(e.id) ? `, from a bill recorded by ${humaniseActor(d.billRecord.recordedBy)}` : ", typed by operator"}</span> : null}
                       {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className={`link ${TOUCH_INLINE}`} href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
                     </p>
                     {e.excerpt ? <blockquote className="mt-1 border-l-2 pl-3 text-ink-soft hairline">{e.excerpt}</blockquote> : null}
@@ -283,7 +287,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           </WorkingPanel>
 
           <WorkingPanel className={ord("policy")} title="Policy">
-            <RuleChecklist rules={rules} earlier={earlier} />
+            <RuleChecklist rules={rules} earlier={earlier} readerOpen={readerOpen} />
           </WorkingPanel>
 
           <WorkingPanel className={ord("route")} title="Route">
@@ -307,7 +311,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
           ) : null}
           {o.state === "approved" && o.releaseAt ? (
             <WorkingPanel className={ord("exception")} title="Autopilot">
-              <p className="text-ink-soft">Every check passed and this is within your caps, so the agent will send it when the cancel window ends. Policy runs once more at that moment.</p>
+              <p className="text-ink-soft">{autopilotSentence(checkStatement({ rules: d.policyRules, reader }))}</p>
               <div className="mt-2">
                 <ScheduledReleases compact rows={[{ id: o.id, vendorName: o.vendorName, amountText: formatMoney(o.amountMinor, o.currency), releaseAt: o.releaseAt }]} />
               </div>

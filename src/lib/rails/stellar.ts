@@ -143,6 +143,26 @@ export class StellarRail implements PaymentRail {
     }
   }
 
+  /**
+   * Whether this treasury already paid under this attempt's key: a successful payment whose memo carries the key's
+   * first 8 characters (the same test externalIdMatchesKey applies). Throws when Horizon cannot be read, so a caller
+   * never mistakes an outage for "nothing moved".
+   */
+  async findByIdempotencyKey(key: string): Promise<{ batchId: string; batchStatus: string | null } | null> {
+    const prefix = key.slice(0, 8);
+    let page = await this.server.transactions().forAccount(this.treasury.publicKey()).order("desc").limit(HISTORY_PAGE).call();
+    const oldest = Date.now() - HISTORY_MAX_AGE_MS;
+    for (let n = 0; n < HISTORY_MAX_PAGES; n++) {
+      for (const t of page.records) {
+        if (t.memo_type === "text" && typeof t.memo === "string" && t.memo.includes(prefix) && t.successful) return { batchId: t.hash, batchStatus: "success" };
+      }
+      const last = page.records[page.records.length - 1];
+      if (page.records.length < HISTORY_PAGE || !last || Date.parse(last.created_at) < oldest) break;
+      page = await page.next();
+    }
+    return null;
+  }
+
   async getStatus(externalId: string): Promise<SettlementStatus> {
     try {
       const tx = await this.server.transactions().transaction(externalId).call();

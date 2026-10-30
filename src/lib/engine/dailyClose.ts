@@ -1,10 +1,11 @@
-import { railLabel } from "../format";
+import { humaniseActor, railLabel } from "../format";
 import { toBaseOrZero } from "../fx";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import { auditEntries, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
 import { AGENT_ACTOR, autopilotStatus, type AutopilotStatus } from "./autopilot";
+import { billRecordOf } from "./bills";
 
 /**
  * Daily close: one scan of everything that happened since a person last signed off.
@@ -29,6 +30,8 @@ export interface CloseItem {
 }
 
 export interface AttentionItem extends CloseItem {
+  /** When several payments fold into this line (same vendor, same reason): every payment's id, this item's own first. */
+  ids?: string[];
   kind: "returned" | "unknown_outcome" | "payout_exception" | "failed" | "refused" | "blocked" | "cancelled_release" | "slow_settlement" | "approved_over_warning" | "unusual_amount" | "new_vendor";
 }
 
@@ -82,6 +85,9 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   const started = new Map<string, { actor: string; at: string }>();
   for (const e of entries) if (e.obligationId && e.toState === "execution_pending") started.set(e.obligationId, { actor: e.actor, at: e.createdAt });
 
+  // What may fold into one line (see foldByReason): payments approved over the same warnings for one vendor, copies of
+  // one job that were blocked, payouts that came back for one vendor.
+  const foldKeys = new Map<string, string>();
   const paidByAgent: CloseItem[] = [];
   const paidByPeople: CloseItem[] = [];
   const inFlight: CloseItem[] = [];
@@ -136,13 +142,24 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
   for (const e of entries) {
     if (!e.obligationId) continue;
     const detail = e.detailJson ? (JSON.parse(e.detailJson) as Record<string, unknown>) : {};
-    if (e.action === "settlement.returned") flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again (from the payment page, or the vendor's page when it was part of a bill).`);
+    if (e.action === "settlement.returned") {
+      flag("returned", e.obligationId, e.createdAt, `Came back to the business (${String(detail.type ?? "returned")}): the vendor is owed again. Check their details, then pay it again (from the payment page, or the vendor's page when it was part of a bill).`);
+      // Payouts that came back for one vendor are one thing to deal with.
+      foldKeys.set(`returned:${e.obligationId}`, `${byId.get(e.obligationId)?.vendorId ?? e.obligationId}`);
+    }
     if (e.action === "autopilot.refused") flag("refused", e.obligationId, e.createdAt, String(detail.reason ?? "Policy refused at the last moment. No money moved."));
     if (e.action === "autopilot.cancelled") flag("cancelled_release", e.obligationId, e.createdAt, `Scheduled release cancelled by ${e.actor.replace(/^user:/, "")}.`);
     if (e.action === "execution.failed" || e.action === "settlement.failed") {
       if (byId.get(e.obligationId)?.state === "failed") flag("failed", e.obligationId, e.createdAt, String(detail.error ?? detail.externalStatus ?? "The provider rejected the payment."));
     }
-    if (e.toState === "blocked" && byId.get(e.obligationId)?.state === "blocked") flag("blocked", e.obligationId, e.createdAt, byId.get(e.obligationId)?.blockedReason ?? null);
+    if (e.toState === "blocked" && byId.get(e.obligationId)?.state === "blocked") {
+      const blocked = byId.get(e.obligationId)!;
+      flag("blocked", e.obligationId, e.createdAt, blocked.blockedReason ?? null);
+      // Copies of one job are one line with the original they copy: the key is the original named in the reason,
+      // else the vendor's reference, else the request itself.
+      const original = byId.get(blocked.blockedReason?.match(/\b(obl_[a-z0-9]+)\b/i)?.[1] ?? "") ?? blocked;
+      foldKeys.set(`blocked:${e.obligationId}`, original.vendorId && original.sourceRef ? `${original.vendorId}|${original.sourceRef.toUpperCase()}` : original.id);
+    }
   }
 
   // Payments that went out but deserve a second look: a first payment to a vendor, an amount far above
@@ -168,30 +185,39 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     const before = obs.filter((x) => x.vendorId === o.vendorId && x.id !== id && settledById.has(x.id) && settledById.get(x.id)!.settledAt < s.at);
     const rail = settledById.get(id)?.rail ?? o.selectedRail;
     const median = earlier.length >= 2 ? earlier[Math.floor(earlier.length / 2)] : 0;
-    if (before.length === 0 && newVendorSeen.has(o.vendorId)) {
-      // Already flagged for this vendor in this close.
-    } else if (before.length === 0) {
-      newVendorSeen.add(o.vendorId);
-      flag("new_vendor", id, s.at, `First payment ever to ${name}. Check the payout details were confirmed with them directly.`);
+    // One "new vendor" line per vendor in a close, whichever way they are new: two payments to a vendor paid for the
+    // first time, or to a bank account for the first time, are one thing to confirm, not two.
+    const firstFlag = () => {
+      if (newVendorSeen.has(o.vendorId!)) return false;
+      newVendorSeen.add(o.vendorId!);
+      return true;
+    };
+    if (before.length === 0) {
+      if (firstFlag()) flag("new_vendor", id, s.at, `First payment ever to ${name}. Check the payout details were confirmed with them directly.`);
     } else if (median > 0 && o.amountMinor && o.amountMinor >= median * 2) {
       const times = (o.amountMinor / median).toFixed(1);
       flag("unusual_amount", id, s.at, `${times} times ${name}'s usual payment (median of ${earlier.length} earlier payments).`);
     } else if (bankRail(rail) && !before.some((x) => bankRail(settledById.get(x.id)!.rail))) {
       // PayPal or Stellar before, a bank account now: a new destination for this vendor's money.
       const was = [...new Set(before.map((x) => railLabel(settledById.get(x.id)!.rail)))].join(", ");
-      flag("new_vendor", id, s.at, `First payment to ${name}'s bank account (earlier ones went by ${was}). Check the account was confirmed with them directly.`);
+      if (firstFlag()) flag("new_vendor", id, s.at, `First payment to ${name}'s bank account (earlier ones went by ${was}). Check the account was confirmed with them directly.`);
     }
     const taxOnly = (w: string) => /W-8BEN|W-9|tax form/i.test(w);
     let warned = latestWarnings(db, id);
+    // Evidence a bill was recorded as says so: "supplied by operator" is true but reads as if the amount was typed into this payment.
+    const rec = billRecordOf(db, id);
+    if (rec) warned = warned.map((w) => (OPERATOR_EVIDENCE.test(w) ? `The evidence is bill ${rec.reference}, recorded by ${humaniseActor(rec.recordedBy)}, not a document; check it against the vendor's invoice` : w));
     if (taxWarnedSeen.has(o.vendorId)) warned = warned.filter((w) => !taxOnly(w));
     if (warned.some(taxOnly)) taxWarnedSeen.add(o.vendorId);
     if (warned.length && !s.actor.startsWith("agent:")) {
       flag("approved_over_warning", id, s.at, `Approved over ${warned.length} warning${warned.length === 1 ? "" : "s"}: ${warned.slice(0, 2).join("; ")}${warned.length > 2 ? "; ..." : ""}`);
+      foldKeys.set(`approved_over_warning:${id}`, `${o.vendorId}|${warned.join("|")}`);
     }
   }
 
   const order: AttentionItem["kind"][] = ["returned", "unknown_outcome", "payout_exception", "failed", "refused", "slow_settlement", "blocked", "approved_over_warning", "unusual_amount", "new_vendor", "cancelled_release"];
   attention.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.at.localeCompare(a.at));
+  const lines = foldByReason(attention, foldKeys);
 
   const waitingOnYou = obs
     .filter((o) => ["awaiting_approval", "needs_evidence"].includes(o.state) || (o.state === "approved" && !o.releaseAt))
@@ -205,13 +231,14 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
 
   // Totals in the base currency at reference rates.
   const sum = (xs: CloseItem[]) => xs.reduce((a, x) => a + toBaseOrZero(x.amountMinor ?? 0, x.currency, baseCurrency), 0);
+  // Every blocked or refused request counts as money held back, however many lines they were folded into.
   const stopped = attention.filter((a) => a.kind === "blocked" || a.kind === "refused");
 
   return {
     since,
     sinceIsSignOff: !!last,
     lastSignOff: last ? { at: last.createdAt, actor: last.actor } : null,
-    attention,
+    attention: lines,
     paidByAgent,
     paidByPeople,
     inFlight,
@@ -231,6 +258,48 @@ export function getDailyClose(db: Db, businessId: string, baseCurrency: string):
     baseCurrency,
     throughSeq,
   };
+}
+
+/** Every request the "Needs a look" lines stand for, folded ones included: what "Still waiting on you" tags as also listed above. */
+export function attentionIds(attention: Array<{ id: string; ids?: string[] }>): Set<string> {
+  return new Set(attention.flatMap((a) => a.ids ?? [a.id]));
+}
+
+const OPERATOR_EVIDENCE = /^Evidence supplied by operator/;
+
+/**
+ * Merge attention lines that share a fold key into the newest of them: its reference lists every request or payment, and
+ * `ids` names them all. Amounts are added up where they are money moved or returned and the currency is the same; copies of
+ * one blocked job keep the one amount, because the money was requested once.
+ */
+function foldByReason(items: AttentionItem[], keys: Map<string, string>): AttentionItem[] {
+  const out: AttentionItem[] = [];
+  const heads = new Map<string, AttentionItem>();
+  for (const it of items) {
+    const key = keys.get(`${it.kind}:${it.id}`);
+    if (!key) {
+      out.push(it);
+      continue;
+    }
+    const head = heads.get(`${it.kind}|${key}`);
+    if (!head) {
+      const first = { ...it, ids: [it.id] };
+      heads.set(`${it.kind}|${key}`, first);
+      out.push(first);
+      continue;
+    }
+    head.ids!.push(it.id);
+    const n = head.ids!.length;
+    if (it.sourceRef && !head.sourceRef?.split(", ").includes(it.sourceRef)) head.sourceRef = [head.sourceRef, it.sourceRef].filter(Boolean).join(", ");
+    if (it.kind !== "blocked") {
+      head.amountMinor = head.currency === it.currency && head.amountMinor !== null && it.amountMinor !== null ? head.amountMinor + it.amountMinor : null;
+      if (head.currency !== it.currency) head.currency = null;
+    }
+    if (it.kind === "approved_over_warning") head.note = head.note?.replace(/^Approved over (\d+ warnings?)( on \d+ payments)?/, `Approved over $1 on ${n} payments`) ?? null;
+    else if (it.kind === "blocked") head.note = `${n} requests for this job are blocked. ${head.note?.replace(/^\d+ requests for this job are blocked\. /, "") ?? ""}`.trim();
+    else if (it.kind === "returned") head.note = `${n} payments came back to the business: the vendor is owed again. Check their details, then pay them again (from each payment page, or the vendor's page when they were part of a bill).`;
+  }
+  return out;
 }
 
 /** Warning-level rules that did not pass in the policy evaluation just before the payment started. */
@@ -272,7 +341,7 @@ export function signOffDailyClose(db: Db, businessId: string, baseCurrency: stri
     detail: {
       since: close.since,
       throughSeq: close.throughSeq,
-      attention: close.attention.map((a) => ({ id: a.id, kind: a.kind })),
+      attention: close.attention.map((a) => ({ id: a.id, kind: a.kind, ...(a.ids ? { ids: a.ids } : {}) })),
       paidByAgent: close.paidByAgent.map((p) => p.id),
       paidByPeople: close.paidByPeople.map((p) => p.id),
       totals: close.totals,

@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { AGE_BUCKETS, agedPayables, listReconciliations } from "@/lib/engine/books";
-import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString, stateLabel } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, formatMoneySymbol, localDateString } from "@/lib/format";
 import { form1099Report } from "@/lib/engine/taxes";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import { PeriodLock, ReconcileFromPayPal, ReconcileUpload } from "@/components/BooksControls";
@@ -45,7 +46,7 @@ export default async function BooksPage() {
                 <thead>
                   <tr>
                     <th scope="col">Vendor</th>
-                    <th scope="col">Reference</th>
+                    <th scope="col" className="max-sm:hidden">Reference</th>
                     <th scope="col" className="hidden sm:table-cell">Due</th>
                     <th scope="col">Age</th>
                     <th scope="col" className="hidden md:table-cell">Status</th>
@@ -56,14 +57,16 @@ export default async function BooksPage() {
                   {aged.rows.map((r) => (
                     <tr key={`${r.kind}-${r.id}`}>
                       <td className="font-medium">
-                        <Link href={r.kind === "bill" ? `/vendors/${r.vendorId}` : `/obligations/${r.id}`} className="hover:underline">
+                        <Link href={r.kind === "bill" ? `/vendors/${r.vendorId}` : `/obligations/${r.id}`} className={`hover:underline ${TOUCH_INLINE}`}>
                           {r.vendorName}
                         </Link>
+                        {/* On a phone the reference rides under the name, so the amount keeps its column. */}
+                        <span className="num block text-xs font-normal text-ink-soft sm:hidden">{r.reference}</span>
                       </td>
-                      <td className="num whitespace-nowrap text-ink-soft">{r.reference}</td>
+                      <td className="num whitespace-nowrap text-ink-soft max-sm:hidden">{r.reference}</td>
                       <td className="num hidden whitespace-nowrap text-ink-soft sm:table-cell">{r.dueDate ? formatDate(r.dueDate) : ""}</td>
-                      <td className={r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
-                      <td className="hidden text-ink-soft md:table-cell">{r.kind === "bill" ? "bill, part paid or unpaid" : stateLabel(r.state).toLowerCase()}</td>
+                      <td className={`whitespace-nowrap ${r.daysOverdue > 30 ? "text-attention" : "text-ink-soft"}`}>{r.daysOverdue > 0 ? `${r.daysOverdue} day${r.daysOverdue === 1 ? "" : "s"} late` : "not yet due"}</td>
+                      <td className="hidden text-ink-soft md:table-cell">{r.detail}</td>
                       <td className="r num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</td>
                     </tr>
                   ))}
@@ -73,6 +76,25 @@ export default async function BooksPage() {
           ) : (
             <p className="px-4 py-3 text-ink-soft">Nothing owed.</p>
           )}
+          {aged.recordedNotApproved.length ? (
+            <div className="border-t px-4 py-3 hairline">
+              <h3 className="font-medium">Recorded, not approved</h3>
+              <p className="mt-0.5 text-xs text-ink-soft">Invoices someone recorded that no payment has been approved for. They are not in the Xero bills file yet, so they are left out of the ageing and the total above.</p>
+              <ul className="mt-2 divide-y hairline">
+                {aged.recordedNotApproved.map((r) => (
+                  <li key={r.id} className="flex items-baseline justify-between gap-3 py-1.5">
+                    <span>
+                      <Link href={`/vendors/${r.vendorId}`} className="font-medium hover:underline">
+                        {r.vendorName}
+                      </Link>{" "}
+                      <span className="num text-ink-soft">{r.reference}</span>
+                    </span>
+                    <span className="num whitespace-nowrap">{formatMoney(r.amountMinor, r.currency)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </Panel>
 
         <Panel title="PayPal statement" aside={last ? `last ${formatDateTime(last.createdAt)}` : "not reconciled yet"}>
@@ -89,6 +111,11 @@ export default async function BooksPage() {
                 {last.result.periodFrom} to {last.result.periodTo}: <span className="text-settled">{last.result.matched.length} matched</span>,{" "}
                 <span className={last.result.statementOnly.length ? "text-attention" : ""}>{last.result.statementOnly.length} on the statement only</span>, {last.result.appOnly.length} recorded here only.
               </p>
+              {last.result.recorded === false ? (
+                <p className="rounded-md border border-attention/40 bg-attention/10 p-2 text-attention">
+                  Shown to you, not saved. Only someone who reconciles (the accountant, an approver or the owner) saves matches against a statement.
+                </p>
+              ) : null}
               {last.result.statementOnly.length ? (
                 <div>
                   <p className="font-medium text-attention">Money left PayPal with no payment here. Look at these first:</p>

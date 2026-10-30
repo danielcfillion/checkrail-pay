@@ -49,14 +49,23 @@ export function ratesFor(db: Db, vendorId: string) {
   return db.select().from(rateCards).where(eq(rateCards.vendorId, vendorId)).all().sort((a, b) => b.validFrom.localeCompare(a.validFrom));
 }
 
+/** A vendor's rate cards as policy reads them, to check a unit price an invoice states against the contract. */
+export function rateCardsForPolicy(db: Db, vendorId: string) {
+  return ratesFor(db, vendorId).map((r) => ({ unit: r.unit, rateMinor: r.rateMinor, currency: r.currency, validFrom: r.validFrom, validTo: r.validTo }));
+}
+
 /**
  * Import departures from a manifest CSV, one service per row:
  *   code,start,end,guests,vendor,unit,quantity
  *   HG-4D-1004,2026-10-04,2026-10-07,12,Phuong Transport,vehicle_day,4
  * Vendors are matched by exact name. A departure already on file is updated (dates, guests, its services replaced).
+ * Only an approver or the owner imports: the manifest decides what a job may cost without a person looking.
  */
-export function importDepartures(db: Db, businessId: string, by: Actor, csv: string): { departures: number; services: number; errors: string[] } {
-  requirePermission(by, "ingest", "import departures");
+export function importDepartures(db: Db, businessId: string, by: Actor, csv: string): { departures: number; services: number; errors: string[]; /** Vendors that now have (or lost) a service on a departure; their waiting payments should be checked again. */ vendorIds: string[] } {
+  // A departure and its services set the expected amount that Autopilot and Assist accept without a person, exactly as
+  // a rate does, so the same people may change them. A clerk who could import one could write the "independent
+  // support" for their own payment request, or raise the quantities on a real departure to lift its ceiling.
+  requirePermission(by, "verify_vendor", "import departures");
   if (csv.length > 500_000) throw new Error("File too large (500 KB at most)");
   const lines = csv.replace(/^﻿/, "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!lines.length) throw new Error("The file is empty");
@@ -85,22 +94,25 @@ export function importDepartures(db: Db, businessId: string, by: Actor, csv: str
     byCode.set(codeU, d);
   });
   let services = 0;
+  const touched = new Set<string>();
   db.transaction((tx) => {
     for (const [code, d] of byCode) {
       const existing = tx.select().from(departures).where(and(eq(departures.businessId, businessId), eq(departures.code, code))).get();
       const id = existing?.id ?? newId("dep");
       if (existing) {
         tx.update(departures).set({ startDate: d.start, endDate: d.end, guests: d.guests, source: "csv" }).where(eq(departures.id, id)).run();
+        for (const o of tx.select({ vendorId: departureServices.vendorId }).from(departureServices).where(eq(departureServices.departureId, id)).all()) touched.add(o.vendorId);
         tx.delete(departureServices).where(eq(departureServices.departureId, id)).run();
       } else tx.insert(departures).values({ id, businessId, code, startDate: d.start, endDate: d.end, guests: d.guests, source: "csv", createdBy: by.id, createdAt: now() }).run();
       for (const s of d.services) {
         tx.insert(departureServices).values({ id: newId("dsv"), departureId: id, vendorId: s.vendorId, unit: s.unit, quantity: s.quantity }).run();
         services += 1;
+        touched.add(s.vendorId);
       }
     }
   });
   audit(db, { obligationId: null, actor: by.id, action: "departures.imported", detail: { departures: byCode.size, services, errors: errors.length } });
-  return { departures: byCode.size, services, errors: errors.slice(0, 50) };
+  return { departures: byCode.size, services, errors: errors.slice(0, 50), vendorIds: [...touched] };
 }
 
 function splitCsv(line: string): string[] {
@@ -127,6 +139,8 @@ function splitCsv(line: string): string[] {
 
 export interface Expectation {
   departureCode: string;
+  /** Last day of the departure; the rate card counts as support only once it has passed. */
+  endDate: string;
   expectedMinor: number;
   currency: string;
   /** "4 vehicle-days x USD 200.00" for the reviewer. */
@@ -154,7 +168,7 @@ export function expectedAmount(db: Db, businessId: string, vendorId: string, job
       total += r.rateMinor * s.quantity;
       parts.push(`${s.quantity} ${UNIT_LABEL[s.unit as Unit]}${s.quantity === 1 ? "" : "s"} x ${fmt(r.rateMinor, r.currency)}`);
     }
-    return { departureCode: d.code, expectedMinor: total, currency, basis: parts.join(" + ") };
+    return { departureCode: d.code, endDate: d.endDate, expectedMinor: total, currency, basis: parts.join(" + ") };
   }
   return null;
 }

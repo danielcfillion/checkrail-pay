@@ -1,11 +1,33 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, parseCredential, safeEqual } from "./basicAuth";
+import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, checkBasicAuth, configuredUsers, parseCredential, personasAllowed, safeEqual } from "./basicAuth";
 import { middleware } from "../middleware";
 import { resetDemoAction } from "../app/actions";
 import { config } from "./config";
 
 const basic = (user: string, pass: string) => `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
+
+describe("password length where real money can move (SEC5-3)", () => {
+  const users = "owner:Long-enough-pass-1:admin,clerk:short:clerk";
+  it("refuses a short password with live PayPal, public Stellar or live Wise", () => {
+    for (const env of [{ PAYPAL_ENV: "live" }, { STELLAR_NETWORK: "public" }, { WISE_ENV: "live" }]) {
+      expect(configuredUsers({ CHECKRAIL_USERS: users, ...env })).toBeNull();
+      expect(configuredUsers({ CHECKRAIL_BASIC_AUTH: "owner:short", ...env })).toBeNull();
+    }
+  });
+  it("accepts long passwords there, and any password on the sandbox, testnet or mock rails", () => {
+    expect(configuredUsers({ CHECKRAIL_USERS: "owner:Long-enough-pass-1:admin", PAYPAL_ENV: "live" })).toHaveLength(1);
+    expect(configuredUsers({ CHECKRAIL_USERS: users, PAYPAL_ENV: "sandbox", STELLAR_NETWORK: "testnet", RAIL_MODE: "live" })).toHaveLength(2);
+    expect(configuredUsers({ CHECKRAIL_USERS: users })).toHaveLength(2);
+  });
+});
+
+describe("demo personas and real money (SEC6-3)", () => {
+  it("are off with live PayPal, public Stellar or live Wise, and on elsewhere when asked for", () => {
+    for (const live of [{ PAYPAL_ENV: "live" }, { STELLAR_NETWORK: "public" }, { WISE_ENV: "live" }]) expect(personasAllowed({ CHECKRAIL_DEMO_PERSONAS: "1", ...live }, true)).toBe(false);
+    expect(personasAllowed({ CHECKRAIL_DEMO_PERSONAS: "1", PAYPAL_ENV: "sandbox", WISE_ENV: "sandbox" }, true)).toBe(true);
+  });
+});
 
 describe("basic auth helpers (C3)", () => {
   it("parses user:pass and keeps colons in the password", () => {
@@ -38,7 +60,7 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV"] as const;
+  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP", "CHECKRAIL_THROTTLE_SPARES_VALID"] as const;
   const saved: Record<string, string | undefined> = {};
   const env = process.env as Record<string, string | undefined>;
   beforeEach(() => {
@@ -54,6 +76,77 @@ describe("middleware", () => {
   });
   const req = (headers: Record<string, string> = {}, path = "/obligations") => new NextRequest(`http://localhost${path}`, { headers });
   const fwd = (res: Response, h: string) => res.headers.get(`x-middleware-request-${h}`);
+
+  it("logs which header carries the client address on a failed login, only when asked (SEC5-3)", () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrong = { authorization: basic("judge", "wrong"), "x-forwarded-for": "6.6.6.6, 203.0.113.77", "cf-connecting-ip": "8.8.8.8" };
+    expect(middleware(req(wrong)).status).toBe(401);
+    expect(warn).not.toHaveBeenCalled();
+    env.CHECKRAIL_LOG_CLIENT_IP = "1";
+    expect(middleware(req(wrong)).status).toBe(401);
+    expect(warn).toHaveBeenCalledWith("[checkrail] failed login", expect.objectContaining({ key: "203.0.113.77", xForwardedFor: "6.6.6.6, 203.0.113.77", cfConnectingIp: "8.8.8.8" }));
+    // A right password logs nothing, and the Authorization header is never logged.
+    warn.mockClear();
+    expect(middleware(req({ authorization: basic("judge", "a-long-enough-pass") })).status).toBe(200);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("answers a missing login with a static HTML page and the same 401 and challenge (DES-13)", async () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const res = middleware(req());
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("<h1>Checkrail Pay</h1>");
+    expect(body).toContain("Checks every supplier payment before money moves.");
+    expect(body).toContain("Devpost testing instructions");
+    // Nothing from the request is written into it: a hostile path, query and headers give the same bytes.
+    const hostile = middleware(req({ host: "evil.example", referer: "<script>alert(1)</script>", "user-agent": "<img src=x>" }, "/%3Cscript%3Ealert(1)%3C/script%3E?x=<b>"));
+    expect(hostile.status).toBe(401);
+    expect(await hostile.text()).toBe(body);
+    expect(body).not.toMatch(/evil\.example|alert\(1\)|<img/);
+    // A wrong password is still a 401 with the challenge, and still counts against the throttle.
+    const wrong = middleware(req({ authorization: basic("judge", "wrong") }));
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
+  });
+
+  it("lets a correct password in over the limit only where the login is published (SEC5-3)", () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const from = (pw: string) => req({ authorization: basic("judge", pw), "x-forwarded-for": "203.0.113.99" });
+    for (let i = 0; i < 11; i++) middleware(from("wrong"));
+    expect(middleware(from("wrong")).status).toBe(429);
+    // Default: an address over its limit is refused whatever it sends, so guessing stays throttled.
+    expect(middleware(from("a-long-enough-pass")).status).toBe(429);
+    // The judging demo publishes its login, so a visitor who types it correctly is never locked out by others.
+    env.CHECKRAIL_THROTTLE_SPARES_VALID = "1";
+    expect(middleware(from("a-long-enough-pass")).status).toBe(200);
+    expect(middleware(from("wrong")).status).toBe(429);
+  });
+
+  it("the published-login setting is ignored with more than one account or where real money can move (SEC7-3)", () => {
+    env.CHECKRAIL_THROTTLE_SPARES_VALID = "1";
+    const from = (ip: string, pw = "a-long-enough-pass") => req({ authorization: basic("judge", pw), "x-forwarded-for": ip });
+    const overLimit = (ip: string) => {
+      for (let i = 0; i < 11; i++) middleware(from(ip, "wrong"));
+    };
+    // Two accounts: one of them is not published, so a correct password is refused over the limit like any other.
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin,clerk:another-long-pass-1:clerk";
+    overLimit("203.0.113.101");
+    expect(middleware(from("203.0.113.101")).status).toBe(429);
+    // One account but real money can move.
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    env.PAYPAL_ENV = "live";
+    overLimit("203.0.113.102");
+    expect(middleware(from("203.0.113.102")).status).toBe(429);
+    // One account on the sandbox: the judging demo case still works.
+    env.PAYPAL_ENV = "sandbox";
+    overLimit("203.0.113.103");
+    expect(middleware(from("203.0.113.103")).status).toBe(200);
+  });
 
   it("open in development: acts as the demo owner and ignores forged identity headers", () => {
     const res = middleware(req({ [ACTOR_HEADER]: "forged", [ROLE_HEADER]: "admin" }));
@@ -121,7 +214,11 @@ describe("middleware", () => {
     expect(fwd(res, ROLE_HEADER)).toBe("clerk");
     expect(fwd(res, PERSONA_HEADER)).toBe("judge");
     env.PAYPAL_ENV = "live";
-    expect(fwd(middleware(req(asLan)), ACTOR_HEADER)).toBe("judge");
+    // With real money a short password is refused outright (SEC5-3); with a long one the persona is still ignored.
+    expect(middleware(req(asLan)).status).toBe(503);
+    env.CHECKRAIL_USERS = "judge:a-long-live-password:admin";
+    const asLanLong = { authorization: basic("judge", "a-long-live-password"), cookie: "checkrail_persona=lan" };
+    expect(fwd(middleware(req(asLanLong)), ACTOR_HEADER)).toBe("judge");
   });
 
   it("only an owner login can act as someone else", () => {

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 
 /**
  * Field encryption for the few values that must be stored whole: vendor bank account numbers, which Wise and the
@@ -59,6 +59,16 @@ export function decryptField(stored: string): string {
   const d = createDecipheriv("aes-256-gcm", key(), Buffer.from(iv, "base64url"));
   d.setAuthTag(Buffer.from(tag, "base64url"));
   return Buffer.concat([d.update(Buffer.from(ct, "base64url")), d.final()]).toString("utf8");
+}
+
+/**
+ * A keyed digest for a secret value that must be comparable but not recoverable by someone who holds only the
+ * database: HMAC-SHA256 under a sub-key derived (HKDF) from the data key, one sub-key per label. A plain hash of a
+ * bank account number can be searched exhaustively in seconds; this cannot be without the key.
+ */
+export function keyedDigest(label: string, value: string): string {
+  const sub = Buffer.from(hkdfSync("sha256", key(), Buffer.alloc(0), `checkrail-pay:${label}`, 32));
+  return createHmac("sha256", sub).update(value).digest("hex");
 }
 
 /** "****6789" for screens and logs. */

@@ -12,7 +12,7 @@ export function useToast() {
 }
 
 /** Minimal toasts: bottom centre of the content (above the phone nav and action bar), one line, auto-dismiss, confirm in the same words as the button. */
-export function ToastProvider({ children }: { children: ReactNode }) {
+export function ToastProvider({ children, bare = false }: { children: ReactNode; /** Public vendor pages have no bottom nav or action bar to clear. */ bare?: boolean }) {
   const [items, setItems] = useState<Toast[]>([]);
   const seq = useRef(0);
   const toast = useCallback((message: string, tone: Toast["tone"] = "ok") => {
@@ -24,11 +24,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed inset-x-4 bottom-[116px] z-50 flex flex-col items-center gap-2 md:bottom-20 md:left-16 md:right-0 lg:bottom-6 lg:left-[220px]" aria-live="polite" aria-atomic="false">
+      <div className={`pointer-events-none fixed inset-x-4 z-50 flex flex-col items-center gap-2 ${bare ? "bottom-6" : "bottom-[116px] md:bottom-20 md:left-16 md:right-0 lg:bottom-6 lg:left-[220px]"}`} aria-live="polite" aria-atomic="false">
         {items.map((t) => (
-          <div key={t.id} role="status" className={`pointer-events-auto panel flex items-center gap-2 px-3 py-2 ${t.tone === "error" ? "border-blocked text-blocked" : ""}`} style={{ borderColor: t.tone === "error" ? "var(--blocked)" : undefined }}>
-            <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: t.tone === "error" ? "var(--blocked)" : "var(--settled)" }} />
-            <span>{t.message}</span>
+          // An error is told by an icon and the word "Error" as well as the colour, and is announced as an alert.
+          <div key={t.id} role={t.tone === "error" ? "alert" : "status"} className="pointer-events-auto panel flex items-start gap-2 px-3 py-2" style={{ borderColor: t.tone === "error" ? "var(--blocked)" : undefined, color: t.tone === "error" ? "var(--blocked)" : undefined }}>
+            <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke={t.tone === "error" ? "currentColor" : "var(--settled)"} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="mt-0.5 shrink-0">
+              <circle cx="9" cy="9" r="7.25" />
+              {t.tone === "error" ? <path d="M6.5 6.5l5 5M11.5 6.5l-5 5" /> : <path d="M5.75 9.25l2.25 2.25 4.25-4.75" />}
+            </svg>
+            <span>
+              {t.tone === "error" ? <span className="font-semibold">Error: </span> : null}
+              {t.message}
+            </span>
           </div>
         ))}
       </div>

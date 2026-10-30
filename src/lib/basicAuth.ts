@@ -16,8 +16,25 @@ export const PERSONA_COOKIE = "checkrail_persona";
 
 export type UserCredential = { user: string; pass: string; role: Role };
 
-/** Every configured login. Null when a setting is present but malformed: a malformed setting must refuse, not open. */
+export const MIN_LIVE_PASSWORD = 12;
+
+/** Real money can move: live PayPal, public Stellar or live Wise. The sandbox and testnet are not covered, on purpose. */
+export function realMoneyEnv(env: Record<string, string | undefined>): boolean {
+  return env.PAYPAL_ENV === "live" || env.STELLAR_NETWORK === "public" || env.WISE_ENV === "live";
+}
+
+/**
+ * Every configured login. Null when a setting is present but malformed: a malformed setting must refuse, not open.
+ * Where real money can move, a password under MIN_LIVE_PASSWORD characters counts as malformed too: there is no
+ * per-account lockout, so a short password on a public login is the weak point.
+ */
 export function configuredUsers(env: Record<string, string | undefined> = process.env): UserCredential[] | null {
+  const out = configuredUsersUnchecked(env);
+  if (out && realMoneyEnv(env) && out.some((u) => u.pass.length < MIN_LIVE_PASSWORD)) return null;
+  return out;
+}
+
+function configuredUsersUnchecked(env: Record<string, string | undefined>): UserCredential[] | null {
   const out: UserCredential[] = [];
   const list = env.CHECKRAIL_USERS;
   if (list) {
@@ -102,6 +119,6 @@ export function checkBasicAuth(authorization: string | null | undefined, setting
  * mock mode, to be safe), and only when asked for or when no logins exist (open development server).
  */
 export function personasAllowed(env: Record<string, string | undefined> = process.env, loginsConfigured: boolean): boolean {
-  if (env.PAYPAL_ENV === "live" || env.STELLAR_NETWORK === "public") return false;
+  if (realMoneyEnv(env)) return false;
   return env.CHECKRAIL_DEMO_PERSONAS === "1" || !loginsConfigured;
 }

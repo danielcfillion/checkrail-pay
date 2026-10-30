@@ -5,6 +5,8 @@ import Link from "next/link";
 import { ResetDemoButton } from "./ResetDemoButton";
 
 const KEY = "checkrail.demoBanner.dismissed";
+/** Set the first time the banner is shown, so a phone folds it to one line from the second view on. */
+const SEEN = "checkrail.demoBanner.seen";
 
 /**
  * First thing a judge sees on the hosted demo: what the business is, what the product does, and where to click.
@@ -15,7 +17,11 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     try {
-      setDismissed(window.localStorage.getItem(KEY) === "1");
+      const seen = window.localStorage.getItem(SEEN) === "1";
+      // On a phone the intro is a whole screen of chrome: show it once, then fold it (Show intro brings it back).
+      const phone = window.matchMedia("(max-width: 639px)").matches;
+      setDismissed(window.localStorage.getItem(KEY) === "1" || (phone && seen));
+      window.localStorage.setItem(SEEN, "1");
     } catch {
       /* storage blocked: show the banner */
     }
@@ -39,7 +45,8 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
           <Link href="/demo" className="btn btn-sm">
             Demo guide
           </Link>
-          {canReset ? <ResetDemoButton size="sm" /> : null}
+          {/* Reset is destructive on a shared demo: off the phone's first screen (it is on the demo guide too). */}
+          {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" /></span> : null}
           <button type="button" className="btn btn-sm" onClick={() => set(false)} aria-label="Show the demo introduction again">
             Show intro
           </button>
@@ -72,7 +79,7 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-sm text-ink-soft hairline">
         <span>This demo is shared by everyone using it. Reset puts the four opening requests back.</span>
-        {canReset ? <ResetDemoButton size="sm" /> : null}
+        {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" /></span> : null}
       </div>
     </section>
     </>

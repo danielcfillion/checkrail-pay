@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { EarlierPayment } from "@/lib/earlier-payment";
-import { formatDate, formatMoney, stateLabel } from "@/lib/format";
+import { formatDate, formatMoney, humaniseStates, stateLabel } from "@/lib/format";
 import { tidyDates } from "./decision-model";
 
 /** "paid 16 Sept 2026" for a settled original, otherwise its state in words. */
@@ -15,7 +15,7 @@ function standing(e: EarlierPayment): string {
  * original's vendor and reference, linked, and ISO dates become "14 Aug 2026".
  */
 export function ReasonText({ text, earlier }: { text: string; earlier?: Map<string, EarlierPayment> }): ReactNode {
-  const parts = tidyDates(text).split(/((?:payment request|obligation) obl_[a-z0-9]+(?: \([a-z_ ]+\))?|obl_[a-z0-9]+)/i);
+  const parts = humaniseStates(tidyDates(text)).split(/((?:payment request|obligation) obl_[a-z0-9]+(?: \([a-z_ ]+\))?|obl_[a-z0-9]+)/i);
   return parts.map((p, i) => {
     const m = p.match(/(obl_[a-z0-9]+)/i);
     if (!m) return <span key={i}>{p}</span>;

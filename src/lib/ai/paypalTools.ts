@@ -84,10 +84,15 @@ export async function loadPayPalTools(): Promise<AgentTool[]> {
   ];
 }
 
+/** Pages of 500 read for the duplicate check; a business with more than this in 31 days gets an incomplete result, not a silent cut. */
+const HISTORY_MAX_PAGES = 10;
+const HISTORY_PAGE_SIZE = 500;
+
 /**
- * The last 31 days of this business's PayPal transactions as PayPal returned them, untruncated, for the deterministic
- * duplicate check (not for the model). Read-only: the same GET the agent's paypal_list_transactions makes, with a
- * larger page. Returns { ok: false } with the reason when PayPal cannot be read; it never throws.
+ * The last 31 days of this business's PayPal transactions as PayPal returned them, for the deterministic duplicate
+ * check (not for the model). Read-only: the same GET the agent's paypal_list_transactions makes, with a larger page,
+ * followed page by page. Returns { ok: false } with the reason when PayPal cannot be read or the history is longer than
+ * this reads, so the check never passes on a partial view; it never throws.
  */
 export async function listPayPalTransactionsRaw(simulated?: () => string): Promise<{ ok: boolean; body: string; error?: string }> {
   const { clientId, clientSecret, env } = config.rails.paypal;
@@ -96,9 +101,21 @@ export async function listPayPalTransactionsRaw(simulated?: () => string): Promi
   const { start, end } = dateRange({});
   try {
     const { token } = await fetchPayPalAccessToken(clientId, clientSecret, env);
-    const res = await fetch(`${base}/v1/reporting/transactions?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}&fields=transaction_info,payer_info&page_size=500`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
-    const text = await res.text();
-    return res.ok ? { ok: true, body: text } : { ok: false, body: "", error: `HTTP ${res.status}` };
+    const all: unknown[] = [];
+    for (let page = 1; page <= HISTORY_MAX_PAGES; page++) {
+      const res = await fetch(`${base}/v1/reporting/transactions?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}&fields=transaction_info,payer_info&page_size=${HISTORY_PAGE_SIZE}&page=${page}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+      const text = await res.text();
+      if (!res.ok) return { ok: false, body: "", error: `HTTP ${res.status}` };
+      let j: { transaction_details?: unknown[]; total_pages?: number };
+      try {
+        j = JSON.parse(text);
+      } catch {
+        return { ok: false, body: "", error: "unreadable answer" };
+      }
+      all.push(...(j.transaction_details ?? []));
+      if (!j.total_pages || page >= j.total_pages) return { ok: true, body: JSON.stringify({ transaction_details: all, total_items: all.length }) };
+    }
+    return { ok: false, body: "", error: `more than ${HISTORY_MAX_PAGES * HISTORY_PAGE_SIZE} transactions in 31 days; the history is incomplete` };
   } catch (e) {
     return { ok: false, body: "", error: (e as Error).message.slice(0, 120) };
   }
