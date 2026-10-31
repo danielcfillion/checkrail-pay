@@ -44,6 +44,12 @@ const hex = (c) => "#" + c.slice(0, 3).map((x) => Math.round(x).toString(16).pad
 // [label, foreground token, background token or null for the sheet, minimum]
 const PAIRS = [
   ["Ink soft on sheet", "ink-soft", "sheet", 4.5],
+  ["Action button", "action-ink", "action", 4.5],
+  ["Action text on sheet", "action", "sheet", 4.5],
+  ["Hero number", "hero-ink", "hero", 4.5],
+  ["Block banner text", "alarm-ink", "alarm", 4.5],
+  ["Block banner detail", "alarm-soft", "alarm", 4.5],
+  ["Hero caption", "hero-soft", "hero", 4.5],
   ["Ink soft on paper", "ink-soft", "paper", 4.5],
   ["PayPal tag", "paypal-text", "paypal-soft", 4.5],
   ["Stellar tag", "stellar-text", "stellar-soft", 4.5],

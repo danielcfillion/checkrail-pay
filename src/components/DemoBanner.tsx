@@ -60,7 +60,7 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
   return (
     <>
     {header(false)}
-    <section aria-label="Demo" className="panel mb-6 border-l-4 px-4 py-4 sm:px-5" style={{ borderLeftColor: "var(--ink)" }}>
+    <section aria-label="Demo" className="panel mb-6 px-5 py-4 sm:px-6">
       <div className="flex items-start justify-between gap-4">
         <p className="max-w-3xl text-base">
           Demo: Ridgeline Expeditions pays guides, drivers and homestays in Vietnam and the Philippines. Checkrail Pay checks every request before money moves.

@@ -66,7 +66,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                     {a.detail ? (
                       <details>
                         <summary className="dense text-ink-soft hover:text-ink">{summarise(a.detail)}</summary>
-                        <pre className="num mt-1 max-h-48 overflow-auto rounded bg-paper p-2 text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit", fontStretch: "92%" }}>
+                        <pre className="mono num mt-1 max-h-48 overflow-auto rounded-lg bg-paper p-2 text-2xs leading-4 text-ink-soft">
                           {JSON.stringify(a.detail, null, 2)}
                         </pre>
                       </details>

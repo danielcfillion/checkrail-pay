@@ -26,7 +26,7 @@ import { DecisionCard } from "@/components/DecisionCard";
 import { autopilotSentence, checkStatement, DEFAULT_MIN_CONFIDENCE } from "@/components/check-statement";
 import { allowedAction, checkLineCaption, decide, decidingLine, tidyDates, type Decision } from "@/components/decision-model";
 import { Disclosure, ReferencePanel, TOUCH_INLINE, WorkingPanel } from "@/components/RequestPanels";
-import { correctionLine, RECORDED_LABEL, summaryWithoutCount } from "@/components/agent-reading";
+import { amountReadAs, correctionLine, RECORDED_LABEL, summaryWithoutCount } from "@/components/agent-reading";
 import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
@@ -124,6 +124,12 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
     : null;
   // `recorded` above is a live Claude reading recorded for this demo request, replayed for display only. Policy never sees it.
   const corrected = correctionLine(d.audit, o.currency);
+  // The block moment in the header: the asked amount struck through beside what the evidence supports, and after a
+  // correction the amount first read struck beside the corrected one.
+  const supported = o.state === "blocked" && decision.action?.kind === "amend_amount" ? decision.action.amountMinor : null;
+  const readAs = amountReadAs(d.audit);
+  const struck = supported !== null ? o.amountMinor : readAs !== null && readAs !== o.amountMinor ? readAs : null;
+  const headline = supported ?? o.amountMinor;
   const toolCtx = { vendorName: o.vendorName, sourceRef: o.sourceRef, evidenceCount: d.evidence.length, documentCount: d.attachments.length };
   const concernLine = concernsElsewhere || missingElsewhere ? `${[concernsElsewhere ? `${d.aiFlags.length} ${d.aiFlags.length === 1 ? "concern" : "concerns"}` : null, missingElsewhere ? `${d.aiMissing.length} ${d.aiMissing.length === 1 ? "missing record" : "missing records"}` : null].filter(Boolean).join(" and ")} raised. ${d.aiFlags.length + d.aiMissing.length === 1 ? "It is" : "They are"} listed under Policy.` : null;
 
@@ -137,10 +143,10 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
         <span className="num">{o.sourceRef ?? "no reference"}</span>
       </nav>
 
-      <header className="panel px-5 pb-5 pt-4 sm:px-6">
+      <header className="panel px-5 pb-6 pt-5 sm:px-7">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
           <div className="min-w-0">
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-[28px] font-bold leading-[34px] tracking-[-0.025em]">
               {o.vendorId ? (
                 <Link href={`/vendors/${o.vendorId}`} className={`hover:underline ${TOUCH_INLINE}`}>
                   {o.vendorName ?? "Unknown vendor"}
@@ -155,7 +161,19 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
             </p>
           </div>
           <div className="text-right">
-            <p className="wide num text-3xl leading-10">{formatMoneySymbol(o.amountMinor, o.currency)}</p>
+            <p className="flex items-baseline justify-end gap-3">
+              {struck !== null ? (
+                <del className="strike num text-xl font-medium text-ink-soft">
+                  <span className="sr-only">{supported !== null ? "Asked " : "First read as "}</span>
+                  {formatMoneySymbol(struck, o.currency)}
+                </del>
+              ) : null}
+              <span className="wide num text-[40px] leading-[48px] tracking-[-0.03em]">
+                {supported !== null ? <span className="sr-only">Evidence supports </span> : null}
+                {formatMoneySymbol(headline, o.currency)}
+              </span>
+            </p>
+            {supported !== null ? <p className="text-xs text-ink-soft">What the evidence supports. Nothing was sent.</p> : null}
             {baseEquivalent ? <p className="num text-xs text-ink-soft">about {baseEquivalent} at reference rates</p> : null}
             <div className="mt-0.5 flex items-center justify-end gap-2">
               <StatePill state={o.state} />

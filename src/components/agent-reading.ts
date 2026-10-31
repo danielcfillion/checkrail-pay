@@ -45,6 +45,12 @@ export function summaryWithoutCount(summary: string): string {
 }
 
 /** "Read as USD 960.00. Corrected to USD 800.00 by Daniel, 05:58." after a person corrected the amount. */
+/** The amount the request was first read as, when a person has since corrected it; null when never corrected. */
+export function amountReadAs(audit: AuditLike[]): number | null {
+  const all = amendments(audit);
+  return all.length ? (all[0].d.previous?.amountMinor ?? null) : null;
+}
+
 export function correctionLine(audit: AuditLike[], currency: string | null): string | null {
   const all = amendments(audit);
   if (!all.length) return null;

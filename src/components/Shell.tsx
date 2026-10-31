@@ -32,12 +32,12 @@ export function Shell({ businessName, system, who, children }: { businessName: s
   const modes = system ? modeSummary(system) : null;
   const phoneExtras = { personas: who?.personas ?? null, username: who?.username ?? "", modes };
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[64px_1fr] lg:grid-cols-[220px_1fr]">
-      <aside aria-label="Sidebar" className="hidden md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
-        <div className="px-3 py-4 lg:px-5">
+    <div className="min-h-screen md:grid md:grid-cols-[68px_1fr] lg:grid-cols-[236px_1fr]">
+      <aside aria-label="Sidebar" className="hidden bg-sheet md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
+        <div className="px-3 pb-5 pt-5 lg:px-5">
           <Link href="/" className="flex items-center gap-2 rounded-sm" aria-label="Checkrail Pay, overview">
             <BrandMark size={26} className="shrink-0" />
-            <span className="wide hidden whitespace-nowrap text-lg leading-6 lg:inline">Checkrail Pay</span>
+            <span className="wide hidden whitespace-nowrap text-[17px] leading-6 lg:inline">Checkrail Pay</span>
           </Link>
           <p className="mt-0.5 hidden truncate text-xs text-ink-soft lg:block" title={businessName ?? undefined}>
             {businessName ?? "No business configured"}
@@ -57,7 +57,7 @@ export function Shell({ businessName, system, who, children }: { businessName: s
           </Link>
           {businessName ? <span className="truncate text-xs text-ink-soft">{businessName}</span> : null}
         </header>
-        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] focus:outline-none px-4 pb-24 pt-5 sm:px-6 md:pb-10 md:pt-6">{children}</main>
+        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] focus:outline-none px-4 pb-24 pt-6 sm:px-6 md:pb-12 md:pt-8 lg:px-10">{children}</main>
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t hairline bg-sheet md:hidden" aria-label="Main, mobile">
         <NavLinks items={NAV} mobile demoGuide={demoGuide} trimmed={trimmed} phone={phoneExtras} />
@@ -90,7 +90,7 @@ function SystemFooter({ system }: { system: SystemModes | null }) {
   const live = m.live ? [m.summary] : [];
   const summary = m.summary;
   const tone = live.length ? "text-ink" : "text-attention";
-  // The sidebar sits on paper; lay the tint over sheet so the pill keeps 4.5:1.
+  // Lay the tint over sheet so the pill keeps 4.5:1.
   const fill = `linear-gradient(var(${live.length ? "--neutral-soft" : "--attention-soft"}), var(${live.length ? "--neutral-soft" : "--attention-soft"})), var(--sheet)`;
   return (
     <div className="border-t hairline px-3 py-3 lg:px-5">

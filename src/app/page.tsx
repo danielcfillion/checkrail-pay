@@ -13,6 +13,7 @@ import { EmptyState, Panel, RelativeTime } from "@/components/ui";
 import { AutopilotStrip } from "@/components/AutopilotStrip";
 import { MoneyOut } from "@/components/MoneyOut";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { CountUp } from "@/components/motion/CountUp";
 import { DemoVisit } from "@/components/DemoProgress";
 import { waitingLine } from "@/components/waiting-line";
 
@@ -33,33 +34,32 @@ export default async function OverviewPage() {
   const activity = activityFeed(listAudit(400), 10);
   // "Waiting on you" is this viewer's own list (the sidebar and the Inbox tab); "Needs someone" is everything that needs somebody.
   const line = waitingLine({ mine: viewer ? runAs(viewer.login, () => waitingFor(viewer.actor)) : null, needsSomeone: o.counts.needsAction });
+  const extra = [line.rest, o.counts.scheduled ? `${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : null, o.counts.inFlight ? `${pluralise(o.counts.inFlight, "payment")} in flight.` : null].filter(Boolean);
+  // The headline is the job: how many requests wait on this viewer. The business name sits above it, small.
   const heading = (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">{o.business?.name ?? "Checkrail Pay"}</h1>
-      <p className="mt-0.5 text-ink-soft">Checks every supplier payment before money moves.</p>
-      <p className="mt-2">
+      <p className="text-sm text-ink-soft">{o.business?.name ?? "Checkrail Pay"}</p>
+      <h1 className="mt-1 text-[34px] font-bold leading-[40px] tracking-[-0.03em]">
         {line.leadHref ? (
-          <Link href={line.leadHref} className="link">
-            {line.lead}
+          <Link href={line.leadHref} className="decoration-[color:var(--rule-strong)] decoration-2 underline-offset-[6px] hover:underline">
+            {line.lead.replace(/\.$/, "")}
           </Link>
         ) : (
-          line.lead
+          line.lead.replace(/\.$/, "")
         )}
-        {line.rest ? (
-          <>
-            {" "}
-            {line.restHref ? (
-              <Link href={line.restHref} className="link">
-                {line.rest}
-              </Link>
-            ) : (
-              line.rest
-            )}
-          </>
-        ) : null}
-        {o.counts.scheduled ? ` ${pluralise(o.counts.scheduled, "payment")} scheduled by autopilot.` : ""}
-        {o.counts.inFlight ? ` ${pluralise(o.counts.inFlight, "payment")} in flight.` : ""}
-      </p>
+      </h1>
+      {extra.length ? (
+        <p className="mt-2 text-[15px] text-ink-soft">
+          {line.rest && line.restHref ? (
+            <Link href={line.restHref} className="link">
+              {line.rest}
+            </Link>
+          ) : (
+            line.rest
+          )}
+          {extra.slice(line.rest ? 1 : 0).map((t) => ` ${t}`)}
+        </p>
+      ) : null}
     </>
   );
 
@@ -76,18 +76,15 @@ export default async function OverviewPage() {
 
       {o.business ? <AutopilotStrip businessId={o.business.id} currency={base} can={viewer ? { stop: viewer.can("stop"), settings: viewer.can("settings") } : undefined} /> : null}
 
-      <BookLine
-        rows={all}
-        currency={base}
-        header={
-          <dl className="grid grid-cols-2 gap-y-4 sm:grid-cols-4 sm:divide-x sm:divide-[color:var(--rule)]">
-            <Figure label="Needs someone" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
-            <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
-            <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open request")}, ${o.counts.blocked} blocked held back`} />
-            <Figure label="Errors prevented" value={formatMoneySymbol(o.money.preventedMinor, base)} note={<Link href="/exceptions" className="link">overpaid parts and duplicates, since day one</Link>} tone={o.money.preventedMinor ? "blocked" : undefined} />
-          </dl>
-        }
-      />
+      {/* One dark card leads: the money Checkrail stopped is the number to remember. */}
+      <dl className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <Figure hero label="Errors prevented" value={<CountUp minor={o.money.preventedMinor} currency={base} />} note={<Link href="/exceptions" className="underline decoration-[color:var(--hero-soft)] underline-offset-[3px] hover:decoration-current">overpaid parts and duplicates, since day one</Link>} />
+        <Figure label="Needs someone" value={String(o.counts.needsAction)} note={o.counts.blocked ? `${o.counts.blocked} blocked` : "none blocked"} tone={o.counts.needsAction ? "attention" : undefined} />
+        <Figure label="Outstanding" value={formatMoneySymbol(o.money.outstandingMinor, base)} note={`${pluralise(o.counts.open, "open request")}, ${o.counts.blocked} blocked held back`} />
+        <Figure label="Paid today" value={formatMoneySymbol(o.money.paidTodayMinor, base)} note={o.money.paidTodayCount ? pluralise(o.money.paidTodayCount, "payment") : "nothing settled yet today"} tone={o.money.paidTodayCount ? "settled" : undefined} />
+      </dl>
+
+      <BookLine rows={all} currency={base} />
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="Needs someone" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
@@ -132,13 +129,13 @@ export default async function OverviewPage() {
   );
 }
 
-function Figure({ label, value, note, tone }: { label: string; value: string; note?: React.ReactNode; tone?: "attention" | "settled" | "blocked" }) {
+function Figure({ label, value, note, tone, hero = false }: { label: string; value: React.ReactNode; note?: React.ReactNode; tone?: "attention" | "settled" | "blocked"; hero?: boolean }) {
   const colour = tone === "attention" ? "text-attention" : tone === "settled" ? "text-settled" : tone === "blocked" ? "text-blocked" : "";
   return (
-    <div className="px-1 sm:px-5 sm:first:pl-0">
-      <dt className="dense text-ink-soft">{label}</dt>
-      <dd className={`wide num mt-1 text-2xl ${colour}`}>{value}</dd>
-      {note ? <dd className="mt-0.5 text-xs text-ink-soft">{note}</dd> : null}
+    <div className={`panel min-w-0 px-5 py-4 sm:px-6 sm:py-5 ${hero ? "panel-hero" : ""}`}>
+      <dt className="text-[13px] text-ink-soft">{label}</dt>
+      <dd className={`wide num mt-1.5 text-[28px] leading-[34px] sm:text-[32px] sm:leading-[38px] ${colour}`}>{value}</dd>
+      {note ? <dd className="mt-1 text-[13px] leading-[18px] text-ink-soft">{note}</dd> : null}
     </div>
   );
 }

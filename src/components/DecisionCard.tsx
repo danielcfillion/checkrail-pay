@@ -102,7 +102,7 @@ const busyLabel = (a: PrimaryAction) => {
   }
 };
 
-const buttonClass = (a: PrimaryAction) => (a.kind === "reject" ? "btn btn-danger" : "btn btn-primary");
+const buttonClass = (a: PrimaryAction) => (a.kind === "reject" ? "btn btn-danger" : a.kind === "approve" ? "btn btn-action" : "btn btn-primary");
 
 /**
  * The decision tier: one full-width card under the header that states the outcome in money, gives one line of
@@ -111,6 +111,8 @@ const buttonClass = (a: PrimaryAction) => (a.kind === "reject" ? "btn btn-danger
  */
 export function DecisionCard({ id, decision, perms, approveRefusal, shownWarnings = [], deciding }: { id: string; decision: Decision; perms: Perms; approveRefusal?: string | null; shownWarnings?: string[]; deciding?: string | null }) {
   const tone = TONE[decision.tone];
+  // A block is the one solid red surface in the app: it should be the first thing the eye lands on.
+  const alarm = decision.tone === "blocked";
   const action = decision.action && allowedAction(decision.action, perms, approveRefusal) ? decision.action : null;
   const { fire, pending, busy } = usePrimary(id, action, shownWarnings);
   const ref = useRef<HTMLDivElement>(null);
@@ -133,11 +135,11 @@ export function DecisionCard({ id, decision, perms, approveRefusal, shownWarning
     <>
       <section
         aria-label="Decision"
-        className="mt-4 flex flex-col gap-4 rounded-md bg-sheet py-4 pl-5 pr-5 sm:flex-row sm:items-center sm:justify-between sm:pl-6"
-        style={{ boxShadow: `inset 4px 0 0 ${tone.rule}`, background: `linear-gradient(${tone.soft}, ${tone.soft}), var(--sheet)` }}
+        className={`decision-enter mt-5 flex flex-col gap-4 rounded-2xl py-5 pl-5 pr-5 sm:flex-row sm:items-center sm:justify-between sm:pl-6 ${alarm ? "decision-alarm" : "panel"}`}
+        style={alarm ? undefined : { background: `linear-gradient(${tone.soft}, ${tone.soft}), var(--sheet)` }}
       >
         <div className="min-w-0">
-          <h2 className="flex items-start gap-2 text-lg font-semibold leading-6" style={{ color: tone.text }}>
+          <h2 className="flex items-start gap-2 text-lg font-semibold leading-6" style={{ color: alarm ? "inherit" : tone.text }}>
             <span className="mt-[3px]">
               <ToneIcon icon={decision.icon ?? tone.icon} />
             </span>

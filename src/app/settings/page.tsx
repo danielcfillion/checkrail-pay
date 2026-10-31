@@ -138,7 +138,7 @@ export default async function SettingsPage() {
             </ol>
             <details className="mt-4 border-t pt-3 hairline">
               <summary className="dense text-ink-soft hover:text-ink">Raw policy JSON</summary>
-              <pre className="num mt-2 overflow-auto rounded bg-paper p-3 text-xs leading-4 text-ink-soft" style={{ fontFamily: "inherit", fontStretch: "92%" }}>
+              <pre className="mono num mt-2 overflow-auto rounded-lg bg-paper p-3 text-xs leading-4 text-ink-soft">
                 {JSON.stringify(policy, null, 2)}
               </pre>
             </details>
