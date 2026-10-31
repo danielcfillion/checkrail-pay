@@ -48,3 +48,6 @@ private/
 *.private.csv
 *.private.xlsx
 *.private.json
+
+# Agent worktrees
+.claude/worktrees/
