@@ -1,6 +1,6 @@
-import { and, desc, eq, like } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
 import type { Db } from "../db";
-import { apiRequests, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
+import { apiRequests, attachments, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { newId, now } from "../domain/ids";
 import { TRANSITIONS, type ObligationState, type SourceType } from "../domain/types";
 import { transition } from "../domain/stateMachine";
@@ -11,6 +11,7 @@ import { uploadDocument, ALLOWED_UPLOAD_TYPES } from "../engine/attachments";
 import { formatMoney } from "../format";
 import { AgentInputError, clean, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
+import { otherNames, reasonForIntegration } from "./redact";
 import { ApiError, Problems, isObject, onlyFields } from "./http";
 
 /**
@@ -135,15 +136,32 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
   const attest = hasScope(key, "requests:attest");
   return oneAtATime(businessId, async () => {
     const payee = payeeOf(db, businessId, a.payee, a.vendorId);
-    // Documents are stored and read like a clerk's upload; what they propose becomes the evidence row.
+    // A key already bound to a request gets that request back, whatever happened to the stored answer: a retry after
+    // an error that came after the request was created must never create a second one (review R1-6b).
+    const bound = db.select().from(apiRequests).where(and(eq(apiRequests.keyName, key.name), eq(apiRequests.idemKey, idemKey))).get();
+    if (bound) {
+      const was = db.select().from(obligations).where(eq(obligations.id, bound.obligationId)).get();
+      if (!was || (was.vendorId ?? null) !== (payee?.id ?? null) || was.amountMinor !== a.amountMinor || was.currency !== a.currency || (was.sourceRef ?? null) !== (a.reference ?? null)) {
+        throw new ApiError(422, "idempotency_conflict", "This Idempotency-Key was already used with a different request. Use a new key for a new call.");
+      }
+      return describeRequest(db, bound.obligationId);
+    }
+    // Documents are stored and read like a clerk's upload; what they propose becomes the evidence row. If the request
+    // is refused after that, the stored copies go too, so a refused call leaves nothing behind (review R1-7).
     const evidence: Array<{ kind: string; label: string; amountMinor: number | null; currency: string | null; reference: string | null; excerpt: string | null; attachmentId?: string | null }> = [...a.evidence];
+    const stored: string[] = [];
+    const discardUploads = () => {
+      if (stored.length) db.delete(attachments).where(and(inArray(attachments.id, stored), isNull(attachments.obligationId))).run();
+    };
     for (const d of a.documents) {
       let up: Awaited<ReturnType<typeof uploadDocument>>;
       try {
         up = await uploadDocument(db, { businessId, name: d.name, mimeType: d.mimeType, bytes: d.bytes, actor });
       } catch (e) {
+        discardUploads();
         throw new ApiError(422, "document_refused", `${d.name}: ${e instanceof Error ? e.message : "could not be read"}`);
       }
+      stored.push(up.attachmentId);
       const first = up.proposed[0];
       evidence.push(first ? { ...first, kind: d.kind ?? first.kind, attachmentId: up.attachmentId } : { kind: d.kind ?? "invoice", label: d.name, amountMinor: null, currency: null, reference: null, excerpt: null, attachmentId: up.attachmentId });
     }
@@ -166,15 +184,17 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
       // Nothing half-made stays behind.
       const orphan = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `[Integration request ${claim}]%`)).get();
       if (orphan) withdraw(db, orphan.id, actor, "creating the request failed");
+      discardUploads();
       throw new ApiError(422, "request_refused", `Checkrail could not create the request: ${clean(e instanceof Error ? e.message : "an error")}. Nothing was paid.`);
     }
+    // Bound to the key before anything else can fail, so a retry finds it.
+    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: id, reference: a.reference, idemKey, createdAt: now() }).run();
     // The request in the books must be exactly what was sent.
     const ob = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
     if ((ob.vendorId ?? null) !== (payee?.id ?? null) || ob.amountMinor !== a.amountMinor || ob.currency !== a.currency || (ob.sourceRef ?? null) !== (a.reference ?? null)) {
       withdraw(db, id, actor, "the request in the books is not the payee, amount and reference sent");
       throw new ApiError(500, "internal_error", "The request in the books did not match what was sent, so it was cancelled. Nothing was paid.");
     }
-    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: id, reference: a.reference, idemKey, createdAt: now() }).run();
     return describeRequest(db, id);
   });
 }
@@ -195,9 +215,18 @@ export function describeRequest(db: Db, id: string) {
   const attempt = db.select({ externalId: paymentAttempts.externalId, rail: paymentAttempts.rail, status: paymentAttempts.status }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const waiting = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state);
   const policy = waiting ? previewPolicy(db, id) : null;
-  const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info");
+  const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").sort((x, y) => Number(y.severity === "block") - Number(x.severity === "block"));
   const stored = JSON.parse(ob.policyReasonsJson ?? "[]") as string[];
-  const reasons = (policy ? policy.reasons : stored).map((r) => clean(r, [], keep)).slice(0, 8);
+  // The agent guard's rewrite: no other supplier's name, no word on how far their payment got (review R1-3).
+  const others = otherNames(db, ob.businessId, [keep]);
+  const ruleMessages = new Set(failing.map((r) => r.message));
+  const reasons = [
+    ...new Set(
+      policy
+        ? [...failing.map((r) => reasonForIntegration(r.ruleId, r.message, others, keep)), ...policy.reasons.filter((r) => !ruleMessages.has(r)).map((r) => reasonForIntegration(null, r, others, keep))]
+        : stored.map((r) => reasonForIntegration(null, r, others, keep)),
+    ),
+  ].slice(0, 8);
   const scheduled = ob.state === "approved" && Boolean(ob.releaseAt) && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"

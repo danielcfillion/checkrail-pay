@@ -42,6 +42,8 @@ CREATE UNIQUE INDEX `api_requests_obligation` ON `api_requests` (`obligation_id`
 --> statement-breakpoint
 CREATE INDEX `api_requests_key_reference` ON `api_requests` (`key_name`,`reference`);
 --> statement-breakpoint
+CREATE UNIQUE INDEX `api_requests_key_idem` ON `api_requests` (`key_name`,`idem_key`);
+--> statement-breakpoint
 CREATE TABLE `api_key_usage` (
 	`key_name` text PRIMARY KEY NOT NULL,
 	`last_used_at` text NOT NULL,

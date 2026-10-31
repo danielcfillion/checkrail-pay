@@ -5,6 +5,7 @@ vi.hoisted(() => {
   process.env.DATABASE_PATH = ":memory:";
 });
 
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import * as departuresRoute from "./departures/route";
@@ -113,12 +114,14 @@ describe("authentication", () => {
     expect((await searchVendors("", "agent")).status).toBe(401);
   });
 
-  it("refuses every call when the key list is malformed", async () => {
+  it("refuses every call when the key list is malformed, without telling the caller why (review R1-9)", async () => {
     vi.stubEnv("CHECKRAIL_API_KEYS", `${KEYS},nonsense`);
     const r = await searchVendors();
-    expect(r.status).toBe(503);
-    expect(r.json.error?.code).toBe("api_keys_malformed");
-    expect((await postDepartures({ departures: [dep("bk-1", "CB-3D-1012", [])] })).status).toBe(503);
+    expect(r.status).toBe(401);
+    expect(r.json.error?.code).toBe("unauthorized");
+    expect(JSON.stringify(r.json)).not.toMatch(/malformed|CHECKRAIL_API_KEYS/);
+    expect((await postDepartures({ departures: [dep("bk-1", "CB-3D-1012", [])] })).status).toBe(401);
+    expect((await send(vendorsRoute.GET, req("GET", "/vendors"))).status).toBe(401);
   });
 
   it("refuses a key without the scope the call needs", async () => {
@@ -146,12 +149,13 @@ describe("authentication", () => {
     expect((await searchVendors("", "e")).status).toBe(200);
   });
 
-  it("locks out an address after many wrong keys", async () => {
-    for (let n = 0; n < 20; n++) await searchVendors("", `wrong${n}`);
+  it("locks out wrong keys from an address, never a valid key behind the same address (review R1-4)", async () => {
+    for (let n = 0; n < 21; n++) await searchVendors("", `wrong${n}`);
+    // Every integration behind a shared edge address keeps working.
     expect((await searchVendors()).status).toBe(200);
-    await searchVendors("", "wrong20");
-    // Over the limit, even the right key waits: guessing from this address stops for the window.
-    const r = await searchVendors();
+    expect((await searchVendors("", "e")).status).toBe(200);
+    // Guessing from that address does not.
+    const r = await searchVendors("", "wrong21");
     expect(r.status).toBe(429);
     expect(r.json.error?.code).toBe("too_many_bad_keys");
   });
@@ -166,17 +170,40 @@ describe("authentication", () => {
 });
 
 describe("the middleware", () => {
-  it("lets exactly the /api/v1 routes through to their own bearer auth, and nothing else", () => {
+  const EXEMPT = ["/api/v1/departures", "/api/v1/requests", "/api/v1/requests/obl_abc123", "/api/v1/vendors", "/api/v1/openapi.json"];
+  // Paths with no route: Next renders the not-found page inside the app layout, which trusts the identity headers, so
+  // the middleware must run on them and strip any forged ones (review R1-1).
+  const NOT_EXEMPT = [
+    "/settings", "/api/v1", "/api/v1/", "/api/v1/other", "/api/v1/requests/a/b", "/api/v1/vendorsx", "/api/v2/vendors",
+    "/api/v1/vendors/x", "/api/v1/departures/x", "/api/v1/openapi.json/x", "/api/v1/vendors/", "/api/v1/departures/", "/api/v1/requests/",
+    "/API/v1/vendors", "/api/V1/vendors", "/api/v1/Vendors", "/api/v1/REQUESTS/obl_abc123", "/api/v1/openapi.JSON",
+  ];
+
+  it("lets exactly the five /api/v1 routes through to their own bearer auth, and nothing else", () => {
     vi.stubEnv("CHECKRAIL_USERS", "judge:a-long-test-password:admin");
-    const through = (p: string) => middleware(new NextRequest(`http://checkrail.test${p}`)).headers.get("x-middleware-next") === "1";
-    for (const p of ["/api/v1/departures", "/api/v1/requests", "/api/v1/requests/obl_abc123", "/api/v1/vendors", "/api/v1/openapi.json"]) {
+    const forged = { "x-checkrail-user": "daniel", "x-checkrail-role": "admin", "x-checkrail-persona": "daniel" };
+    const run = (p: string) => middleware(new NextRequest(`http://checkrail.test${p}`, { headers: forged }));
+    for (const p of EXEMPT) {
       expect(API_V1_PATH.test(p), p).toBe(true);
-      expect(through(p), p).toBe(true);
+      const r = run(p);
+      expect(r.headers.get("x-middleware-next"), p).toBe("1");
+      // Even let through, a forged identity is stripped from the request the route sees.
+      expect(r.headers.get("x-middleware-override-headers") ?? "", p).not.toMatch(/x-checkrail-role/);
     }
-    for (const p of ["/settings", "/api/v1", "/api/v1/", "/api/v1/other", "/api/v1/requests/a/b", "/api/v1/vendorsx", "/api/v2/vendors"]) {
+    for (const p of NOT_EXEMPT) {
       expect(API_V1_PATH.test(p), p).toBe(false);
-      expect(through(p), p).toBe(false);
+      expect(run(p).status, p).toBe(401);
     }
+  });
+
+  it("is skipped by Next's own matcher for exactly the same paths", async () => {
+    const { config } = await import("@/middleware");
+    const mod = "next/dist/build/analysis/get-page-static-info.js";
+    const { getMiddlewareMatchers } = (await import(/* @vite-ignore */ mod)) as { getMiddlewareMatchers(m: string[], c: object): Array<{ regexp: string }> };
+    const matchers = getMiddlewareMatchers(config.matcher, {}).map((m) => new RegExp(m.regexp));
+    const runs = (p: string) => matchers.some((re) => re.test(p));
+    for (const p of EXEMPT) expect(runs(p), p).toBe(false);
+    for (const p of NOT_EXEMPT) expect(runs(p), p).toBe(true);
   });
 });
 
@@ -354,6 +381,84 @@ describe("payment requests", () => {
     expect(other.status).toBe(404);
     expect(other.json.error?.code).toBe("not_found");
     expect(((await listRequests("", "l")).json.requests as unknown[]).length).toBe(0);
+  });
+});
+
+describe("review fixes, round 1", () => {
+  const rosaDeposit = {
+    payee: "Rosa Villanueva", amount: "100", currency: "USD", reference: "INV-ROSA-7777",
+    description: "50% deposit USD 100 for Rosa Villanueva on invoice INV-ROSA-7777",
+    evidence: [{ kind: "invoice", label: "Invoice INV-ROSA-7777", amount: "5000", reference: "INV-ROSA-7777", excerpt: "Rosa Villanueva. Guiding, November. Total USD 5,000.00. Deposit 50%." }],
+  };
+  const rosaJob = {
+    payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-7777",
+    description: "Rosa Villanueva, 2 days guiding at USD 95, INV-ROSA-7777.",
+    evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-7777", amount: "190", reference: "INV-ROSA-7777", excerpt: "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00." }],
+  };
+
+  it("R1-2 (AG-5 for the API): a non-attest key's own invoice sets no bill ceiling", async () => {
+    const { bills } = await import("@/lib/db/schema");
+    const before = getDb().select().from(bills).all().length;
+    const r = await postRequest(rosaDeposit, "r1-2-deposit-01");
+    expect(r.status).toBe(201);
+    expect(getDb().select().from(bills).all().length).toBe(before);
+    expect(r.json.status).not.toBe("scheduled");
+  });
+
+  it("R1-2: the same job twice from an attest key, after another key's deposit, is not scheduled twice", async () => {
+    // With the demo's payment history, so Rosa is not a first-time payee and Autopilot may schedule her.
+    await seedDemo(getDb());
+    setAutonomy(getDb(), DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 0 });
+    expect((await postRequest(rosaDeposit, "r1-2-deposit-02")).status).toBe(201);
+    const first = await postRequest(rosaJob, "r1-2-job-0001", "l");
+    const second = await postRequest(rosaJob, "r1-2-job-0002", "l");
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.json.status).not.toBe("scheduled");
+    expect(second.json.status).not.toBe("approved");
+  });
+
+  it("R1-3: reasons never name another supplier or how far their payment got", async () => {
+    // Maria Santos was paid for JOB-HG4D-0914; Rosa is asked for the same reference.
+    const r = await postRequest({ payee: "Rosa Villanueva", amount: "180", currency: "USD", reference: "JOB-HG4D-0914", description: "Guiding JOB-HG4D-0914" });
+    expect(r.status).toBe(201);
+    expect(r.json.rules_failed).toContain("reference_other_vendor");
+    const read = (j: Json) => JSON.stringify([j.reasons, j.rules_failed]);
+    expect(read(r.json)).not.toMatch(/Maria|Santos|\((?:settled|approved|blocked|awaiting_approval)\)/);
+    expect(read(r.json)).toMatch(/another supplier/);
+    // Read back after it left the waiting states, from the stored reasons.
+    getDb().update(obligations).set({ state: "cancelled" }).where(eq(obligations.id, r.json.id as string)).run();
+    const later = await getRequest(r.json.id as string);
+    expect(later.json.status).toBe("cancelled");
+    expect(read(later.json)).not.toMatch(/Maria|Santos|\((?:settled|approved|blocked|awaiting_approval)\)/);
+  });
+
+  it("R1-6a: a claim left without an answer (a crash mid-call) does not hold the key for days", async () => {
+    getDb().insert(apiIdempotency).values({ id: "idm_stale", keyName: "erp", idemKey: "r1-6-crashed-01", method: "POST", path: "/api/v1/requests", bodySha256: "x", status: null, responseJson: null, createdAt: new Date(Date.now() - 10 * 60_000).toISOString() }).run();
+    const r = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7201" }, "r1-6-crashed-01");
+    expect(r.status).toBe(201);
+    // A claim seconds old for the same body is still a call in flight.
+    const body = { amount: "45", currency: "USD", payee: "Maria Santos", reference: "INV-MS-7202" }; // keys in sorted order, as hashed
+    const hash = createHash("sha256").update(`POST /api/v1/requests\n${JSON.stringify(body)}`).digest("hex");
+    getDb().insert(apiIdempotency).values({ id: "idm_fresh", keyName: "erp", idemKey: "r1-6-running-01", method: "POST", path: "/api/v1/requests", bodySha256: hash, status: null, responseJson: null, createdAt: new Date().toISOString() }).run();
+    const running = await postRequest(body, "r1-6-running-01");
+    expect(running.status).toBe(409);
+    expect(running.json.error?.code).toBe("idempotency_in_progress");
+  });
+
+  it("R1-6b: a retry finds the request its key already made, even if the stored answer is gone", async () => {
+    const body = { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7301" };
+    const first = await postRequest(body, "r1-6-bound-0001");
+    const count = getDb().select().from(obligations).all().length;
+    getDb().delete(apiIdempotency).run();
+    const retry = await postRequest(body, "r1-6-bound-0001");
+    expect(retry.status).toBe(201);
+    expect(retry.json.id).toBe(first.json.id);
+    expect(getDb().select().from(obligations).all().length).toBe(count);
+    getDb().delete(apiIdempotency).run();
+    const other = await postRequest({ ...body, amount: "450" }, "r1-6-bound-0001");
+    expect(other.status).toBe(422);
+    expect(other.json.error?.code).toBe("idempotency_conflict");
   });
 });
 

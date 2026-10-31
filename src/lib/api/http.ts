@@ -25,6 +25,14 @@ export interface ApiContext { db: Db; key: ApiKey; body: unknown; url: URL }
 const DEFAULT_RATE_LIMIT = 120; // calls a minute per key
 const BAD_KEY_LIMIT = 20; // wrong keys per address per 15 minutes
 const IDEMPOTENCY_TTL_MS = 7 * 86_400_000;
+/** A claim still without an answer after this long belongs to a call that died. */
+const ABANDONED_CLAIM_MS = 5 * 60_000;
+let warnedMalformed = false;
+function warnMalformed(): void {
+  if (warnedMalformed) return;
+  warnedMalformed = true;
+  console.error("[checkrail] CHECKRAIL_API_KEYS is malformed (name:secret:scopes, comma separated); every API call is refused");
+}
 const perKey = newThrottle();
 const badKeys = newThrottle();
 
@@ -91,7 +99,12 @@ export interface HandleOptions {
 /** Run one API call: every check first, then `fn`, with errors in the one shape. */
 export async function handleApi(req: Request, opts: HandleOptions, fn: (ctx: ApiContext) => Promise<ApiResult> | ApiResult): Promise<Response> {
   const keys = configuredApiKeys();
-  if (keys === null) return errorResponse(503, "api_keys_malformed", "CHECKRAIL_API_KEYS is malformed (name:secret:scopes, comma separated); refusing every API call");
+  // A malformed key list refuses everything. The caller only learns that it is not let in; the owner sees why on the
+  // Settings page and in the server log (review R1-9).
+  if (keys === null) {
+    warnMalformed();
+    return errorResponse(401, "unauthorized", "This API key is not accepted", WWW_AUTH);
+  }
   const url = new URL(req.url);
   // A browser page on another site must not drive the API with a visitor's network position.
   const origin = req.headers.get("origin");
@@ -105,13 +118,14 @@ export async function handleApi(req: Request, opts: HandleOptions, fn: (ctx: Api
     if (!same) return errorResponse(403, "cross_origin", "Cross-origin calls are not accepted");
   }
 
-  const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
-  if (overLimit(badKeys, ip, BAD_KEY_LIMIT, 15 * 60_000, Date.now(), false)) return errorResponse(429, "too_many_bad_keys", "Too many wrong keys from this address; wait 15 minutes", { "Retry-After": "900" });
   const header = req.headers.get("authorization");
   if (!header) return errorResponse(401, "unauthorized", "An API key is required (Authorization: Bearer <key>)", WWW_AUTH);
   const key = authenticateApiKey(header, keys);
   if (!key) {
-    overLimit(badKeys, ip, BAD_KEY_LIMIT, 15 * 60_000);
+    // Only wrong keys are throttled. The address may be a shared edge address, so a valid key always gets through:
+    // someone guessing behind the same proxy cannot lock every integration out (review R1-4).
+    const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
+    if (overLimit(badKeys, ip, BAD_KEY_LIMIT, 15 * 60_000)) return errorResponse(429, "too_many_bad_keys", "Too many wrong keys from this address; wait 15 minutes", { "Retry-After": "900" });
     return errorResponse(401, "unauthorized", "Unknown API key", WWW_AUTH);
   }
   if (overLimit(perKey, key.name, apiRateLimit(), 60_000)) return errorResponse(429, "rate_limited", `Slow down: at most ${apiRateLimit()} calls a minute per API key`, { "Retry-After": "60" });
@@ -163,7 +177,13 @@ export async function handleApi(req: Request, opts: HandleOptions, fn: (ctx: Api
     if (p.status === null || p.responseJson === null) return errorResponse(409, "idempotency_in_progress", "A call with this Idempotency-Key is still running; ask again in a moment", { "Retry-After": "2" });
     return respond({ status: p.status, body: JSON.parse(p.responseJson) }, { "Idempotency-Replayed": "true" });
   };
-  const existing = prior();
+  let existing = prior();
+  // A claim that never got an answer is from a call that died (a crash or a restart mid-call). It no longer holds
+  // the key; a request it did create is still found by the key itself (src/lib/api/requests.ts) (review R1-6a).
+  if (existing && existing.status === null && Date.now() - Date.parse(existing.createdAt) > ABANDONED_CLAIM_MS) {
+    db.delete(apiIdempotency).where(eq(apiIdempotency.id, existing.id)).run();
+    existing = undefined;
+  }
   if (existing) return replayOrRefuse(existing);
   const claimId = newId("idm");
   try {

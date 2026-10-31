@@ -9,9 +9,10 @@ export const PUBLIC_HEADER = "x-checkrail-public";
 
 /**
  * The inbound REST API's routes, exactly: /api/v1/departures, /api/v1/requests, /api/v1/requests/<id>,
- * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login.
+ * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login: a path with no route renders
+ * the not-found page inside the app layout, which trusts the identity headers only this middleware may set (review R1-1).
  */
-export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json)(?:\/[A-Za-z0-9_-]{1,64})?$/;
+export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json|requests\/[A-Za-z0-9_-]{1,64})$/;
 
 /**
  * Who is asking, on every request.
@@ -119,5 +120,5 @@ export const config = {
   // /api/mcp is left out entirely: the route checks the agent key itself, and a matched request has its body copied
   // (up to 10 MB) for the middleware before the route's own 64 KB limit can refuse it (agent guard review AG-3).
   // The /api/v1 routes (API_V1_PATH) are left out the same way, and only those: each checks its API key and body cap.
-  matcher: ["/((?!_next/static/|api/mcp$|api/v1/(?:departures|requests|vendors|openapi\\.json)(?:/[A-Za-z0-9_-]{1,64})?$).*)"],
+  matcher: ["/((?!_next/static/|api/mcp$|api/v1/(?:departures|requests|vendors|openapi\\.json|requests/[A-Za-z0-9_-]{1,64})$).*)"],
 };

@@ -69,6 +69,8 @@ export function decidedByFor(actor: string | null | undefined): { kind: DecidedK
   if (actor.startsWith("user:")) return { kind: "person", label: humaniseActor(actor) };
   if (actor.startsWith("agent:") || actor.startsWith("ai:")) return { kind: "agent", label: humaniseActor(actor) };
   if (actor.startsWith("mcp:")) return { kind: "agent", label: humaniseActor(actor) };
+  // An integration through /api/v1 (a booking system, an ERP): a machine, named as the integration.
+  if (actor.startsWith("api:")) return { kind: "agent", label: humaniseActor(actor) };
   return { kind: "unknown", label: humaniseActor(actor) };
 }
 

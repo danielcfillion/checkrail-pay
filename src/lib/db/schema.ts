@@ -674,7 +674,7 @@ export const apiRequests = sqliteTable(
     idemKey: text("idem_key").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [uniqueIndex("api_requests_obligation").on(t.obligationId), index("api_requests_key_reference").on(t.keyName, t.reference)]
+  (t) => [uniqueIndex("api_requests_obligation").on(t.obligationId), index("api_requests_key_reference").on(t.keyName, t.reference), uniqueIndex("api_requests_key_idem").on(t.keyName, t.idemKey)]
 );
 
 /** When each API key was last used, for the owner's Settings page. Never the secret. */
