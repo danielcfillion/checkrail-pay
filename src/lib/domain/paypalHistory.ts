@@ -19,7 +19,10 @@ function noteRefKeys(text: string | null | undefined): string[] {
       // "No." after a room, table or seat word is that thing's number, not a reference; "bill" is a meal (AG7-12).
       const refWord = i > 0 && /^(?:invoice|inv|ref|reference|no|number|hd)$/i.test(words[i - 1]) && !(i > 1 && /^(?:no|number)$/i.test(words[i - 1]) && /^(?:room|table|seat|bed|unit|phone|tel|bus|van|car)$/i.test(words[i - 2]));
       if (run.every((w) => /^\d+$/.test(w)) && run.join("").length < 5 && !refWord && words.length !== n) continue;
-      for (const f of canonicalForms(run.join("-"))) out.add(`~${f}`);
+      // A run that starts with an order or booking word ("PO 7798", "Booking BKG 1") names a shared record, as in the
+      // books (AG8-6).
+      const mark = /^(?:po|bk|bkg|booking|reservation)$/i.test(run[0]) ? "^" : "~";
+      for (const f of canonicalForms(run.join("-"))) out.add(`${mark}${f}`);
     }
   }
   return [...out];

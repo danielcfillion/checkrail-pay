@@ -80,3 +80,12 @@ describe("PayPal's own history, shared orders and meal or room numbers (agent gu
     expect(matchPayPalHistory(body(line("7XI", "-180.00", "Tour 2026 tips", "m@x.co")), [...jobKeys("JOB-2026"), ...sourceRefKeys("JOB-2026")], "m@x.co").matches).toHaveLength(0);
   });
 });
+
+describe("PayPal's own history and the books agree on orders (agent guard review AG8-6)", () => {
+  it("a note naming an order is a shared record, as in the books", async () => {
+    const { sourceRefKeys } = await import("./ids");
+    const r = matchPayPalHistory(body(line("7XJ", "-180.00", "PO 7798 week 1", "m@x.co")), [...jobKeys("PO-7798"), ...sourceRefKeys("PO-7798")], "m@x.co");
+    expect(r.matches).toHaveLength(0);
+    expect(r.shared).toHaveLength(1);
+  });
+});

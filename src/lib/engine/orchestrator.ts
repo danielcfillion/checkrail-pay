@@ -15,7 +15,7 @@ import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerpri
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
-import { bookingKeys, hashPayoutDetails, idempotencyKey, isDateLike, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
+import { bookingKeys, departureForms, hashPayoutDetails, idempotencyKey, isDateLike, isDepartureRef, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
 import { listPayPalTransactionsRaw } from "../ai/paypalTools";
@@ -550,7 +550,12 @@ function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>)
   const forms = (r: string | null) => (r && !isDateLike(r) ? sourceRefKeys(r).filter((k) => k.startsWith("~")) : []);
   return [
     ...ev.filter((e) => SINGLE_JOB_KINDS.includes(e.kind)).flatMap((e) => forms(e.reference)),
-    ...ev.filter((e) => SHARED_JOB_KINDS.includes(e.kind)).flatMap((e) => forms(e.reference).map((k) => `^${k.slice(1)}`)),
+    // A booking or order named after a departure (a booking "HG-4D-1184", an order "PO-CEB2D-1307") names that
+    // departure: its departure forms stay job keys (AG8-3).
+    ...ev.filter((e) => SHARED_JOB_KINDS.includes(e.kind)).flatMap((e) => {
+      const dep = isDepartureRef(e.reference) ? new Set(forms(e.reference)) : new Set(departureForms(e.reference).map((f) => `~${f}`));
+      return forms(e.reference).map((k) => (dep.has(k) ? k : `^${k.slice(1)}`));
+    }),
   ];
 }
 

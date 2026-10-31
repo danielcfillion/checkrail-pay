@@ -224,16 +224,20 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
   const possessive = (text: string, v: { id: string; name: string }) =>
     [v.name, ...wordsOf(v)].some((w) => new RegExp(`(?<![\\p{L}])${escapeRe(w)}['’]s\\b(?!\\s+(?:paypal\\s+)?(?:account|wallet|paypal|bank))`, "iu").test(text));
   const payees = new Set<string>();
-  for (const m of d.matchAll(PAY_PHRASE)) {
-    // The clause after the phrase, up to a comma or a full stop, and before "agreed with", "confirmed by" and the like,
-    // which name who agreed, not who is paid (AG7-9).
-    const clause = d.slice(m.index! + m[0].length).split(/[.,;!?\n]/)[0].split(/\b(?:agreed|confirmed|approved|signed|arranged|checked|according|as)\b/i)[0].slice(0, 80);
+  // Who agreed or confirmed is not who is paid: "as agreed with Maria", "confirmed by Maria", "as Maria confirmed" are
+  // taken out before reading who a paying phrase names (AG7-9). Only these, not a bare comma or "as", so "Pay, as agreed,
+  // Maria Santos" and "Pay the fee as invoiced to Maria Santos" still name Maria (AG8-2).
+  const attribution = /\b(?:as\s+)?(?:agreed|confirmed|approved|arranged|signed|checked|noted)\s+(?:with|by)\s+[^,.;!?\n]*|\bas\s+(?:[\p{L}'’]+\s+){1,3}(?:confirmed|agreed|said|approved|noted|checked)\b|\bas\s+(?:agreed|confirmed|noted)\b|\baccording\s+to\s+[^,.;!?\n]*/giu;
+  const dPay = d.replace(attribution, " ");
+  for (const m of dPay.matchAll(PAY_PHRASE)) {
+    // The clause after the phrase, up to a full stop or a semicolon; the first supplier named in it is who is paid.
+    const clause = dPay.slice(m.index! + m[0].length).split(/[.;!?\n]/)[0].slice(0, 80);
     const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0 && !possessive(clause, x.v)).sort((x, y) => x.at - y.at)[0];
     if (hit) payees.add(hit.v.id);
   }
   // "Maria Santos should be paid": the last supplier named before the passive (AG7-7).
-  for (const m of d.matchAll(/\b(?:should|must|will|is\s+to|needs?\s+to|to)\s+be\s+paid\b/gi)) {
-    const clause = d.slice(0, m.index!).split(/[.;!?\n]/).pop() ?? "";
+  for (const m of dPay.matchAll(/\b(?:should|must|will|is\s+to|needs?\s+to|to)\s+be\s+paid\b/gi)) {
+    const clause = dPay.slice(0, m.index!).split(/[.;!?\n]/).pop() ?? "";
     const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0).sort((x, y) => y.at - x.at)[0];
     if (hit) payees.add(hit.v.id);
   }
@@ -339,9 +343,10 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     .replace(/\b[GM][A-Z0-9]{34,75}\b/g, "[payout account]")
     .replace(/\b(?:IBAN|Iban|iban)\s*:?\s*[A-Za-z]{2}\d{2}(?:[\s-]?[0-9A-Z]){10,32}/g, "[payout account]")
     // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account, AG5-7).
-    .replace(/\b[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{4}){2,7}(?:[ -][A-Z0-9]{1,4})?\b/gi, "[payout account]")
-    .replace(/\b(?:acct|account|a\/c)\b(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d[\d -]{2,}\d/gi, "[payout account]")
-    .replace(/(?:\*{2,}|•{2,}|·{2,}|\b[xX]{3,})\s?\d{2,}/g, "[payout account]")
+    .replace(/\b[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{4}){2,7}(?:[ -][A-Z0-9]{1,4})?\b/g, "[payout account]")
+    .replace(/\b(?:acct|account|acc\.?|a\/c)(?:\b|(?<=\.))(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d[\d -]{2,}\d/gi, "[payout account]")
+    .replace(/(?:\*{2,}|•{2,}|·{2,}|…|\.{3}|\b[xX]{3,})[-\s]?\d{2,}/g, "[payout account]")
+    .replace(/\bending(?:\s+in)?\s+\d{4}\b/gi, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
   const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];
   const fulls = others.map((n) => wordsIn(n).map((t) => t.w)).filter((ws) => ws.join("").length >= 3).sort((x, y) => y.length - x.length);

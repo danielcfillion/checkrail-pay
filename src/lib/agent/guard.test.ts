@@ -1074,3 +1074,69 @@ describe("review fixes, round 7 (31 Oct)", () => {
     expect(msg).not.toMatch(/settled|Maria/);
   });
 });
+
+describe("review fixes, round 8 (31 Oct)", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = openTestDb();
+    await seedDemo(db);
+    setAutonomy(db, "autopilot");
+  });
+  const rules = (r: { blocks: Array<{ rule: string }>; warnings: Array<{ rule: string }> }) => [...r.blocks, ...r.warnings].map((x) => x.rule);
+  const sheet = [{ kind: "job_sheet", label: "Trip sheet", reference: null, excerpt: "Guide: Rosa Villanueva. Done." }];
+  const integration = async (vendor: string, sourceRef: string, amountMinor: number, extra: Array<{ kind: string; label: string; reference: string | null; excerpt?: string }> = [], text = "") => {
+    const { ingestObligation } = await import("../engine/orchestrator");
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", sourceRef, rawInput: `${vendor} invoice ${sourceRef}, USD ${amountMinor / 100}, please pay.${text ? ` ${text}` : ""}`, evidence: [{ kind: "invoice", label: `Invoice ${sourceRef}`, amountMinor, currency: "USD", reference: sourceRef, excerpt: `${vendor}. Total USD ${amountMinor / 100}.` }, ...extra.map((e) => ({ ...e, amountMinor: null, currency: null, excerpt: e.excerpt ?? null }))], actor: "integration:test" });
+    return db.select().from(obligations).where(eq(obligations.id, id)).get()!;
+  };
+  const settle = (id: string) => db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, id)).run();
+  const dupBlocked = (o: { policyReasonsJson: string | null }) => /Same job|already used/.test(o.policyReasonsJson ?? "");
+
+  it("AG8-1: a departure in text in any case, or with dots or slashes, is that departure", async () => {
+    for (const [i, text] of ["Guided ceb 2d 1303.", "Guided ceb2d1303.", "Ref: CEB/2D/1303.", "Ref: CEB.2D.1303.", "po-7795-ceb-2d-1303"].entries()) {
+      const code = `CEB-2D-13${String(i).padStart(2, "0")}`;
+      settle((await integration("Rosa Villanueva", code, 15_000)).id);
+      const second = await integration("Rosa Villanueva", `INV-R-12${i}5`, 14_000, sheet, text.replace("1303", `13${String(i).padStart(2, "0")}`));
+      expect(dupBlocked(second), text).toBe(true);
+    }
+  });
+
+  it("AG8-2: a comma, an aside or 'as invoiced' does not hide who the text asks to pay", async () => {
+    for (const description of ["Please pay, for the guiding, Maria Santos.", "pay this one to her partner, Maria Santos.", "Pay the guiding fee as invoiced to Maria Santos.", "Pay, as agreed, Maria Santos.", "pay the balance, USD 190, to Maria Santos.", "beneficiary is, per the sheet, Maria Santos.", "Pay the checked total to Maria Santos."]) {
+      expect(rules(await checkPayment(db, agent(`p8-${description.length}`, ["check", "request", "attest"]), { ...ROSA, description: `Rosa Villanueva trip sheet. ${description}` })), description).toContain("agent_mismatch");
+    }
+    // Who agreed is still not who is paid.
+    expect(rules(await checkPayment(db, agent("ok8", ["check"]), { ...ROSA, description: "Pay Rosa Villanueva the USD 190 owed to her, as Maria Santos confirmed." }))).not.toContain("agent_mismatch");
+  });
+
+  it("AG8-3: a booking or order named after a departure is that departure, and blocks", async () => {
+    settle((await integration("Rosa Villanueva", "INV-R-1401", 15_000, [{ kind: "job_sheet", label: "Sheet", reference: "HG-4D-1184" }])).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-1402", 14_000, [{ kind: "booking", label: "Booking", reference: "HG-4D-1184" }]))).toBe(true);
+    settle((await integration("Rosa Villanueva", "INV-R-1403", 15_000, [{ kind: "job_sheet", label: "Sheet", reference: "CEB-2D-1307" }])).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-1404", 14_000, [{ kind: "purchase_order", label: "Order", reference: "PO-CEB2D-1307" }]))).toBe(true);
+    settle((await integration("Rosa Villanueva", "CEB-2D-1305", 15_000)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-1405", 14_000, sheet, "Booking ceb2d1305."))).toBe(true);
+  });
+
+  it("AG8-4: a letter glued to the number is a re-issue of it", async () => {
+    settle((await integration("Rosa Villanueva", "INV-2026-0452", 15_000)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-2026-0452B", 14_000, sheet))).toBe(true);
+  });
+
+  it("AG8-5: seats, rooms, dates, gates and years are not departures", async () => {
+    for (const [i, text] of ["SEAT 14D 1105.", "ROOM 12D 2045.", "Service date Oct-31-2026.", "Rm-2-101.", "Gate-3-1100.", "Trip MNL 1D 2026."].entries()) {
+      settle((await integration("Linh Family Homestay", `INV-LH-80${i}1`, 15_000 + i, [], text)).id);
+      expect(dupBlocked(await integration("Linh Family Homestay", `INV-LH-80${i}2`, 14_000 + i, [], text)), text).toBe(false);
+    }
+  });
+
+  it("AG8-7: a season label is not a booking", async () => {
+    const { bookingKeys } = await import("../domain/ids");
+    expect(bookingKeys("Booking Q4-2026 season")).toEqual([]);
+  });
+
+  it("AG8-8: redaction keeps ordinary words and removes more masks", () => {
+    expect(clean("see id42 that will be fine")).toBe("see id42 that will be fine");
+    expect(clean("BDO xxxx-4417, card ending 4417, …4417 and Acc. 4417221")).toBe("BDO [payout account], card [payout account], [payout account] and [payout account]");
+  });
+});

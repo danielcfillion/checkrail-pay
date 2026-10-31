@@ -27,7 +27,28 @@ export function idempotencyKey(obligationId: string, attemptNo: number): string 
  * A departure code in any spelling in free text: CEB-2D-1107, CEB2D1107, CEB 2D 1107. The middle part is a number of
  * days ("2D", "10D"), so "NOV 2ND 2026", "ROOM 2A 1105" and "PAX 4X 1200" are not departures (AG7-4).
  */
-const DEPARTURE_LOOSE = /\b([A-Z]{2,5})[-_ ]?(\d{1,2}D)[-_ ]?(\d{3,6})\b/g;
+const DEPARTURE_LOOSE = /\b([A-Za-z]{2,5})[-_ ./]?(\d{1,2}[Dd])[-_ ./]?(\d{3,6})\b/g;
+/**
+ * Words before a "2D 1105"-shaped run that make it not a departure: places in a room or a vehicle, months and days,
+ * and ordinary short words ("for 3d 1500") (AG8-5).
+ */
+const NOT_A_DEPARTURE = new Set(["ROOM", "RM", "SEAT", "ROW", "GATE", "BED", "UNIT", "FLOOR", "FLR", "LEVEL", "BLOCK", "COVID", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "SEPT", "OCT", "NOV", "DEC", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN", "THE", "FOR", "AND", "AT", "IN", "ON", "OF", "TO", "BY", "PER", "WITH", "FROM", "ABOUT", "OVER", "PAY", "PAID", "USD", "PHP", "VND", "THB", "EUR", "GBP", "QTY", "PAX", "NO", "NR", "NUM"]);
+/** A year as the trip number ("Trip MNL 1D 2026") counts only when the code is written with dashes, as departures are. */
+const departureRun = (prefix: string, trip: string, dashed = true) => !NOT_A_DEPARTURE.has(prefix.toUpperCase()) && (dashed || !/^(?:19|20)\d{2}$/.test(trip));
+
+/** Is this reference itself a departure code ("HG-4D-1184", "ceb2d1305")? Its forms then name the job, wherever it is filed (AG8-3). */
+export function isDepartureRef(ref: string | null | undefined): boolean {
+  if (!ref) return false;
+  const t = foldRef(ref).replace(/^(?:JOB|TRIP|TOUR)[^\p{L}\p{N}]*/u, "");
+  const m = t.match(/^([A-Z]{2,5})[^\p{L}\p{N}]?(\d{1,2}D)[^\p{L}\p{N}]?(\d{3,6})$/u);
+  return Boolean(m && departureRun(m[1], m[3]));
+}
+
+/**
+ * A re-issue suffix on a reference: "-B", "-R2", "-REV2", "-COPY", "-V2", or a single letter glued to the number
+ * ("INV-2026-0452B") (AG8-4). The original is matched too.
+ */
+const REISSUE = /^(.*\d{3,6})(?:[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)|[A-Z])$/u;
 
 /** Strip the strength mark from a key: "~" names one job, "^" a booking or order that one or a few jobs share. */
 export const bareKey = (k: string) => k.replace(/^[~^]/, "");
@@ -44,6 +65,9 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       const after = t.slice(m.index! + m[0].length, m.index! + m[0].length + 3);
       if (after.startsWith("...") || after.startsWith("…")) continue;
       const k = m[0].toUpperCase();
+      // "OCT-31-2026", "RM-2-101", "GATE-3-1100" are a date, a room and a gate, not a departure (AG8-5).
+      const shape = k.match(/^([A-Z]{2,5})-\d[A-Z0-9]{0,3}-(\d{3,6})$/);
+      if (shape && !/^(?:INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)$/.test(shape[1]) && !departureRun(shape[1], shape[2])) continue;
       // A booking or purchase order number in text (BK-55825, PO-7795) is shared by the parts of one job: "^" keys,
       // a hold, not a block (AG7-6). The departure it names, if any, is still the job ("~").
       const mark = /^(?:BK|PO)-/.test(k) ? "^" : "~";
@@ -53,11 +77,12 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       const deps = new Set(departureForms(k));
       for (const f of canonicalForms(k)) out.add(`${deps.has(f) ? "~" : mark}${f}`);
       // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
-      const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
+      const reissue = k.match(REISSUE);
       if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`${deps.has(f) ? "~" : mark}${f}`);
     }
     // A departure written without dashes in free text ("CEB2D1107", "CEB 2D 1107") is the same departure (AG6-7).
-    for (const m of t.matchAll(DEPARTURE_LOOSE)) for (const f of canonicalForms(`${m[1]}-${m[2]}-${m[3]}`)) out.add(`~${f}`);
+    // In any case and with any of - _ . / or a space between the parts (AG8-1); not a room, seat, date or year (AG8-5).
+    for (const m of t.matchAll(DEPARTURE_LOOSE)) if (departureRun(m[1], m[3], /^[^-]*-[^-]*-[^-]*$/.test(m[0]))) for (const f of canonicalForms(`${m[1].toUpperCase()}-${m[2].toUpperCase()}-${m[3]}`)) out.add(`~${f}`);
   }
   return [...out].map((k) => k.toLowerCase());
 }
@@ -135,7 +160,7 @@ export function sourceRefKeys(ref: string | null | undefined): string[] {
   const t = foldRef(ref);
   const out = new Set<string>([foldConfusables(ref).toLowerCase().trim()]);
   for (const f of canonicalForms(t)) out.add(`~${f}`);
-  const reissue = t.match(/^(.*\d{3,6})[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/u);
+  const reissue = t.match(REISSUE);
   if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
   return [...out];
 }
@@ -147,7 +172,7 @@ export function sourceRefKeys(ref: string | null | undefined): string[] {
 export function jobOfRef(ref: string | null | undefined): string | null {
   if (!ref) return null;
   const t = foldRef(ref);
-  const reissue = t.match(/^(.*\d{3,6})[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/u);
+  const reissue = t.match(REISSUE);
   const base = reissue ? reissue[1] : t;
   const stripped = base.match(/^(?:JOB|TRIP|TOUR)[^\p{L}\p{N}]*(.+)$/u)?.[1] ?? base;
   const forms = formsOf(stripped);
@@ -169,7 +194,11 @@ export function bookingKeys(...texts: Array<string | null | undefined>): string[
       const digits = (r.match(/\d/g) ?? []).length;
       // A year, a date run together, a phone number, an amount or a duration ("4D3N") is not a booking (AG7-5).
       if (r.length < 5 || digits === 0 || isDateLike(r) || /^(?:19|20)\d{2}$/.test(r) || /^(?:19|20)\d{6}$/.test(r) || /^\+?0?\d{9,11}$/.test(r) || /^\d+D\d+N$/i.test(r)) continue;
-      for (const f of canonicalForms(r)) out.add(`^${f}`);
+      // A season ("Q4-2026", "2026-Q4") is not a booking (AG8-7).
+      if (/^Q[1-4][-/]?(?:19|20)\d{2}$/i.test(r) || /^(?:19|20)\d{2}[-/]?Q[1-4]$/i.test(r)) continue;
+      // A booking named after a departure names that departure: the job, not a shared record (AG8-3).
+      const dep = isDepartureRef(r) ? new Set(canonicalForms(r)) : new Set(departureForms(r));
+      for (const f of canonicalForms(r)) out.add(`${dep.has(f) ? "~" : "^"}${f}`);
     }
   }
   return [...out];
