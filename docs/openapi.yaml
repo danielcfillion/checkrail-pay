@@ -115,6 +115,8 @@ paths:
           $ref: "#/components/responses/ValidationFailed"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /requests:
     post:
       tags: [Requests]
@@ -213,6 +215,8 @@ paths:
           $ref: "#/components/responses/ValidationFailed"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /requests/{id}:
     get:
       tags: [Requests]
@@ -239,6 +243,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /vendors:
     get:
       tags: [Vendors]
@@ -282,6 +288,8 @@ paths:
           $ref: "#/components/responses/ValidationFailed"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /openapi.json:
     get:
       tags: [Meta]
@@ -303,8 +311,9 @@ components:
       description: >-
         A key from CHECKRAIL_API_KEYS (name:secret:scopes, comma separated), sent as "Authorization: Bearer <secret>".
         Scopes are departures:write, requests:write, requests:attest, requests:read and vendors:read. A malformed
-        setting refuses every call (503). Each key may make 120 calls a minute unless CHECKRAIL_API_RATE_LIMIT says
-        otherwise.
+        setting refuses every call with 401, without saying why to the caller; the owner sees it in Settings. Each key
+        may make 120 calls a minute unless CHECKRAIL_API_RATE_LIMIT says otherwise. Wrong keys are limited per
+        address; a valid key is never locked out by them.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -397,7 +406,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     Unavailable:
-      description: CHECKRAIL_API_KEYS is malformed (api_keys_malformed), or no business is set up (not_set_up).
+      description: No business is set up in this Checkrail yet (not_set_up).
       content:
         application/json:
           schema:

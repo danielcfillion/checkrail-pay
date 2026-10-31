@@ -78,4 +78,15 @@ describe("docs/openapi.yaml", () => {
     for (const [, group, item] of refs) expect(spec.components[group]?.[item], `${group}/${item}`).toBeTruthy();
     expect(JSON.stringify(spec)).not.toMatch(/\u2014/);
   });
+
+  it("lists the answers every keyed operation can give, reads included (review R1-9)", () => {
+    const spec = openApiSpec() as { paths: Record<string, Record<string, { security?: unknown[]; responses: Record<string, unknown> }>> };
+    for (const [p, ops] of Object.entries(spec.paths)) {
+      for (const [m, op] of Object.entries(ops)) {
+        if (op.security && op.security.length === 0) continue;
+        for (const code of ["401", "429", "503"]) expect(op.responses[code], `${m.toUpperCase()} ${p} ${code}`).toBeTruthy();
+      }
+    }
+    expect(JSON.stringify(spec)).not.toMatch(/api_keys_malformed/);
+  });
 });

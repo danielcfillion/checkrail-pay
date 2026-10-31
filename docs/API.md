@@ -14,7 +14,7 @@ One entry per system, comma separated, `name:secret:scopes`, scopes joined with 
 
     node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 
-If the setting is malformed, every API call is refused with 503 until it is fixed. Settings, System, API keys lists each key's name, scopes and when it was last used; it never shows a secret.
+If the setting is malformed, every API call is refused with 401 until it is fixed; the caller is not told why. Settings, System, API keys says the setting is malformed (so does the server log), and otherwise lists each key's name, scopes and when it was last used; it never shows a secret.
 
 | Scope | What it allows |
 | --- | --- |
@@ -111,8 +111,9 @@ Always `{"error": {"code": "...", "message": "..."}}`; a validation error adds `
 | 413 | `payload_too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `validation_failed`, `idempotency_conflict`, `document_refused`, `request_refused` |
-| 429 | `rate_limited` (per key, 120 a minute unless `CHECKRAIL_API_RATE_LIMIT` says otherwise), `too_many_bad_keys` (per address) |
-| 503 | `api_keys_malformed`, `not_set_up` |
+| 429 | `rate_limited` (per key, 120 a minute unless `CHECKRAIL_API_RATE_LIMIT` says otherwise), `too_many_bad_keys` (wrong keys only, per address; a valid key is never locked out) |
+| 500 | `internal_error`: Checkrail could not finish the call and nothing was paid. Retry with the same `Idempotency-Key`; if the request was already created, the retry returns it instead of making a second one. |
+| 503 | `not_set_up` (no business is set up yet) |
 
 ## Audit
 
