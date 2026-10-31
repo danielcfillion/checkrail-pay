@@ -7,7 +7,7 @@ Paste each section into the matching Devpost field. Numbers here match the READM
 1. **Best Use of PayPal + AI** (first). PayPal's own records decide a block: before any payment, the app reads PayPal Transaction Search itself and blocks a job PayPal already paid, citing the PayPal transaction id ("PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com"). Claude reads the request and checks the same history with read-only Transaction Search and Invoicing calls, and Books reconciles back from Transaction Search. PayPal and AI do the work together on every payment.
 2. **Best Use of Agentic Commerce** (second). Checkrail is an MCP server any agent asks before it pays a supplier: `check_payment` answers pay, hold or block with the rule and PayPal's transaction id, and `request_payment` lets the agent hand Checkrail the payment, which Autopilot sends over PayPal Payouts only inside the owner's caps. The agent transacts; it never holds the keys.
 3. **Best Demo Delivery** (third).
-4. **Sponsor prize:** decided by the sponsor builds (see the rules checklist). Plain AG Grid tables alone do not meet AG Grid's brief, which asks for AG Studio.
+4. **Sponsor prize: Best Use of AG Grid.** Onboarding's "Your first weeks" is an AG Studio dashboard with two custom widgets, the Checkrail theme, no-code layout editing, and a swapped-in harness: a Checkrail agent on Claude that delegates to Studio's built-in agents. Select it only if the submitted build has it running.
 
 Render stays the host of the judging demo (see "Built with"); it is not the sponsor prize we select.
 
@@ -95,7 +95,7 @@ The agent guard is a dependency-free JSON-RPC handler shared by two MCP transpor
 
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 741 tests in 71 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 943 tests in 91 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
 
 ## Challenges we ran into
 
@@ -127,7 +127,7 @@ A Zalo Official Account and a forward-to-email address for intake. A pilot with 
 
 ## Built with
 
-TypeScript, Next.js 15, React 19, Tailwind CSS 4, Model Context Protocol, AG Grid, Drizzle ORM, SQLite (better-sqlite3), Anthropic SDK (Claude), PayPal Payouts REST API, PayPal Transaction Search and Invoicing REST APIs, Stellar SDK, PYUSD on Stellar (simulated), pdf.js, Vitest, Render (hosting).
+TypeScript, Next.js 15, React 19, Tailwind CSS 4, Model Context Protocol, AG Grid, AG Studio, Drizzle ORM, SQLite (better-sqlite3), Anthropic SDK (Claude), PayPal Payouts REST API, PayPal Transaction Search and Invoicing REST APIs, Stellar SDK, PYUSD on Stellar (simulated), pdf.js, Vitest, Render (hosting).
 
 ## Tools used and how they are integrated
 
@@ -136,6 +136,6 @@ TypeScript, Next.js 15, React 19, Tailwind CSS 4, Model Context Protocol, AG Gri
 - **Anthropic Claude**: reads requests and documents and returns a structured, validated interpretation with concerns and notes.
 - **Model Context Protocol**: Checkrail's agent guard. Any MCP agent (Claude Desktop, Claude Code, a booking system's agent) calls `check_payment` before paying and `request_payment` to have Checkrail pay; served over HTTP at `/api/mcp` and over stdio.
 - **Stellar SDK and PYUSD**: the second rail. A signed PYUSD payment with memo-based idempotency and Horizon polling. Simulated in the demo; never run on testnet.
-- **AG Grid**: the payment run builder and the ledger are AG Grid tables with column filters and CSV export.
+- **AG Grid and AG Studio**: onboarding's third screen, "Your first weeks", is an AG Studio dashboard that answers one question: is Checkrail ready to do more on its own? Two custom widgets lead it: a readiness gauge ("Ready for Autopilot: 3 of 4", each check listed with its plain reason, filling as the owner marks calls) and "Holds that turned out fine" by week against the 10% target. Studio's own widgets show money stopped by reason, agreement with each rule and every call. The whole canvas uses a Studio theme built from the app's CSS tokens, so it follows light and dark mode. The owner rearranges and adds widgets in Studio's edit mode without code. "Ask about your setup" is a custom agent: Checkrail's guide, running on Claude through our own `AgLlmAdapter` (Studio ships only an OpenAI adapter), which delegates to Studio's data, widget, page and planning agents. It can explain and build, and cannot change a rule or pay anyone. The calls grid on the second screen, the payment run builder and the ledger are AG Grid tables.
 - **Render**: hosts the judging demo on simulated rails from `render.yaml`.
 - **Next.js, Drizzle, SQLite**: the operator app, autonomy settings, Daily close, money-out chart and audit log.

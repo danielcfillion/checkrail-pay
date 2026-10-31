@@ -48,6 +48,27 @@ Prep: on the Mac, add Checkrail to Claude Desktop (`docs/AGENTS.md`, local stdio
 
 Ana's unclaimed payout moves to the Devpost text and the README; the Daily close shot keeps its place after this beat.
 
+## The onboarding and AG Studio beat (added 31 Oct, 12 seconds, after the agent beat)
+
+Shortens the Daily close shot to 2:30 to 2:44 and moves the end card to 2:44 to 2:52; trim the Daily close voiceover to its first and last sentence. Keep the total under 2:55.
+
+| Time | On screen | Crop and zoom | Action | Voiceover |
+|---|---|---|---|---|
+| 2:18 to 2:24 | Getting started, Check our calls: the calls grid | 1.5x on two rows | Click "Was fine" on a held Dao Mountain Lodge row, then Apply on "Add a rate card for Dao Mountain Lodge" | A new business starts from its own history. I tell Checkrail which of its calls were right, and it suggests what to change. |
+| 2:24 to 2:30 | Your first weeks (AG Studio) | 1.5x on the readiness gauge, then pull back to the full dashboard | Reload so the gauge fills to 4 of 4; click Edit dashboard and drag one card | When its holds are nearly always right, it is ready to do more. Built on AG Studio. |
+
+Prep: reseed, open Bring in your data once so the page is warm, and set the browser to 1440 wide. With live AI on, a third optional insert (cut if the video runs long): type "Add a chart of money stopped by supplier" in Ask about your setup and hold on the new widget.
+
+## Motion to capture (added 31 Oct)
+
+Each of these moves only on a state change, so record the moment it happens, at 2x:
+- The payment track drawing to the red X on the Phuong page, and the red banner sliding in with USD 960 struck through beside USD 800 (0:22 to 0:46). Open the page fresh for the take.
+- Errors prevented counting up on the overview after the correction (the count only runs when the figure has grown since this browser last saw it).
+- The autopilot countdown ring draining (1:39 to 1:58).
+- A new agent question sliding into the Agents page (2:14 to 2:18): keep the Agents page open in a second window while Claude Desktop asks; it refreshes every 4 seconds.
+- The readiness gauge filling (2:24 to 2:30).
+Turn off "reduce motion" in macOS before recording, or none of these run.
+
 ## Off-camera prep (do this before the take)
 
 1. **Before 1:27, set up the autopilot shot.** Follow /demo step 6 to create the autopilot-eligible request, with autonomy still on Assist: New request, type "Trip sheet attached for Rosa, please pay.", upload `docs/demo-documents/tripsheet-ceb2d-1024.pdf` (USD 190) and create it. Rosa is PayPal only, and the business's own rate card (USD 95 a day) and departure CEB-2D-1024 (2 days) confirm USD 190, so policy clears it. (Rosa's own invoice, `invoice-rosa-0942.pdf`, would wait for a person: a vendor's own invoice never auto-pays.) With `DEMO_PAYPAL_RECIPIENT_ROSA` set, the payout lands in your second sandbox account, so the agent's send on camera is a real sandbox payout. When you switch to Autopilot on camera it is scheduled with a ten-minute countdown.

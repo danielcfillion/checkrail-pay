@@ -64,7 +64,7 @@ As of 29 Oct 2026:
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
-- **Tests:** 741 in 71 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 943 in 91 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -161,6 +161,14 @@ Before trusting Checkrail with new payments, run your last few months of supplie
 - Account numbers, phone numbers and email addresses are removed when the files are read. Everything stays in `private/`, which git ignores.
 - What comes out are flags, not findings. Mark each duplicate and overcharge `yes` or `no` in the results file; `--totals` counts only confirmed lines.
 
+### In the app: Getting started
+
+The same re-check runs from the app, as the first step of onboarding (sidebar, Admin, Getting started):
+
+1. **Bring in your data.** Upload a bank export (any bank's CSV, including Vietnamese exports with day-first dates and dot thousands). Checkrail guesses which column is which, shows the first rows as it reads them (account numbers, phones and emails removed) and saves the layout, so the next export from the same bank maps itself. Payout details are never imported. "Re-check 90 days" runs the rules over the last 90 days in a separate process with no keys and simulated rails, so nothing is paid and the server's clock is never touched.
+2. **Check our calls.** Every hold and block from the re-check, in an AG Grid table, with "Right catch" and "Was fine" on each. Marks never change a rule; they produce suggestions (add a rate card, verify a supplier, connect a booking feed) that a person applies or dismisses, and every decision goes in the audit log.
+3. **Your first weeks.** An AG Studio dashboard: readiness for the next autonomy level as a gauge (holds that turned out fine under 10% for two weeks running, every paid supplier verified, no missed duplicate, rate cards covering 80% of spend, and four weeks in Assist before Autopilot), holds that turned out fine by week against the 10% target, money stopped by reason and how often you agreed with each rule. Both of the first two are custom Studio widgets in the Checkrail theme. The owner can rearrange and add widgets without code, and with live AI on, "Ask about your setup" is a Checkrail agent (Claude Haiku 5.5 through `/api/studio-ai`) that hands work to Studio's own agents. It explains the numbers and adds widgets; it cannot change a rule or pay anyone. Set the licence key as `AG_STUDIO`; without one Studio shows its trial watermark.
+
 ## Switching to live mode
 
 Everything runs with zero credentials on simulated rails. To move a rail or the agent to live, copy `.env.example` to `.env`, set the variables below and restart. In live mode a rail with missing or invalid credentials refuses to start instead of falling back to a mock, and the app refuses to open without logins.
@@ -213,7 +221,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-741 tests in 71 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+943 tests in 91 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 
@@ -224,6 +232,8 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     src/lib/accounting/   accounting records, CSV export, Xero mapping and bills file
     src/lib/agent/        agent guard: MCP handler, agent keys and trust, check and request tools, rule glossary
     src/lib/check/        judge a payment on a copy of the books; the historical re-check
+    src/lib/onboarding/   bank-export import, column detection, calibration marks, suggestions, readiness, dashboard data
+    src/lib/studio/       AG Studio theme, data sources, report, custom widget models, Claude adapter for Studio's assistant
     src/app/              Next.js pages and API routes (export, PayPal webhook, autopilot tick, MCP)
     scripts/              seed, replay, re-check, MCP over stdio, Stellar setup, screenshots
     docs/                 agents guide, Devpost text, video script, business notes, benchmark, audits
