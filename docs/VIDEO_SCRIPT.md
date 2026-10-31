@@ -12,7 +12,7 @@ Claude reads, policy decides, the agent pays inside your limits, and you sign of
 
 ## Captions
 
-Burn the captions in. Judges often watch muted. The cold open is 24 words over 0:03 to 0:13, about 2.4 words a second; do not add words to it. One line at a time, bottom centre, Archivo 600 at about 44px on a 1080p frame, ink #10233A on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
+Burn the captions in. Judges often watch muted. The cold open is 24 words over 0:03 to 0:13, about 2.4 words a second; do not add words to it. One line at a time, bottom centre, Geist 600 at about 44px on a 1080p frame, ink #0A1628 on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
 
 ## Shot list (hackathon cut)
 
