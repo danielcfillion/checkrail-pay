@@ -1,13 +1,14 @@
 import { isRealMoney } from "../config";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices, reconciliations, vendorLinks, agentChecks } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices, reconciliations, vendorLinks, agentChecks, onboardingImports, onboardingMappings, onboardingResults, onboardingMarks, onboardingSuggestions } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
 import { newId } from "../domain/ids";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation, payoutHashOf } from "../engine/orchestrator";
 import { encryptField } from "../crypto/dataKey";
 import { withMockRails } from "../rails";
+import { seedOnboarding } from "../onboarding/seed";
 
 /**
  * Demo data: Ridgeline Expeditions, a US tour operator running small-group
@@ -51,7 +52,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [agentChecks, vendorLinks, reconciliations, departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [onboardingSuggestions, onboardingMarks, onboardingResults, onboardingMappings, onboardingImports, agentChecks, vendorLinks, reconciliations, departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -86,6 +87,8 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   seedRatesAndDepartures(db);
   if (history) {
     await seedHistory(db);
+    // Onboarding and calibration: past bank payments re-checked, the owner's marks, and what they suggest.
+    seedOnboarding(db, DEMO_BUSINESS_ID);
     // The most common supplier fraud, waiting in the vendor checks: an email "from" Tam asking to be paid somewhere new.
     db.insert(vendorChanges)
       .values({

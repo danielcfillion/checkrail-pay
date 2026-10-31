@@ -258,6 +258,9 @@ const ACTION_LABELS: Record<string, string> = {
   "departures.imported": "Imported departures",
   "team.changed": "Changed the team",
   "user.role_synced": "Updated a role from the login settings",
+  "onboarding.import_checked": "Re-checked past bank payments",
+  "onboarding.suggestion_applied": "Applied a calibration suggestion",
+  "onboarding.suggestion_dismissed": "Dismissed a calibration suggestion",
 };
 
 /** "settlement.checked:seed" -> "Checked settlement (seed)". */
