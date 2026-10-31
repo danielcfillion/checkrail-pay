@@ -297,6 +297,29 @@ body {
   }
 }
 
+/* A row that just arrived (an agent asked a moment ago) slides in and its tint fades. */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+    background-color: var(--action-soft);
+  }
+  40% {
+    opacity: 1;
+    transform: none;
+    background-color: var(--action-soft);
+  }
+}
+.row-new {
+  animation: row-in 1600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* A card inside a card flattens: one level of lift only. */
+.panel .panel:not(.panel-hero) {
+  box-shadow: none;
+  border-color: transparent;
+}
+
 /* The one dark card per screen. */
 .panel-hero {
   background: var(--hero);
@@ -541,6 +564,7 @@ table.ledger td.r {
     transition: none;
   }
   .decision-enter,
+  .row-new,
   .strike::after {
     animation: none;
   }
@@ -690,8 +714,12 @@ table.ledger td.r {
 .release-bar {
   transition: width 1s linear;
 }
+.release-ring {
+  transition: stroke-dashoffset 1s linear;
+}
 @media (prefers-reduced-motion: reduce) {
-  .release-bar {
+  .release-bar,
+  .release-ring {
     transition: none;
   }
 }

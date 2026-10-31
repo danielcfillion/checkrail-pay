@@ -68,7 +68,7 @@
 .cr-grid .ag-filter .ag-standard-button,
 .cr-grid .ag-filter-apply-panel-button {
   font-weight: 500;
-  border-radius: 4px;
+  border-radius: 999px;
 }
 
 /* Overdue due dates read in the attention colour, never red. */

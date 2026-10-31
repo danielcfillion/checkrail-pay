@@ -32,7 +32,7 @@ export function Shell({ businessName, system, who, children }: { businessName: s
   const modes = system ? modeSummary(system) : null;
   const phoneExtras = { personas: who?.personas ?? null, username: who?.username ?? "", modes };
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[68px_1fr] lg:grid-cols-[236px_1fr]">
+    <div className="min-h-screen md:grid md:grid-cols-[68px_1fr] lg:grid-cols-[224px_1fr]">
       <aside aria-label="Sidebar" className="hidden bg-sheet md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r hairline">
         <div className="px-3 pb-5 pt-5 lg:px-5">
           <Link href="/" className="flex items-center gap-2 rounded-sm" aria-label="Checkrail Pay, overview">
@@ -57,7 +57,7 @@ export function Shell({ businessName, system, who, children }: { businessName: s
           </Link>
           {businessName ? <span className="truncate text-xs text-ink-soft">{businessName}</span> : null}
         </header>
-        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] focus:outline-none px-4 pb-24 pt-6 sm:px-6 md:pb-12 md:pt-8 lg:px-10">{children}</main>
+        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] focus:outline-none px-4 pb-24 pt-6 sm:px-6 md:pb-12 md:pt-8 lg:px-8">{children}</main>
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t hairline bg-sheet md:hidden" aria-label="Main, mobile">
         <NavLinks items={NAV} mobile demoGuide={demoGuide} trimmed={trimmed} phone={phoneExtras} />

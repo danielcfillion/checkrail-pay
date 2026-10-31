@@ -108,10 +108,8 @@ export function ScheduledReleases({ rows, released = [], windowSeconds = 0, comp
                 <p className="text-xs text-ink-soft">Autopilot sends it when the timer runs out. Cancel keeps it for a person.</p>
               </div>
               <div className="flex items-center gap-3">
-                <p className="text-right" aria-live="off">
-                  <span className="dense block text-ink-soft">{s === 0 ? "sending now" : "sends in"}</span>
-                  <span className="wide num block text-xl text-attention">{s === null ? "scheduled" : clock(s)}</span>
-                </p>
+                <p className="dense text-right text-ink-soft" aria-live="off">{s === 0 ? "sending now" : "sends in"}</p>
+                <CountdownRing pct={pct} label={s === null ? "--:--" : clock(s)} />
                 {canCancel ? (
                   <button
                     type="button"
@@ -130,9 +128,6 @@ export function ScheduledReleases({ rows, released = [], windowSeconds = 0, comp
                 ) : null}
               </div>
             </div>
-            <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "var(--rule)" }} aria-hidden>
-              <div className="release-bar h-1 rounded-full" style={{ width: `${pct}%`, background: "var(--attention)" }} />
-            </div>
           </li>
         );
       })}
@@ -147,5 +142,20 @@ export function ScheduledReleases({ rows, released = [], windowSeconds = 0, comp
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The cancel window as a ring that drains once a second around the time left, so "sends unless you cancel" is visible at a glance. */
+function CountdownRing({ pct, label }: { pct: number; label: string }) {
+  const r = 25;
+  const c = 2 * Math.PI * r;
+  return (
+    <span className="relative inline-flex h-16 w-16 shrink-0 items-center justify-center">
+      <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden className="absolute inset-0 -rotate-90">
+        <circle cx="32" cy="32" r={r} fill="none" stroke="var(--attention-soft)" strokeWidth="5" />
+        <circle className="release-ring" cx="32" cy="32" r={r} fill="none" stroke="var(--attention)" strokeWidth="5" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} />
+      </svg>
+      <span className="num relative text-[13px] font-bold text-attention">{label}</span>
+    </span>
   );
 }

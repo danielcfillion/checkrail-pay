@@ -3,8 +3,8 @@ import { themeQuartz } from "ag-grid-community";
 /**
  * The app's ledger table, drawn by AG Grid. Every colour is one of the app's own CSS tokens (globals.css), passed
  * through as a var() so the grid changes with the page: light, dark from prefers-color-scheme, or a forced
- * data-theme. There is no second dark palette to keep in sync. Archivo comes from the page (font: inherit);
- * tabular figures, the 88% header width and the pinned totals live in grid.css.
+ * data-theme. There is no second dark palette to keep in sync. Geist comes from the page (font: inherit);
+ * tabular figures and the pinned totals live in grid.css.
  */
 export const checkrailGridTheme = themeQuartz.withParams({
   browserColorScheme: "inherit",
@@ -29,7 +29,7 @@ export const checkrailGridTheme = themeQuartz.withParams({
   borderColor: "var(--rule)",
   wrapperBorder: false,
   wrapperBorderRadius: 0,
-  borderRadius: 4,
+  borderRadius: 10,
   rowBorder: { style: "solid", width: 1, color: "var(--rule)" },
   headerRowBorder: { style: "solid", width: 1, color: "var(--rule)" },
   columnBorder: false,
@@ -42,11 +42,11 @@ export const checkrailGridTheme = themeQuartz.withParams({
   pinnedRowFontWeight: 600,
 
   // Same density as the hand-written tables: 10px by 12px cells on a 20px line.
-  rowHeight: 40,
+  rowHeight: 46,
   // Short autoHeight grids (a few payable requests) end at their last row instead of a 150px empty body.
   autoHeightMinBodyHeight: 40,
-  headerHeight: 36,
-  cellHorizontalPadding: 12,
+  headerHeight: 38,
+  cellHorizontalPadding: 14,
   spacing: 6,
   iconSize: 14,
   iconColor: "var(--ink-soft)",
