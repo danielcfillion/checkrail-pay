@@ -7,7 +7,7 @@ import { SUPPORTED_CURRENCIES } from "../domain/money";
 import { runRecheckIsolated } from "./isolated";
 import { parseCsv, readRows, totals, type RecheckRow, type RecheckTotals, type Row, type RowProblem } from "../check/recheck";
 import { requirePermission, type Actor } from "../engine/users";
-import { detectColumns, fileSpecOf, headerSignature, toCommaCsv, validateSpec, type Detection, type ImportSpec } from "./detect";
+import { checkWidth, detectColumns, fileSpecOf, headerSignature, toCommaCsv, validateSpec, type Detection, type ImportSpec } from "./detect";
 
 /**
  * Import sessions: an owner uploads a bank export, confirms how to read it, and Checkrail re-checks the payments in
@@ -114,6 +114,7 @@ function cleanAliases(raw: unknown): Record<string, string> {
 function prepare(csv: unknown, what: string, skipRows: number): { text: string; header: string[]; dataRows: number } {
   const { text } = toCommaCsv(checkSize(csv, what));
   const rows = parseCsv(text);
+  checkWidth(rows, what);
   const header = (rows[skipRows] ?? []).map((h) => h.trim());
   if (!header.length) throw new Error(`${what} has no header row on line ${skipRows + 1}`);
   const dataRows = rows.length - skipRows - 1;

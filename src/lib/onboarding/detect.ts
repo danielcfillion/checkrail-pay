@@ -218,10 +218,20 @@ export function guessDateOrder(values: string[]): { order: ImportSpec["dateForma
  * Guess how to read a bank export. `saved` is a mapping stored for this layout (same signature): when its columns are
  * all in the header it is used as is, with confidence 1.
  */
+/** A bank export has a dozen or two columns. Scoring is per cell, so a file with thousands would block the server. */
+export const MAX_COLUMNS = 100;
+
+/** Refuse a file whose rows are wider than any bank export, before anything scores its cells. */
+export function checkWidth(rows: string[][], what = "The file"): void {
+  const widest = rows.reduce((m, r) => Math.max(m, r.length), 0);
+  if (widest > MAX_COLUMNS) throw new Error(`${what} has a row with ${widest} columns; a bank export has fewer than ${MAX_COLUMNS}. Check the file and the separator.`);
+}
+
 export function detectColumns(csv: string, opts: { saved?: ImportSpec | null } = {}): Detection {
   const { text, delimiter } = toCommaCsv(csv);
   const rows = parseCsv(text);
   if (!rows.length) throw new Error("The file is empty");
+  checkWidth(rows);
   const skipRows = findHeaderRow(rows);
   const header = rows[skipRows].map((h) => h.trim());
   const body = rows.slice(skipRows + 1);
@@ -334,21 +344,18 @@ function savedFits(spec: ImportSpec, header: string[]): boolean {
 
 // ---------- Checking a mapping that came from a page ----------
 
-const PATTERN_MAX = 120;
-/** A group that repeats and is itself repeated ("(a+)+", "(\w*)*"): the shape that makes a regular expression hang. */
-const NESTED_REPEAT = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,)/;
 
+/**
+ * Patterns (a regular expression that pulls the payee or reference out of the description) are for the command-line
+ * re-check only, where the person running it wrote the pattern. In the app a pattern would run inside the server, and
+ * no cheap check rules out every pattern that takes exponential time, so the app refuses them; the column mapper never
+ * produces one.
+ */
 function checkPattern(p: unknown, what: string): string | undefined {
   if (p == null || p === "") return undefined;
-  if (typeof p !== "string" || p.length > PATTERN_MAX) throw new Error(`The ${what} pattern must be text of ${PATTERN_MAX} characters at most`);
-  if (NESTED_REPEAT.test(p)) throw new Error(`The ${what} pattern repeats a repeated group, which can take too long to run. Simplify it.`);
-  try {
-    new RegExp(p, "i");
-  } catch {
-    throw new Error(`The ${what} pattern is not a valid regular expression`);
-  }
-  return p;
+  throw new Error(`A ${what} pattern is not accepted here. Choose the ${what} column instead.`);
 }
+
 
 /**
  * A mapping as the page sent it, checked against the file's header: every named column exists, there is a date and an

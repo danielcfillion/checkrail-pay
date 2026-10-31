@@ -51,6 +51,13 @@ describe("the demo's onboarding data", async () => {
       const r = readiness(copy, DEMO_BUSINESS_ID);
       expect(r.criteria.find((c) => c.id === "rate_card_coverage")!.met).toBe(true);
       expect(r.met).toBe(4);
+      // Every hour of the week the seed ran in: the Assist gate holds, so 4 of 4 always means ready.
+      const monday = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`) - ((new Date().getUTCDay() + 6) % 7) * 86_400_000;
+      for (let h = 0; h < 7 * 24; h += 1) {
+        const at = readiness(copy, DEMO_BUSINESS_ID, { now: new Date(monday + h * 3600_000 + 60_000) });
+        expect(at.gate?.met).toBe(true);
+        expect(at.ready).toBe(true);
+      }
     });
   });
 

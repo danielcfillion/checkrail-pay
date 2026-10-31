@@ -35,7 +35,7 @@ export interface ClaudeAdapterOptions {
   endpoint?: string;
   /**
    * Model to ask for when the chat offers no model picker. Leave unset to let the server use its configured model
-   * (ANTHROPIC_MODEL); the server refuses any other.
+   * (STUDIO_MODEL); the server refuses any other.
    */
   model?: string;
   /** Output token budget asked for per turn. Default 8192; the server caps it whatever is asked. */

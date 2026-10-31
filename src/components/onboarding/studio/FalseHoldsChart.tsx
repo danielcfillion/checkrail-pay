@@ -46,8 +46,8 @@ export function FalseHoldsChart(params: AgWidgetParams) {
 
   const latest = points.at(-1);
   const p = size.width > 0 ? plot(points, target, { width: size.width, height: size.height, ...BOX }) : null;
-  const streak = underTargetStreak(points);
-  const caption = falseHoldCaption(points, target);
+  const streak = underTargetStreak(rows);
+  const caption = falseHoldCaption(rows, target);
   const drawKey = points.map((x) => `${x.week_start}:${x.rate}`).join("|");
 
   return (

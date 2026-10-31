@@ -145,8 +145,10 @@ export function seedOnboarding(db: Db, businessId: string, opts: { now?: Date } 
   const now = (opts.now ?? new Date()).getTime();
   const currentMonday = Date.parse(`${weekStart(ymd(now))}T00:00:00Z`);
   const imports: Array<{ weeks: number[]; createdAt: number; file: string; markAt: number }> = [
-    // The first upload: eight weeks of history, brought in on the Tuesday of week 4. Weeks 6 and 5 were marked then.
-    { weeks: [12, 11, 10, 9, 8, 7, 6, 5], createdAt: currentMonday - 4 * 7 * DAY + DAY + 9 * 3600_000, file: "sao-ke-thang-8-9.csv", markAt: currentMonday - 4 * 7 * DAY + 2 * DAY + 10 * 3600_000 },
+    // The first upload: eight weeks of history, brought in on the Sunday evening that ends week 5, like every later one.
+    // Weeks 6 and 5 were marked an hour later. Anchored to a week boundary so "weeks in Assist" reads at least 4 on
+    // every day of the week the seed runs.
+    { weeks: [12, 11, 10, 9, 8, 7, 6, 5], createdAt: currentMonday - 4 * 7 * DAY - 4 * 3600_000, file: "sao-ke-thang-8-9.csv", markAt: currentMonday - 4 * 7 * DAY - 3 * 3600_000 },
     // Then each week's payments, re-checked on the Sunday evening that ends it and marked an hour later.
     ...[4, 3, 2, 1].map((w) => ({ weeks: [w], createdAt: currentMonday - (w - 1) * 7 * DAY - 4 * 3600_000, file: `sao-ke-tuan-${ymd(currentMonday - w * 7 * DAY)}.csv`, markAt: currentMonday - (w - 1) * 7 * DAY - 3 * 3600_000 })),
   ];

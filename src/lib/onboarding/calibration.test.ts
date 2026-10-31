@@ -148,6 +148,18 @@ describe("applying and dismissing", () => {
     expect(JSON.parse(applied.detailJson!)).toMatchObject({ suggestionId: s.id, kind: "rate_card", changed: true, rateCardId: rate.id });
   });
 
+  it("refuses an old rate card suggestion once the supplier has a rate card a person set", () => {
+    const { db, people, call } = fixture();
+    markCall(db, BIZ, people.owner, call(2).id, "was_fine");
+    const s = listSuggestions(db, BIZ)[0];
+    expect(s.kind).toBe("rate_card");
+    addRateCard(db, "ven_dao");
+    const before = db.select().from(rateCards).all();
+    expect(() => applySuggestion(db, BIZ, people.approver, s.id)).toThrow(/has a rate card now/);
+    expect(db.select().from(rateCards).all()).toEqual(before);
+    expect(listSuggestions(db, BIZ).find((x) => x.id === s.id)?.status).toBe("proposed");
+  });
+
   it("applying anything else records the decision and changes nothing in the books", () => {
     const { db, people, call } = fixture();
     markCall(db, BIZ, people.owner, call(6).id, "was_fine");

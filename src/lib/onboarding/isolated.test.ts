@@ -22,6 +22,13 @@ describe("runRecheckIsolated", () => {
     expect(new Set(seen)).toEqual(new Set([year]));
   }, 60_000);
 
+  it("runs one re-check at a time", async () => {
+    const config = { currency: "VND", country: "VN", payments: { file: "x.csv", columns: { date: "Date", payee: "Payee", amount: "Amount", reference: "Ref" } } } as never;
+    const first = runRecheckIsolated({ config, payments });
+    await expect(runRecheckIsolated({ config, payments })).rejects.toThrow(/another re-check is running/);
+    await expect(first).resolves.toHaveLength(2);
+  }, 60_000);
+
   it("reports a failure instead of hanging", async () => {
     await expect(runRecheckIsolated({ config: null as never, payments }, { timeoutMs: 30_000 })).rejects.toThrow();
   }, 60_000);

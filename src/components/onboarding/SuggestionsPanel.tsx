@@ -76,7 +76,9 @@ function Suggestion({ s, allowed }: { s: SuggestionRow; allowed: boolean }) {
   const decimals = currencyDecimals(s.proposed_currency);
   const [rate, setRate] = useState(s.proposed_rate_minor !== null ? (s.proposed_rate_minor / 100).toFixed(decimals) : "");
 
-  const typed = s.kind === "rate_card" && rate.trim() ? Math.round(Number(rate.replace(/,/g, "")) * 100) : null;
+  // A currency without decimals (VND) is often typed with dots or spaces between thousands ("13.600.000"): drop them.
+  const cleaned = decimals === 0 ? rate.replace(/[.,\s]/g, "") : rate.replace(/[,\s]/g, "");
+  const typed = s.kind === "rate_card" && rate.trim() ? Math.round(Number(cleaned) * 100) : null;
   const rateOk = typed === null || (Number.isFinite(typed) && typed > 0);
 
   const apply = async () => {

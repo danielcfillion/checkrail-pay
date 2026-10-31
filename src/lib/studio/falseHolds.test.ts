@@ -15,17 +15,25 @@ describe("holds that turned out fine", () => {
   });
 
   it("counts the weeks in a row under target, from the latest back", () => {
-    expect(underTargetStreak(falseHoldPoints(ROWS))).toBe(2);
-    expect(underTargetStreak(falseHoldPoints([week("2026-10-05", 2, 0, true), week("2026-10-12", 2, 0.5)]))).toBe(0);
+    expect(underTargetStreak(ROWS)).toBe(2);
+    expect(underTargetStreak([week("2026-10-05", 3, 0, true), week("2026-10-12", 3, 0.5)])).toBe(0);
     expect(underTargetStreak([])).toBe(0);
+    // Counted like readiness: a thin trailing week is skipped, and a week between runs that nobody reviewed ends the run.
+    expect(underTargetStreak([week("2026-10-05", 3, 0, true), week("2026-10-12", 3, 0, true), week("2026-10-19", 2, 0, true)])).toBe(2);
+    expect(underTargetStreak([week("2026-10-05", 3, 0, true), week("2026-10-12", 1, null), week("2026-10-19", 3, 0, true)])).toBe(1);
   });
 
   it("says it plainly", () => {
-    expect(falseHoldCaption(falseHoldPoints(ROWS), 0.1)).toBe("Under the 10% target for 2 weeks in a row.");
-    expect(falseHoldCaption(falseHoldPoints(ROWS.slice(0, 3)), 0.1)).toBe("Under the 10% target last week. Autopilot needs 2 weeks in a row.");
-    expect(falseHoldCaption(falseHoldPoints(ROWS.slice(0, 2)), 0.1)).toMatch(/^Above the 10% target last week/);
+    expect(falseHoldCaption(ROWS, 0.1)).toBe("Under the 10% target for 2 weeks in a row.");
+    expect(falseHoldCaption(ROWS.slice(0, 3), 0.1)).toBe("Under the 10% target last week. Autopilot needs 2 weeks in a row.");
+    expect(falseHoldCaption(ROWS.slice(0, 2), 0.1)).toMatch(/^Not under the 10% target last week/);
     expect(falseHoldCaption([], 0.1)).toMatch(/^Mark a few held payments/);
-    for (const c of [falseHoldCaption([], 0.1), falseHoldCaption(falseHoldPoints(ROWS), 0.1)]) expect(c).not.toMatch(/\u2014/);
+    for (const c of [falseHoldCaption([], 0.1), falseHoldCaption(ROWS, 0.1)]) expect(c).not.toMatch(/\u2014/);
+  });
+  it("uses the same weekly review minimum as the readiness check", async () => {
+    const { MIN_REVIEWED_PER_WEEK: readinessMin } = await import("../onboarding/readiness");
+    const { MIN_REVIEWED_PER_WEEK } = await import("./falseHolds");
+    expect(MIN_REVIEWED_PER_WEEK).toBe(readinessMin);
   });
 
   it("scales the axis to leave room above the highest point and the target", () => {

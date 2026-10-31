@@ -146,12 +146,19 @@ describe("checking a mapping from the page", () => {
     expect(() => validateSpec({ ...DEMO_BANK_SPEC, columns: { date: "Ngày giao dịch" } }, header)).toThrow(/money paid out/);
     expect(() => validateSpec({ ...DEMO_BANK_SPEC, columns: { date: "Ngày giao dịch", amount: "Số tiền ghi nợ" } }, header)).toThrow(/payee/);
   });
-  it("refuses patterns that are invalid, too long or can hang", () => {
+  it("refuses every pattern: a pattern from a page would run inside the server, and some take exponential time", () => {
     const base = { ...DEMO_BANK_SPEC, columns: { date: "Ngày giao dịch", amount: "Số tiền ghi nợ", description: "Nội dung" } };
-    expect(validateSpec({ ...base, payeePattern: "CK (\\w+)" }, header).payeePattern).toBe("CK (\\w+)");
-    expect(() => validateSpec({ ...base, payeePattern: "(" }, header)).toThrow(/not a valid/);
-    expect(() => validateSpec({ ...base, payeePattern: "(a+)+$" }, header)).toThrow(/repeats a repeated group/);
-    expect(() => validateSpec({ ...base, payeePattern: "x".repeat(121) }, header)).toThrow(/120 characters/);
+    for (const p of ["CK (\\w+)", "(a|a)+$", "(a+)+$"]) {
+      expect(() => validateSpec({ ...base, payeePattern: p }, header)).toThrow(/not accepted/);
+      expect(() => validateSpec({ ...DEMO_BANK_SPEC, referencePattern: p }, header)).toThrow(/not accepted/);
+    }
+    expect(validateSpec({ ...DEMO_BANK_SPEC, payeePattern: "" }, header).payeePattern).toBeUndefined();
+  });
+  it("refuses a file wider than any bank export before scoring its cells", () => {
+    const wide = Array.from({ length: 5000 }, (_, i) => `c${i}`).join(",") + "\n" + "1,".repeat(4999) + "1\n";
+    const t = Date.now();
+    expect(() => detectColumns(wide)).toThrow(/5000 columns/);
+    expect(Date.now() - t).toBeLessThan(1000);
   });
   it("refuses a bad date order, outgoing mode or header line", () => {
     expect(() => validateSpec({ ...DEMO_BANK_SPEC, dateFormat: "DDMM" }, header)).toThrow(/Date order/);

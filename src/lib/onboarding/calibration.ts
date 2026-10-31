@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { onboardingMarks, onboardingResults, onboardingSuggestions } from "../db/schema";
+import { onboardingMarks, onboardingResults, onboardingSuggestions, rateCards } from "../db/schema";
 import { newId, now } from "../domain/ids";
 import { audit } from "../domain/stateMachine";
 import type { Permission } from "../auth/roles";
@@ -276,6 +276,10 @@ export function applySuggestion(db: Db, businessId: string, actor: Actor, id: un
   let message: string;
   if (kind === "rate_card") {
     if (!payload.vendorId || !payload.proposed) throw new Error("This suggestion has no supplier to add a rate card for");
+    // The suggestion was made when the supplier had no rate card. If one was added since, a person set it on purpose:
+    // applying the old suggestion would close or overlap it with a rate taken from history. Change it on the supplier page.
+    const existing = db.select({ id: rateCards.id }).from(rateCards).where(and(eq(rateCards.businessId, businessId), eq(rateCards.vendorId, payload.vendorId))).all();
+    if (existing.length) throw new Error(`${payload.vendorName ?? "This supplier"} has a rate card now. Change it on the supplier page, or dismiss this suggestion.`);
     const r = input.rate ?? {};
     rateCardId = setRate(db, businessId, actor, payload.vendorId, {
       unit: r.unit ?? payload.proposed.unit,

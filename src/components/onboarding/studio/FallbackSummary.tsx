@@ -50,7 +50,7 @@ export function FallbackSummary({ data, note }: { data: DashboardData; note?: st
           ))}
         </ul>
         <h2 className="mt-6 text-base font-semibold">Holds that turned out fine</h2>
-        <p className="mt-1 text-ink-soft">{falseHoldCaption(weeks, target)}</p>
+        <p className="mt-1 text-ink-soft">{falseHoldCaption(data.weekly_false_holds, target)}</p>
         <ul className="mt-2 divide-y hairline">
           {weeks.map((w) => (
             <li key={w.week_start} className="flex justify-between gap-3 py-2">

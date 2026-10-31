@@ -41,10 +41,23 @@ export function falseHoldPoints(rows: FalseHoldWeek[], max = MAX_WEEKS): FalseHo
 /** The target the rows carry (they all carry the same one), or 10%. */
 export const targetOf = (rows: FalseHoldWeek[]) => rows.find((r) => Number.isFinite(r.target_rate))?.target_rate ?? DEFAULT_TARGET;
 
-/** Weeks in a row, counting back from the latest reviewed week, that were under target. */
-export function underTargetStreak(points: FalseHoldPoint[]): number {
+/** A week counts once this many holds in it were reviewed. Same as MIN_REVIEWED_PER_WEEK in lib/onboarding/readiness.ts. */
+export const MIN_REVIEWED_PER_WEEK = 3;
+
+/**
+ * Weeks in a row under target, counted exactly as the readiness check counts them (consecutiveWeeksUnder): trailing
+ * weeks not yet reviewed enough are skipped, then the run counts back until a week that is not under target, so the
+ * chart's caption and the gauge never disagree.
+ */
+export function underTargetStreak(rows: FalseHoldWeek[]): number {
+  const weeks = [...rows].sort((a, b) => a.week_start.localeCompare(b.week_start));
+  let i = weeks.length - 1;
+  while (i >= 0 && weeks[i].reviewed < MIN_REVIEWED_PER_WEEK) i--;
   let n = 0;
-  for (let i = points.length - 1; i >= 0 && points[i].under; i--) n++;
+  while (i >= 0 && weeks[i].under_target) {
+    n++;
+    i--;
+  }
   return n;
 }
 
@@ -55,13 +68,13 @@ export function yMax(points: FalseHoldPoint[], target: number): number {
 }
 
 /** One plain sentence under the chart. */
-export function falseHoldCaption(points: FalseHoldPoint[], target: number): string {
+export function falseHoldCaption(rows: FalseHoldWeek[], target: number): string {
   const t = percent(target);
-  if (!points.length) return `Mark a few held payments to see how often a hold turns out fine. The target is under ${t}.`;
-  const streak = underTargetStreak(points);
+  if (!rows.some((r) => r.reviewed >= MIN_REVIEWED_PER_WEEK)) return `Mark a few held payments to see how often a hold turns out fine. The target is under ${t}.`;
+  const streak = underTargetStreak(rows);
   if (streak >= 2) return `Under the ${t} target for ${streak} weeks in a row.`;
   if (streak === 1) return `Under the ${t} target last week. Autopilot needs 2 weeks in a row.`;
-  return `Above the ${t} target last week: some holds were good payments.`;
+  return `Not under the ${t} target last week: some holds were good payments, or too few were reviewed.`;
 }
 
 /** Plot coordinates for a chart of `width` x `height` with the given insets. */

@@ -11,7 +11,21 @@ export const RECHECK_TIMEOUT_MS = 150_000;
  * per payment, which must never happen inside the server, and it must read with the rules only. The child gets only
  * PATH, NODE_ENV and TZ from this process plus AI_MODE=mock and RAIL_MODE=mock: no keys, no database path, no rail.
  */
-export function runRecheckIsolated(input: Omit<RecheckInput, "db">, opts: { timeoutMs?: number; cwd?: string } = {}): Promise<RecheckRow[]> {
+/** One re-check at a time per server: each is a full Node process for up to RECHECK_TIMEOUT_MS. */
+let running = 0;
+export const MAX_CONCURRENT_RECHECKS = 1;
+
+export async function runRecheckIsolated(input: Omit<RecheckInput, "db">, opts: { timeoutMs?: number; cwd?: string } = {}): Promise<RecheckRow[]> {
+  if (running >= MAX_CONCURRENT_RECHECKS) throw new Error("another re-check is running; try again in a minute");
+  running++;
+  try {
+    return await spawnRecheck(input, opts);
+  } finally {
+    running--;
+  }
+}
+
+function spawnRecheck(input: Omit<RecheckInput, "db">, opts: { timeoutMs?: number; cwd?: string }): Promise<RecheckRow[]> {
   const cwd = opts.cwd ?? process.cwd();
   const worker = path.join(cwd, "scripts", "recheck-worker.ts");
   const env: NodeJS.ProcessEnv = {
