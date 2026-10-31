@@ -11,6 +11,7 @@ import { ROLE_LABEL } from "@/lib/auth/roles";
 import { getDb } from "@/lib/db";
 import { pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
 import { listRuns } from "@/lib/engine/runs";
+import { TourMount } from "@/components/tour/TourMount";
 
 /* Geist and Geist Mono (SIL OFL), vendored by the geist package so the build needs no network. Covers Vietnamese. */
 const fontVars = `${GeistSans.variable} ${GeistMono.variable}`;
@@ -84,6 +85,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           >
             {children}
           </Shell>
+          <TourMount />
         </ToastProvider>
       </body>
     </html>

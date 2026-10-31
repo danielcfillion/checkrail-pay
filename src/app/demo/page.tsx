@@ -13,6 +13,9 @@ import { CheckLine } from "@/components/CheckLine";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { EmptyState, Money, PageHeader, RailTag, StatePill } from "@/components/ui";
+import { TakeTourButton } from "@/components/tour/TakeTourButton";
+import { tourEnabled } from "@/components/tour/enabled";
+import { sandboxActive } from "@/lib/sandbox/server";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Demo guide" };
@@ -180,6 +183,8 @@ export default function DemoPage() {
   ];
 
   const storyMissing = !phuong && !dupe && !maria && !ana;
+  const mine = sandboxActive();
+  const tour = tourEnabled();
 
   return (
     <DemoProgressProvider steps={steps.map((x) => ({ done: Boolean(x.done), visit: x.visit }))} seededAt={seededAt}>
@@ -187,7 +192,12 @@ export default function DemoPage() {
       <PageHeader
         title="Demo guide"
         lede="Checkrail Pay checks every supplier payment before money moves. Ten steps, about ten minutes. Each step says what to do and what happens. Everything runs on simulated rails with the rule-based reader, so no keys are needed."
-        actions={<ResetDemoButton />}
+        actions={
+          <>
+            {tour ? <TakeTourButton primary /> : null}
+            <ResetDemoButton mine={mine} />
+          </>
+        }
       >
         <DemoProgressCount />
         <p className="mt-2 text-sm">
@@ -205,14 +215,24 @@ export default function DemoPage() {
       <section className="mb-6 panel p-4">
         <h2 className="font-medium">Before you start</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-soft">
-          <li>This demo is shared by everyone using it. If Rosa&apos;s trip sheet comes out Blocked as a duplicate, someone else already uploaded it: press Reset demo and start again.</li>
-          <li>The hosted copy also puts the opening requests back after 30 minutes without use.</li>
+          {mine ? (
+            <>
+              <li>This copy of the demo is yours: other visitors do not see your clicks, and you do not see theirs. Start over gives you a fresh copy at any time.</li>
+              <li>Your copy is deleted after a while without use. Come back later and you start from the four opening requests.</li>
+            </>
+          ) : (
+            <>
+              <li>This demo is shared by everyone using it. If Rosa&apos;s trip sheet comes out Blocked as a duplicate, someone else already uploaded it: press Reset demo and start again.</li>
+              <li>The hosted copy also puts the opening requests back after 30 minutes without use.</li>
+            </>
+          )}
+          {tour ? <li>Short of time? Take the tour: eight steps, each on the page it is about.</li> : null}
           <li>The role switch (in the sidebar, or under More on a phone) lets you act as Minh (approver), Lan (AP clerk) or Thu (accountant) to see what each role may do.</li>
         </ul>
       </section>
 
       {storyMissing ? (
-        <EmptyState title="The story is not loaded" body="Reset the demo to load the four opening requests and three months of history." action={<ResetDemoButton />} />
+        <EmptyState title="The story is not loaded" body="Reset the demo to load the four opening requests and three months of history." action={<ResetDemoButton mine={mine} />} />
       ) : (
         <ol className="space-y-3">
           {steps.map((s, i) => (
