@@ -3,6 +3,7 @@ import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
+import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
 
 /** Set on public vendor pages so the layout renders them without the app's navigation or business data. */
 export const PUBLIC_HEADER = "x-checkrail-public";
@@ -39,21 +40,37 @@ function tooMany(retryMs: number) {
   return new NextResponse("Too many attempts. Wait a few minutes and try again.", { status: 429, headers: { "Retry-After": String(Math.ceil(retryMs / 1000)) } });
 }
 
+/*
+ * Sandbox mode (CHECKRAIL_SANDBOX=1, simulated rails only; src/lib/sandbox/settings.ts): each browser gets a signed,
+ * httpOnly cookie naming its own copy of the demo database, and every request it makes carries that token on to the
+ * server in SANDBOX_HEADER, where the database seam picks the copy. A client-sent copy of the header is always
+ * replaced. Off, nothing here changes.
+ */
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
+  // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token) are no visitor: no copy for them.
+  const serverToServer = path === "/api/webhooks/paypal" || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
+  const sandbox = !serverToServer && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
   const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
   const headers = new Headers(req.headers);
-  for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
+  for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER, SANDBOX_HEADER]) headers.delete(h);
+  if (sandbox) headers.set(SANDBOX_HEADER, sandbox.token);
+  const https = req.nextUrl.protocol === "https:" || req.headers.get("x-forwarded-proto")?.split(",")[0].trim() === "https";
+  const pass = () => {
+    const res = NextResponse.next({ request: { headers } });
+    if (sandbox?.fresh) res.cookies.set(SANDBOX_COOKIE, sandbox.token, { httpOnly: true, sameSite: "lax", secure: https, path: "/", maxAge: SANDBOX_COOKIE_MAX_AGE });
+    return res;
+  };
 
-  if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
+  if (path === "/api/webhooks/paypal") return pass();
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
-  if (path === "/api/mcp") return NextResponse.next({ request: { headers } });
+  if (path === "/api/mcp") return pass();
   // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
-  if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return NextResponse.next({ request: { headers } });
+  if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return pass();
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
     if (overLimit(tokenHits, ip, TOKEN_LIMIT, TOKEN_WINDOW_MS)) return tooMany(TOKEN_WINDOW_MS);
     headers.set(PUBLIC_HEADER, "1");
-    return NextResponse.next({ request: { headers } });
+    return pass();
   }
 
   const users = configuredUsers();
@@ -104,7 +121,7 @@ export function middleware(req: NextRequest) {
   }
   headers.set(ACTOR_HEADER, actor);
   headers.set(ROLE_HEADER, role);
-  return NextResponse.next({ request: { headers } });
+  return pass();
 }
 
 export const config = {

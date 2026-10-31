@@ -16,8 +16,8 @@ services:
         value: "22"
       - key: DATABASE_PATH
         value: ./data/checkrail-pay.sqlite
-      # One shared demo database. Basic auth keeps the open internet out (put the credential in the Devpost
-      # testing instructions). It does not separate judges from each other: that is what the idle reset is for.
+      # Basic auth keeps the open internet out (put the credential in the Devpost testing instructions). It does not
+      # separate judges from each other: CHECKRAIL_SANDBOX below does, with a copy of the demo per browser.
       # Logins with roles, e.g. judge:<pw>:admin. With personas on, one login can act as each of the demo team.
       - key: CHECKRAIL_USERS
         sync: false
@@ -31,8 +31,21 @@ services:
       # A Vietnamese source account so the judge can see a VND bank file being built (demo account, mock rails).
       - key: BANK_FILE_SOURCE_ACCOUNT
         value: VCB 0071000000000 Ridgeline Vietnam (demo)
-      # After 30 minutes with no one clicking, the heartbeat restores the four opening requests, so a judge who
-      # arrives later starts clean. Two judges in the same half hour still share state; Reset demo puts it back.
+      # A private copy of the demo per visitor (docs/JUDGES.md): each browser gets its own copy of the seeded
+      # database, so two judges at once never see each other's clicks. Simulated rails only; refused otherwise.
+      # At most 50 copies, each deleted after 120 minutes idle (when full, the one idle longest goes). The copies
+      # live in ./data/sandboxes, which the free plan's disk loses on restart, as it should.
+      - key: CHECKRAIL_SANDBOX
+        value: "1"
+      - key: CHECKRAIL_SANDBOX_MAX
+        value: "50"
+      - key: CHECKRAIL_SANDBOX_TTL_MINUTES
+        value: "120"
+      # Signs the sandbox cookie. Render generates a random value once.
+      - key: CHECKRAIL_SANDBOX_SECRET
+        generateValue: true
+      # Only used with CHECKRAIL_SANDBOX off (one shared database): after 30 minutes with no one clicking, the
+      # heartbeat restores the four opening requests.
       - key: DEMO_AUTO_RESET_MINUTES
         value: "30"
       # mock = runs with zero credentials; live = real PayPal sandbox (set the keys below).
