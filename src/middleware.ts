@@ -8,6 +8,12 @@ import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
 export const PUBLIC_HEADER = "x-checkrail-public";
 
 /**
+ * The inbound REST API's routes, exactly: /api/v1/departures, /api/v1/requests, /api/v1/requests/<id>,
+ * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login.
+ */
+export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json)(?:\/[A-Za-z0-9_-]{1,64})?$/;
+
+/**
  * Who is asking, on every request.
  *
  *  - Logins configured (CHECKRAIL_USERS, or the single CHECKRAIL_BASIC_AUTH which is an admin): every page and
@@ -48,6 +54,8 @@ export function middleware(req: NextRequest) {
   if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
   if (path === "/api/mcp") return NextResponse.next({ request: { headers } });
+  // Other software holds an API key, not a login; each /api/v1 route checks the key itself (src/lib/api/http.ts).
+  if (API_V1_PATH.test(path)) return NextResponse.next({ request: { headers } });
   // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
   if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return NextResponse.next({ request: { headers } });
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
@@ -110,5 +118,6 @@ export function middleware(req: NextRequest) {
 export const config = {
   // /api/mcp is left out entirely: the route checks the agent key itself, and a matched request has its body copied
   // (up to 10 MB) for the middleware before the route's own 64 KB limit can refuse it (agent guard review AG-3).
-  matcher: ["/((?!_next/static/|api/mcp$).*)"],
+  // The /api/v1 routes (API_V1_PATH) are left out the same way, and only those: each checks its API key and body cap.
+  matcher: ["/((?!_next/static/|api/mcp$|api/v1/(?:departures|requests|vendors|openapi\\.json)(?:/[A-Za-z0-9_-]{1,64})?$).*)"],
 };

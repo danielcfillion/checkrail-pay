@@ -1,0 +1,414 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// An in-memory database for the routes' getDb() singleton. Must be set before config loads.
+vi.hoisted(() => {
+  process.env.DATABASE_PATH = ":memory:";
+});
+
+import { eq } from "drizzle-orm";
+import { NextRequest } from "next/server";
+import * as departuresRoute from "./departures/route";
+import * as requestsRoute from "./requests/route";
+import * as requestRoute from "./requests/[id]/route";
+import * as vendorsRoute from "./vendors/route";
+import * as openapiRoute from "./openapi.json/route";
+import { getDb } from "@/lib/db";
+import { apiDepartureRefs, apiIdempotency, apiKeyUsage, apiRequests, auditEntries, evidence, obligations, paymentAttempts, settlements, vendors } from "@/lib/db/schema";
+import { DEMO_BUSINESS_ID, seedDemo } from "@/lib/demo/seed";
+import { setAutonomy } from "@/lib/engine/autopilot";
+import { authenticateApiKey, configuredApiKeys } from "@/lib/api/keys";
+import { resetApiThrottles } from "@/lib/api/http";
+import { API_V1_PATH, middleware } from "@/middleware";
+
+const S = (n: string) => `api-test-secret-${n}-0123456789abcdef`; // test-only placeholders
+const KEYS = [
+  `bookings:${S("b")}:departures:write`,
+  `erp:${S("e")}:requests:write+requests:read+vendors:read`,
+  `ledger:${S("l")}:requests:write+requests:attest+requests:read`,
+  `lookup:${S("v")}:vendors:read`,
+].join(",");
+const BASE = "http://checkrail.test/api/v1";
+const auth = (n: string) => ({ authorization: `Bearer ${S(n)}` });
+
+type Json = Record<string, unknown> & { error?: { code: string; message: string; details?: Array<{ field: string; message: string }> } };
+
+function req(method: string, path: string, opts: { body?: unknown; headers?: Record<string, string> } = {}) {
+  const hasBody = opts.body !== undefined;
+  return new Request(`${BASE}${path}`, {
+    method,
+    body: hasBody ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body)) : undefined,
+    headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...opts.headers },
+  });
+}
+async function send(handler: (r: Request) => Promise<Response> | Response, r: Request) {
+  const res = await handler(r);
+  return { status: res.status, headers: res.headers, json: (await res.json()) as Json };
+}
+const postDepartures = (body: unknown, key = "b", headers: Record<string, string> = {}) => send(departuresRoute.POST, req("POST", "/departures", { body, headers: { ...auth(key), ...headers } }));
+const getDepartures = (q = "", key = "b") => send(departuresRoute.GET, req("GET", `/departures${q}`, { headers: auth(key) }));
+const postRequest = (body: unknown, idem: string | null = `idem-${Math.random().toString(36).slice(2)}`, key = "e", headers: Record<string, string> = {}) =>
+  send(requestsRoute.POST, req("POST", "/requests", { body, headers: { ...auth(key), ...(idem ? { "idempotency-key": idem } : {}), ...headers } }));
+const getRequest = async (id: string, key = "e") => {
+  const res = await requestRoute.GET(req("GET", `/requests/${id}`, { headers: auth(key) }), { params: Promise.resolve({ id }) });
+  return { status: res.status, json: (await res.json()) as Json };
+};
+const listRequests = (q = "", key = "e") => send(requestsRoute.GET, req("GET", `/requests${q}`, { headers: auth(key) }));
+const searchVendors = (q = "", key = "v") => send(vendorsRoute.GET, req("GET", `/vendors${q}`, { headers: auth(key) }));
+
+const dep = (externalId: string, code: string, services: unknown[], dates: [string, string] = ["2026-10-12", "2026-10-14"]) => ({ external_id: externalId, code, start_date: dates[0], end_date: dates[1], guests: 10, services });
+const phuongVan = (q: number) => ({ vendor_id: "ven_phuong", unit: "vehicle_day", quantity: q });
+
+beforeEach(async () => {
+  const db = getDb();
+  await seedDemo(db, { history: false });
+  for (const t of [apiIdempotency, apiDepartureRefs, apiRequests, apiKeyUsage]) db.delete(t).run();
+  resetApiThrottles();
+  vi.stubEnv("CHECKRAIL_API_KEYS", KEYS);
+  vi.stubEnv("CHECKRAIL_API_RATE_LIMIT", "");
+  vi.stubEnv("PAYPAL_ENV", "sandbox");
+});
+afterEach(() => vi.unstubAllEnvs());
+
+describe("API keys", () => {
+  it("reads name:secret:scopes entries, where scopes contain colons, and refuses anything malformed", () => {
+    expect(configuredApiKeys({})).toEqual([]);
+    expect(configuredApiKeys({ CHECKRAIL_API_KEYS: KEYS })!.map((k) => [k.name, k.scopes])).toEqual([
+      ["bookings", ["departures:write"]],
+      ["erp", ["requests:write", "requests:read", "vendors:read"]],
+      ["ledger", ["requests:write", "requests:attest", "requests:read"]],
+      ["lookup", ["vendors:read"]],
+    ]);
+    const s = S("x");
+    for (const bad of [`b:${s}:vendors:read`, `bot:short:vendors:read`, `bot:${s}:vendors:write`, `bot:${s}:`, `bot:${s}`, `bot:${s}:requests:attest`, `bot:${s}:vendors:read+vendors:read`, `bot:${s}:vendors:read,bot:${s}y:vendors:read`, `one:${s}:vendors:read,two:${s}:vendors:read`, `Bot:${s}:vendors:read`]) {
+      expect(configuredApiKeys({ CHECKRAIL_API_KEYS: bad }), bad).toBeNull();
+    }
+  });
+
+  it("needs a longer secret where real money can move, and matches only the exact bearer token", () => {
+    const k = `bot:${"x".repeat(28)}:vendors:read`;
+    expect(configuredApiKeys({ CHECKRAIL_API_KEYS: k })).not.toBeNull();
+    expect(configuredApiKeys({ CHECKRAIL_API_KEYS: k, PAYPAL_ENV: "live" })).toBeNull();
+    const keys = configuredApiKeys({ CHECKRAIL_API_KEYS: KEYS })!;
+    expect(authenticateApiKey(`Bearer ${S("e")}`, keys)?.name).toBe("erp");
+    expect(authenticateApiKey(`Bearer ${S("e")}x`, keys)).toBeNull();
+    expect(authenticateApiKey(`Basic ${S("e")}`, keys)).toBeNull();
+    expect(authenticateApiKey(null, keys)).toBeNull();
+  });
+});
+
+describe("authentication", () => {
+  it("refuses a missing or wrong key with 401 in the one error shape", async () => {
+    const none = await send(vendorsRoute.GET, req("GET", "/vendors"));
+    expect(none.status).toBe(401);
+    expect(none.json.error?.code).toBe("unauthorized");
+    expect(none.headers.get("www-authenticate")).toMatch(/Bearer/);
+    const wrong = await send(vendorsRoute.GET, req("GET", "/vendors", { headers: { authorization: `Bearer ${S("v")}x` } }));
+    expect(wrong.status).toBe(401);
+    expect(Object.keys(wrong.json)).toEqual(["error"]);
+    expect(Object.keys(wrong.json.error!).sort()).toEqual(["code", "message"]);
+  });
+
+  it("an agent key is not an API key", async () => {
+    vi.stubEnv("CHECKRAIL_AGENT_KEYS", `assistant:${S("agent")}:check+request`);
+    expect((await searchVendors("", "agent")).status).toBe(401);
+  });
+
+  it("refuses every call when the key list is malformed", async () => {
+    vi.stubEnv("CHECKRAIL_API_KEYS", `${KEYS},nonsense`);
+    const r = await searchVendors();
+    expect(r.status).toBe(503);
+    expect(r.json.error?.code).toBe("api_keys_malformed");
+    expect((await postDepartures({ departures: [dep("bk-1", "CB-3D-1012", [])] })).status).toBe(503);
+  });
+
+  it("refuses a key without the scope the call needs", async () => {
+    const r = await searchVendors("", "b");
+    expect(r.status).toBe(403);
+    expect(r.json.error?.code).toBe("insufficient_scope");
+    expect((await postDepartures({ departures: [dep("bk-1", "CB-3D-1012", [])] }, "e")).status).toBe(403);
+    expect((await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD" }, "idem-scope-1", "b")).status).toBe(403);
+    expect((await listRequests("", "v")).status).toBe(403);
+  });
+
+  it("refuses a call from another site's page, and anything but JSON", async () => {
+    expect((await send(vendorsRoute.GET, req("GET", "/vendors", { headers: { ...auth("v"), origin: "https://evil.example" } }))).status).toBe(403);
+    const plain = await send(departuresRoute.POST, new Request(`${BASE}/departures`, { method: "POST", body: "x", headers: { ...auth("b"), "content-type": "text/plain" } }));
+    expect(plain.status).toBe(415);
+  });
+
+  it("limits each key per minute, and other keys are unaffected", async () => {
+    vi.stubEnv("CHECKRAIL_API_RATE_LIMIT", "3");
+    for (let n = 0; n < 3; n++) expect((await searchVendors()).status).toBe(200);
+    const over = await searchVendors();
+    expect(over.status).toBe(429);
+    expect(over.json.error?.code).toBe("rate_limited");
+    expect(over.headers.get("retry-after")).toBe("60");
+    expect((await searchVendors("", "e")).status).toBe(200);
+  });
+
+  it("locks out an address after many wrong keys", async () => {
+    for (let n = 0; n < 20; n++) await searchVendors("", `wrong${n}`);
+    expect((await searchVendors()).status).toBe(200);
+    await searchVendors("", "wrong20");
+    // Over the limit, even the right key waits: guessing from this address stops for the window.
+    const r = await searchVendors();
+    expect(r.status).toBe(429);
+    expect(r.json.error?.code).toBe("too_many_bad_keys");
+  });
+
+  it("records when each key was last used, never the secret", async () => {
+    await searchVendors("?q=maria");
+    await searchVendors();
+    const rows = getDb().select().from(apiKeyUsage).all();
+    expect(rows.map((r) => [r.keyName, r.calls, r.lastPath])).toEqual([["lookup", 2, "GET /api/v1/vendors"]]);
+    expect(JSON.stringify(rows)).not.toContain(S("v"));
+  });
+});
+
+describe("the middleware", () => {
+  it("lets exactly the /api/v1 routes through to their own bearer auth, and nothing else", () => {
+    vi.stubEnv("CHECKRAIL_USERS", "judge:a-long-test-password:admin");
+    const through = (p: string) => middleware(new NextRequest(`http://checkrail.test${p}`)).headers.get("x-middleware-next") === "1";
+    for (const p of ["/api/v1/departures", "/api/v1/requests", "/api/v1/requests/obl_abc123", "/api/v1/vendors", "/api/v1/openapi.json"]) {
+      expect(API_V1_PATH.test(p), p).toBe(true);
+      expect(through(p), p).toBe(true);
+    }
+    for (const p of ["/settings", "/api/v1", "/api/v1/", "/api/v1/other", "/api/v1/requests/a/b", "/api/v1/vendorsx", "/api/v2/vendors"]) {
+      expect(API_V1_PATH.test(p), p).toBe(false);
+      expect(through(p), p).toBe(false);
+    }
+  });
+});
+
+describe("validation", () => {
+  it("answers bad input with 422 and the field, in the one error shape", async () => {
+    const r = await postDepartures({ departures: [{ external_id: "bk-1", code: "bad code!", start_date: "2026-02-30", end_date: "2026-10-01", guests: -1, services: [{ vendor: "Nobody", unit: "week", quantity: 0 }], colour: "red" }] });
+    expect(r.status).toBe(422);
+    expect(r.json.error?.code).toBe("validation_failed");
+    expect(r.json.error?.details?.map((d) => d.field).sort()).toEqual(
+      ["departures[0].code", "departures[0].colour", "departures[0].guests", "departures[0].services[0].quantity", "departures[0].services[0].unit", "departures[0].services[0].vendor", "departures[0].start_date"].sort(),
+    );
+    const money = await postRequest({ payee: "Maria Santos", amount: "$45", currency: "EUR" });
+    expect(money.status).toBe(422);
+    expect(money.json.error?.details?.[0]?.field).toMatch(/currency|amount/);
+    expect((await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "has spaces in it" })).json.error?.details?.[0]?.field).toBe("reference");
+    expect((await searchVendors("?limit=0")).status).toBe(422);
+    expect((await getDepartures("?since=yesterday")).status).toBe(422);
+  });
+
+  it("refuses a body that is not JSON, or too large", async () => {
+    const bad = await send(departuresRoute.POST, new Request(`${BASE}/departures`, { method: "POST", body: "{nope", headers: { ...auth("b"), "content-type": "application/json" } }));
+    expect(bad.status).toBe(400);
+    expect(bad.json.error?.code).toBe("invalid_json");
+    const big = await send(departuresRoute.POST, new Request(`${BASE}/departures`, { method: "POST", body: "{}", headers: { ...auth("b"), "content-type": "application/json", "content-length": String(50 * 1024 * 1024) } }));
+    expect(big.status).toBe(413);
+    const doc = { name: "huge.txt", content_type: "text/plain", data: Buffer.alloc(2 * 1024 * 1024 + 10, 65).toString("base64") };
+    const huge = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", documents: [doc] });
+    expect(huge.status).toBe(422);
+    expect(huge.json.error?.details?.[0]?.field).toBe("documents[0].data");
+  });
+});
+
+describe("idempotency", () => {
+  const body = { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7001", description: "Invoice INV-MS-7001, one day guiding, USD 45.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-7001", amount: "45", reference: "INV-MS-7001", excerpt: "Maria Santos, one day guiding, USD 45." }] };
+
+  it("is required for a payment request", async () => {
+    const r = await postRequest(body, null);
+    expect(r.status).toBe(400);
+    expect(r.json.error?.code).toBe("idempotency_key_required");
+    expect((await postRequest(body, "short")).json.error?.code).toBe("invalid_idempotency_key");
+  });
+
+  it("replays the stored answer for a retry, and creates one request", async () => {
+    const before = getDb().select().from(obligations).all().length;
+    const first = await postRequest(body, "erp-call-0001");
+    expect(first.status).toBe(201);
+    const again = await postRequest({ ...body, evidence: [{ ...body.evidence[0] }] }, "erp-call-0001");
+    expect(again.status).toBe(201);
+    expect(again.headers.get("idempotency-replayed")).toBe("true");
+    expect(again.json).toEqual(first.json);
+    expect(getDb().select().from(obligations).all().length).toBe(before + 1);
+  });
+
+  it("refuses the same key with a different body", async () => {
+    await postRequest(body, "erp-call-0002");
+    const other = await postRequest({ ...body, amount: "450" }, "erp-call-0002");
+    expect(other.status).toBe(422);
+    expect(other.json.error?.code).toBe("idempotency_conflict");
+  });
+
+  it("leaves the key free after a refused call, and keys are per API key", async () => {
+    expect((await postRequest({ ...body, currency: "EUR" }, "erp-call-0003")).status).toBe(422);
+    expect((await postRequest(body, "erp-call-0003")).status).toBe(201);
+    expect((await postRequest(body, "erp-call-0003", "l")).headers.get("idempotency-replayed")).toBeNull();
+  });
+
+  it("is honoured on the booking feed too", async () => {
+    const b = { departures: [dep("bk-77", "CB-3D-1077", [phuongVan(2)])] };
+    const first = await postDepartures(b, "b", { "idempotency-key": "feed-batch-0001" });
+    const again = await postDepartures(b, "b", { "idempotency-key": "feed-batch-0001" });
+    expect(again.headers.get("idempotency-replayed")).toBe("true");
+    expect(again.json).toEqual(first.json);
+    expect((await postDepartures({ departures: [dep("bk-78", "CB-3D-1078", [])] }, "b", { "idempotency-key": "feed-batch-0001" })).status).toBe(422);
+  });
+});
+
+describe("the booking feed", () => {
+  it("creates departures by external id, updates them when sent again, and reads them back", async () => {
+    const r = await postDepartures({ departures: [dep("bokun-5501", "cb-3d-1012", [phuongVan(3), { vendor: "Linh Family Homestay", unit: "guest_night", quantity: 20 }])] });
+    expect(r.status).toBe(200);
+    expect(r.json.departures).toEqual([expect.objectContaining({ external_id: "bokun-5501", code: "CB-3D-1012", result: "created" })]);
+    const again = await postDepartures({ departures: [{ ...dep("bokun-5501", "CB-3D-1012", [phuongVan(4)]), guests: 12 }] });
+    expect(again.json.departures).toEqual([expect.objectContaining({ result: "updated" })]);
+    const listed = (await getDepartures("?since=2026-10-01")).json.departures as Array<Record<string, unknown>>;
+    const mine = listed.find((d) => d.external_id === "bokun-5501")!;
+    expect(mine).toMatchObject({ code: "CB-3D-1012", guests: 12, source: "booking_system", services: [{ vendor_id: "ven_phuong", vendor: "Phuong Transport", unit: "vehicle_day", quantity: 4 }] });
+    expect(listed.every((d) => (d.start_date as string) >= "2026-10-01")).toBe(true);
+  });
+
+  it("takes over a departure already on file by code, and refuses a code another external id holds", async () => {
+    // HG-4D-0927 comes from the demo's manifest.
+    const r = await postDepartures({ departures: [dep("bokun-0927", "HG-4D-0927", [phuongVan(4)], ["2026-09-27", "2026-09-30"])] });
+    expect(r.json.departures).toEqual([expect.objectContaining({ result: "updated" })]);
+    const clash = await postDepartures({ departures: [dep("bokun-other", "HG-4D-0927", [phuongVan(40)], ["2026-09-27", "2026-09-30"]), dep("bokun-new", "CB-3D-1099", [])] });
+    expect(clash.status).toBe(409);
+    expect(clash.json.error?.code).toBe("departure_conflict");
+    // All or nothing: the other departure in the batch was not saved either.
+    expect(((await getDepartures()).json.departures as Array<{ code: string }>).some((d) => d.code === "CB-3D-1099")).toBe(false);
+  });
+
+  it("is audited as the integration", async () => {
+    await postDepartures({ departures: [dep("bokun-5501", "CB-3D-1012", [phuongVan(3)])] });
+    const row = getDb().select().from(auditEntries).where(eq(auditEntries.action, "departures.upserted")).get()!;
+    expect(row.actor).toBe("api:bookings");
+    expect(JSON.parse(row.detailJson!)).toMatchObject({ created: 1, updated: 0, codes: ["CB-3D-1012"] });
+  });
+});
+
+describe("payment requests", () => {
+  const phuong = (amount: string, ref: string) => ({
+    payee: "Phuong Transport",
+    amount,
+    currency: "USD",
+    reference: ref,
+    description: `Van and driver for ${ref}, 3 vehicle-days.`,
+    evidence: [{ kind: "invoice", label: `Invoice for ${ref}`, amount, reference: ref, excerpt: `Phuong Transport, ${ref}, 3 vehicle-days, USD ${amount}.` }],
+  });
+
+  it("are judged against the departure the feed sent, by the existing rate card rule", async () => {
+    await postDepartures({ departures: [dep("bokun-1012", "CB-3D-1012", [phuongVan(3)]), dep("bokun-1013", "CB-3D-1013", [phuongVan(3)])] });
+    const right = await postRequest(phuong("600", "CB-3D-1012"));
+    expect(right.status).toBe(201);
+    expect(right.json.rules_failed).not.toContain("expected_amount");
+    const inflated = await postRequest(phuong("900", "CB-3D-1013"));
+    expect(inflated.status).toBe(201);
+    expect(inflated.json.verdict).toBe("block");
+    expect(inflated.json.status).toBe("blocked");
+    expect(inflated.json.rules_failed).toContain("expected_amount");
+    expect((inflated.json.reasons as string[]).join(" ")).toMatch(/CB-3D-1013 say USD 600\.00 \(3 vehicle-days x USD 200\.00\)/);
+  });
+
+  it("are checked again when the departure arrives after the request", async () => {
+    const early = await postRequest(phuong("900", "CB-3D-1014"));
+    expect(early.json.rules_failed).not.toContain("expected_amount");
+    const r = await postDepartures({ departures: [dep("bokun-1014", "CB-3D-1014", [phuongVan(3)])] });
+    expect(r.json.rechecked).toBeGreaterThanOrEqual(1);
+    const now = await getRequest(early.json.id as string);
+    expect(now.json.status).toBe("blocked");
+    expect(now.json.rules_failed).toContain("expected_amount");
+  });
+
+  it("are recorded as coming from the integration, with its say-so unless it may attest", async () => {
+    const db = getDb();
+    const plain = await postRequest(phuong("600", "INV-PT-8001"));
+    const created = db.select().from(auditEntries).where(eq(auditEntries.obligationId, plain.json.id as string)).all().find((a) => a.action === "obligation.created")!;
+    expect(created.actor).toBe("api:erp");
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, plain.json.id as string)).all().map((e) => e.provenance)).toEqual(["operator"]);
+    const attested = await postRequest(phuong("600", "INV-PT-8002"), undefined, "l");
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, attested.json.id as string)).all().map((e) => e.provenance)).toEqual(["system"]);
+    const o = db.select().from(obligations).where(eq(obligations.id, attested.json.id as string)).get()!;
+    expect([o.vendorId, o.amountMinor, o.currency, o.sourceRef]).toEqual(["ven_phuong", 60_000, "USD", "INV-PT-8002"]);
+  });
+
+  it("carry an attached document through the clerk's upload path", async () => {
+    const text = "Invoice INV-MS-7100\nMaria Santos\nOne day guiding\nTotal USD 45.00";
+    const r = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7100", documents: [{ name: "invoice.txt", content_type: "text/plain", data: Buffer.from(text).toString("base64"), kind: "invoice" }] });
+    expect(r.status).toBe(201);
+    const rows = getDb().select().from(evidence).where(eq(evidence.obligationId, r.json.id as string)).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].attachmentId).toBeTruthy();
+    // A .txt is as easy to type as the form, so it never counts as an independent document.
+    expect(rows[0].provenance).toBe("operator");
+  });
+
+  it("never expose payout details, contact details or another key's requests", async () => {
+    const r = await postRequest({ payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914", description: "Pay Maria Santos USD 180 for JOB-HG4D-0914" });
+    expect(r.status).toBe(201);
+    const maria = getDb().select().from(vendors).where(eq(vendors.id, "ven_maria")).get()!;
+    const shown = JSON.stringify([r.json, (await getRequest(r.json.id as string)).json, (await listRequests("?reference=job-hg4d-0914")).json]);
+    for (const secret of [maria.paypalEmail, maria.email, maria.stellarAccount, maria.bankLabel, maria.phone, maria.taxId].filter(Boolean) as string[]) expect(shown).not.toContain(secret);
+    expect(shown).not.toMatch(/paypal_?email|bank_?label|stellar_?account|account_?holder/i);
+    expect(((await listRequests("?reference=JOB-HG4D-0914")).json.requests as unknown[]).length).toBe(1);
+    // The ledger key did not make it, so it does not exist for that key.
+    const other = await getRequest(r.json.id as string, "l");
+    expect(other.status).toBe(404);
+    expect(other.json.error?.code).toBe("not_found");
+    expect(((await listRequests("", "l")).json.requests as unknown[]).length).toBe(0);
+  });
+});
+
+describe("supplier lookup", () => {
+  it("finds suppliers by part of the name, accents and case aside, with verified yes or no and nothing more", async () => {
+    getDb().update(vendors).set({ verifiedAt: null }).where(eq(vendors.id, "ven_rosa")).run();
+    const r = await searchVendors("?q=MARIA");
+    expect(r.json.vendors).toEqual([{ id: "ven_maria", name: "Maria Santos", role: "guide", country: "PH", status: "active", verified: true }]);
+    expect(((await searchVendors("?q=villanueva")).json.vendors as Array<{ verified: boolean }>)[0].verified).toBe(false);
+    expect(((await searchVendors("?q=Phương")).json.vendors as Array<{ id: string }>).map((v) => v.id)).toEqual(["ven_phuong"]);
+    const all = (await searchVendors("?limit=100")).json.vendors as Array<Record<string, unknown>>;
+    expect(all.length).toBe(getDb().select().from(vendors).all().length);
+    expect(all.every((v) => Object.keys(v).sort().join() === "country,id,name,role,status,verified")).toBe(true);
+  });
+});
+
+describe("what the API can never do", () => {
+  it("move money or change payout details, whatever it is sent", async () => {
+    const db = getDb();
+    setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 0 });
+    const payouts = () => db.select({ id: vendors.id, p: vendors.paypalEmail, s: vendors.stellarAccount, b: vendors.bankLabel, e: vendors.bankAccountEnc, h: vendors.detailsHash, v: vendors.verifiedAt }).from(vendors).all();
+    const before = payouts();
+    const attempts = db.select().from(paymentAttempts).all().length;
+    const settled = db.select().from(settlements).all().length;
+
+    await postDepartures({ departures: [dep("bokun-2001", "CB-3D-2001", [phuongVan(3)])] });
+    const ok = await postRequest({ payee: "Phuong Transport", amount: "600", currency: "USD", reference: "CB-3D-2001", evidence: [{ kind: "job_sheet", label: "Trip sheet CB-3D-2001", amount: "600", reference: "CB-3D-2001", excerpt: "Phuong Transport, CB-3D-2001, 3 vehicle-days, USD 600." }] }, undefined, "l");
+    expect(ok.status).toBe(201);
+    // Whatever the rules say, the request is at most scheduled for Autopilot: nothing was sent by the call.
+    expect(["paid", "sending"]).not.toContain(ok.json.status);
+    expect((ok.json.settlement as { status: string }).status).toBe("not_sent");
+
+    for (const hopeful of [{ approve: true }, { paypal_email: "attacker@example.net" }, { state: "approved" }, { release_at: "2026-01-01T00:00:00Z" }]) {
+      const r = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", ...hopeful });
+      expect(r.status, JSON.stringify(hopeful)).toBe(422);
+    }
+    const vendorWrite = await postDepartures({ departures: [{ ...dep("bokun-2002", "CB-3D-2002", [{ ...phuongVan(1), paypal_email: "attacker@example.net" }]) }] });
+    expect(vendorWrite.status).toBe(422);
+
+    expect(db.select().from(paymentAttempts).all().length).toBe(attempts);
+    expect(db.select().from(settlements).all().length).toBe(settled);
+    expect(payouts()).toEqual(before);
+    // No route offers a method that could change anything else.
+    for (const mod of [departuresRoute, requestsRoute, requestRoute, vendorsRoute, openapiRoute] as Array<Record<string, unknown>>) {
+      for (const m of ["PUT", "PATCH", "DELETE"]) expect(mod[m]).toBeUndefined();
+    }
+  });
+});
+
+describe("the API description", () => {
+  it("is served as JSON without a key", async () => {
+    const r = await openapiRoute.GET();
+    expect(r.status).toBe(200);
+    const spec = (await r.json()) as { openapi: string; paths: Record<string, unknown> };
+    expect(spec.openapi).toBe("3.1.0");
+    expect(Object.keys(spec.paths)).toContain("/requests/{id}");
+  });
+});

@@ -622,3 +622,65 @@ export const onboardingSuggestions = sqliteTable(
   },
   (t) => [uniqueIndex("onboarding_suggestions_kind_target").on(t.businessId, t.kind, t.target), index("onboarding_suggestions_status").on(t.businessId, t.status)]
 );
+
+// ---------- Inbound REST API (/api/v1) ----------
+
+/**
+ * One row per Idempotency-Key an API key sent on a POST. While the call runs the row has no status, so a second call
+ * with the same key waits (409) instead of running twice. A successful answer is stored and replayed as is; a call
+ * that failed leaves no row, so a corrected call can use the key again. The body hash refuses the same key for a
+ * different payload.
+ */
+export const apiIdempotency = sqliteTable(
+  "api_idempotency",
+  {
+    id: text("id").primaryKey(),
+    keyName: text("key_name").notNull(), // the API key's name, as in CHECKRAIL_API_KEYS
+    idemKey: text("idem_key").notNull(),
+    method: text("method").notNull(),
+    path: text("path").notNull(),
+    bodySha256: text("body_sha256").notNull(),
+    status: integer("status"), // null while the first call is still running
+    responseJson: text("response_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("api_idempotency_key").on(t.keyName, t.idemKey), index("api_idempotency_created").on(t.createdAt)]
+);
+
+/** The booking system's own id for a departure, so a feed can send the same departure again and update it. */
+export const apiDepartureRefs = sqliteTable(
+  "api_departure_refs",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    externalId: text("external_id").notNull(),
+    departureId: text("departure_id").notNull(),
+    keyName: text("key_name").notNull(), // the API key that last sent it
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("api_departure_refs_external").on(t.businessId, t.externalId), uniqueIndex("api_departure_refs_departure").on(t.departureId)]
+);
+
+/** Payment requests an API key put in the inbox. A key reads back only its own requests. */
+export const apiRequests = sqliteTable(
+  "api_requests",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    keyName: text("key_name").notNull(),
+    obligationId: text("obligation_id").notNull(),
+    reference: text("reference"),
+    idemKey: text("idem_key").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("api_requests_obligation").on(t.obligationId), index("api_requests_key_reference").on(t.keyName, t.reference)]
+);
+
+/** When each API key was last used, for the owner's Settings page. Never the secret. */
+export const apiKeyUsage = sqliteTable("api_key_usage", {
+  keyName: text("key_name").primaryKey(),
+  lastUsedAt: text("last_used_at").notNull(),
+  lastPath: text("last_path"),
+  calls: integer("calls").notNull().default(0),
+});
