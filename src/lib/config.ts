@@ -54,6 +54,8 @@ export const config = {
     mode: (env("AI_MODE", "mock") as AiMode),
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
     model: env("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+    /** Model for the AG Studio dashboard assistant: many short turns, nothing on the money path. */
+    studioModel: env("STUDIO_MODEL", "claude-haiku-5-5"),
   },
 
   accounting: {

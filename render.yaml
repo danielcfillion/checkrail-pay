@@ -57,6 +57,10 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
+      - key: STUDIO_MODEL
+        value: claude-haiku-5-5
+      - key: AG_STUDIO
+        sync: false
       # Login throttle key. Render's edge (Cloudflare, then Render's load balancers) appends to X-Forwarded-For and
       # Render documents no other client address header, so the app keys on the last X-Forwarded-For entry. If that
       # turns out to be a shared edge address, one visitor's wrong passwords could lock out every judge. To check:

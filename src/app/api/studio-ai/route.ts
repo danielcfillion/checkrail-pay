@@ -152,7 +152,7 @@ function cleanBlock(block: unknown, allowed: Set<string>): Obj | string {
  */
 export function buildParams(body: unknown, who: string): MessageCreateParamsStreaming | string {
   if (!isObj(body)) return "The request body must be a JSON object.";
-  if (body.model !== undefined && body.model !== config.ai.model) return `Model "${String(body.model).slice(0, 60)}" is not enabled; this server uses ${config.ai.model}.`;
+  if (body.model !== undefined && body.model !== config.ai.studioModel) return `Model "${String(body.model).slice(0, 60)}" is not enabled; this server uses ${config.ai.studioModel}.`;
 
   if (!Array.isArray(body.messages) || body.messages.length === 0) return "messages must be a non-empty array.";
   if (body.messages.length > MAX_MESSAGES) return "The conversation has too many messages. Start a new one.";
@@ -231,7 +231,7 @@ export function buildParams(body: unknown, who: string): MessageCreateParamsStre
   const asked = typeof body.max_tokens === "number" && Number.isInteger(body.max_tokens) && body.max_tokens > 0 ? body.max_tokens : MAX_OUTPUT_TOKENS;
 
   const params: MessageCreateParamsStreaming = {
-    model: config.ai.model,
+    model: config.ai.studioModel,
     max_tokens: Math.min(asked, MAX_OUTPUT_TOKENS),
     stream: true,
     // The tools and system prompt repeat on every turn of a conversation, so they are cached (tools come first in

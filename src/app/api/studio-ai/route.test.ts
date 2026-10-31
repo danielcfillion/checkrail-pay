@@ -15,13 +15,13 @@ import { POST, GET, BODY_LIMIT, MAX_OUTPUT_TOKENS, TURN_LIMIT } from "./route";
 import { config } from "@/lib/config";
 import { ACTOR_HEADER } from "@/lib/basicAuth";
 
-const ai = config.ai as { mode: string; anthropicApiKey: string; model: string };
+const ai = config.ai as { mode: string; anthropicApiKey: string; model: string; studioModel: string };
 const saved = { ...ai };
 const KEY = "sk-ant-test-key-never-sent";
 const URL_ = "http://checkrail.test/api/studio-ai";
 
 const BODY = {
-  model: "claude-sonnet-5-5",
+  model: "claude-haiku-5-5",
   max_tokens: 64_000,
   system: "You are a Studio assistant.",
   messages: [{ role: "user", content: [{ type: "text", text: "Explain my calibration figures.", cache_control: { type: "ephemeral" } }] }],
@@ -62,6 +62,7 @@ beforeEach(() => {
   ai.mode = "live";
   ai.anthropicApiKey = KEY;
   ai.model = "claude-sonnet-5-5";
+  ai.studioModel = "claude-haiku-5-5";
   sdk.create.mockReset();
   sdk.options.length = 0;
   sdk.create.mockImplementation(async () => fakeStream(EVENTS));
@@ -123,7 +124,7 @@ describe("POST /api/studio-ai", () => {
     expect(r.status).toBe(200);
     expect(sdk.options[0]).toMatchObject({ apiKey: KEY });
     const [params, opts] = sdk.create.mock.calls[0] as [Record<string, unknown>, { signal?: AbortSignal }];
-    expect(params.model).toBe("claude-sonnet-5-5");
+    expect(params.model).toBe("claude-haiku-5-5");
     expect(params.max_tokens).toBe(MAX_OUTPUT_TOKENS);
     expect(params.stream).toBe(true);
     expect(params.tools).toEqual([{ name: "add_widget", description: "Add a widget", input_schema: { type: "object", properties: {} } }]);
