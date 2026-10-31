@@ -355,7 +355,7 @@ export function ImportResult({ summary: s, onAnother }: { summary: ImportSummary
       </h2>
       <p className="mono mt-1 text-[13px] text-ink-soft">{s.fileName}</p>
       <dl className="mt-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <ResultFigure hero label="Would have been stopped" value={formatMoney(s.wouldHaveBlockedMinor, s.currency)} note={`${pluralise(s.duplicates.count, "payment")} paid twice, ${pluralise(s.overcharges.count, "overcharge")}`} />
+        <ResultFigure hero label="Errors it would have caught" value={formatMoney(s.wouldHaveBlockedMinor, s.currency)} note={`${pluralise(s.duplicates.count, "payment")} paid twice, ${pluralise(s.overcharges.count, "overcharge")}`} />
         <ResultFigure label="Blocked" value={String(s.blockedCount)} note="paid twice, over the job record, or another rule" tone={s.blockedCount ? "blocked" : undefined} />
         <ResultFigure label="Held for a person" value={String(s.heldCount)} note="your call: right catch or fine" tone={s.heldCount ? "attention" : undefined} />
         <ResultFigure label="Clear" value={String(s.clearCount)} note="every rule passed" tone={s.clearCount ? "settled" : undefined} />

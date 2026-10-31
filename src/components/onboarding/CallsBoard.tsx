@@ -158,9 +158,9 @@ export function CallsBoard({ rows: serverRows, summary, canMark }: { rows: CallR
       <dl className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <Figure
           hero
-          label="Would have been stopped"
+          label="Errors it would have caught"
           value={formatMoney(summary.stoppedMinor, summary.currency)}
-          note={`${pluralise(summary.blocked, "payment")} blocked: paid twice, over the job record, or another rule`}
+          note={`paid twice or over the job record; ${pluralise(summary.blocked, "payment")} blocked in all`}
         />
         <Figure label="Held for a person" value={String(summary.held)} note="no rule broken, but someone should look" tone={summary.held ? "attention" : undefined} />
         <Figure label="Clear" value={String(summary.clear)} note={`of ${pluralise(summary.payments, "payment")}, every rule passed`} tone={summary.clear ? "settled" : undefined} />

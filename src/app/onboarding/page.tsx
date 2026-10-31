@@ -100,7 +100,7 @@ export default async function BringInYourDataPage() {
                       Payments
                     </th>
                     <th scope="col" className="r">
-                      Would have been stopped
+                      Errors caught
                     </th>
                     <th scope="col" className="r max-sm:hidden">
                       Held
