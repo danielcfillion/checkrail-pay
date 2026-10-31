@@ -1,11 +1,11 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { businesses, onboardingImports, onboardingMappings, onboardingResults } from "../db/schema";
-import { config } from "../config";
 import { newId, now } from "../domain/ids";
 import { audit } from "../domain/stateMachine";
 import { SUPPORTED_CURRENCIES } from "../domain/money";
-import { parseCsv, readRows, runRecheck, totals, type RecheckRow, type RecheckTotals, type Row, type RowProblem } from "../check/recheck";
+import { runRecheckIsolated } from "./isolated";
+import { parseCsv, readRows, totals, type RecheckRow, type RecheckTotals, type Row, type RowProblem } from "../check/recheck";
 import { requirePermission, type Actor } from "../engine/users";
 import { detectColumns, fileSpecOf, headerSignature, toCommaCsv, validateSpec, type Detection, type ImportSpec } from "./detect";
 
@@ -121,22 +121,6 @@ function prepare(csv: unknown, what: string, skipRows: number): { text: string; 
   return { text, header, dataRows };
 }
 
-/**
- * The rule-based reader for the length of the re-check. With the model reader on, every past payment would be sent to
- * the model one by one; the re-check is meant to be quick, local and free, like the command-line one (scripts/recheck.ts).
- * The re-check's throwaway suppliers have no PayPal address, so PayPal is never asked either.
- */
-async function withRulesReader<T>(fn: () => Promise<T>): Promise<T> {
-  const ai = config.ai as unknown as { mode: string };
-  const prev = ai.mode;
-  ai.mode = "mock";
-  try {
-    return await fn();
-  } finally {
-    ai.mode = prev;
-  }
-}
-
 /** The payments within RECHECK_DAYS of the latest one. */
 export function inWindow(rows: Row[]): { kept: Row[]; outside: number } {
   if (!rows.length) return { kept: [], outside: 0 };
@@ -179,7 +163,8 @@ export async function createImport(db: Db, businessId: string, actor: Actor, inp
   const country = COUNTRY_OF[currency] ?? biz.country;
   let results: RecheckRow[];
   try {
-    results = await withRulesReader(() => runRecheck({ config: { currency, country, payments: fileSpecOf(fileName, spec), jobs: jobsSpec, payeeAliases: aliases }, payments: kept, jobs: jobRows }));
+    // In its own process: the re-check swaps the global clock per payment and reads with the rules only (isolated.ts).
+    results = await runRecheckIsolated({ config: { currency, country, payments: fileSpecOf(fileName, spec), jobs: jobsSpec, payeeAliases: aliases }, payments: kept, jobs: jobRows });
   } catch (e) {
     const id = newId("obi");
     db.insert(onboardingImports).values({ id, businessId, fileName, currency, status: "failed", signature: headerSignature(pay.header), specJson: JSON.stringify(spec), rowsRead: rows.length, rowsChecked: 0, rowsOutsideWindow: outside, skippedJson: JSON.stringify(skipped.slice(0, 200)), error: (e as Error).message.slice(0, 500), createdBy: actor.id, createdAt: now() }).run();
