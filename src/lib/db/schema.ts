@@ -513,3 +513,112 @@ export const agentChecks = sqliteTable(
   },
   (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey)]
 );
+
+// ---------- Onboarding and calibration ----------
+
+/**
+ * One upload of past bank payments and the re-check run on it. The file itself is not kept: only the mapping it was
+ * read with, the rows it could not read, and one result row per payment (onboardingResults). Nothing here pays,
+ * schedules or changes a rule; the re-check runs in a throwaway database (src/lib/check/recheck.ts).
+ */
+export const onboardingImports = sqliteTable(
+  "onboarding_imports",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    fileName: text("file_name").notNull(),
+    currency: text("currency").notNull(),
+    status: text("status").notNull(), // checked | failed
+    signature: text("signature").notNull(), // the header row's signature (src/lib/onboarding/detect.ts)
+    specJson: text("spec_json").notNull(), // ImportSpec: columns, date order, lines above the header, outgoing, patterns
+    rowsRead: integer("rows_read").notNull(),
+    rowsChecked: integer("rows_checked").notNull(),
+    rowsOutsideWindow: integer("rows_outside_window").notNull(),
+    skippedJson: text("skipped_json").notNull(), // RowProblem[] (first 200)
+    periodFrom: text("period_from"),
+    periodTo: text("period_to"),
+    totalsJson: text("totals_json"), // RecheckTotals
+    error: text("error"),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("onboarding_imports_business").on(t.businessId, t.createdAt)]
+);
+
+/** A column mapping saved per business and per header signature, so the next export from the same bank maps itself. */
+export const onboardingMappings = sqliteTable(
+  "onboarding_mappings",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    signature: text("signature").notNull(),
+    headerJson: text("header_json").notNull(), // the header cells as written, for showing which export it was
+    specJson: text("spec_json").notNull(), // ImportSpec
+    usedCount: integer("used_count").notNull().default(1),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("onboarding_mappings_business_signature").on(t.businessId, t.signature)]
+);
+
+/** What the re-check said about one past payment: a "call". Flagged calls (any category but clean) are marked. */
+export const onboardingResults = sqliteTable(
+  "onboarding_results",
+  {
+    id: text("id").primaryKey(),
+    importId: text("import_id").notNull(),
+    businessId: text("business_id").notNull(),
+    row: integer("row").notNull(), // line in the uploaded file, 1-based
+    date: text("date").notNull(), // YYYY-MM-DD, when the payment was made
+    payee: text("payee").notNull(),
+    amountMinor: integer("amount_minor").notNull(),
+    currency: text("currency").notNull(),
+    reference: text("reference"),
+    category: text("category").notNull(), // duplicate | overcharge | blocked_other | needs_a_look | clean
+    verdict: text("verdict").notNull(), // pay | hold | block
+    reason: text("reason").notNull(),
+    rulesJson: text("rules_json").notNull(), // rule ids that did not pass
+    overpaidMinor: integer("overpaid_minor").notNull().default(0),
+    duplicateOfRow: integer("duplicate_of_row"),
+  },
+  (t) => [index("onboarding_results_import").on(t.importId, t.row), index("onboarding_results_business").on(t.businessId, t.date)]
+);
+
+/** The owner's view of one flagged call: Checkrail was right to stop it, or the payment was fine. One per call. */
+export const onboardingMarks = sqliteTable(
+  "onboarding_marks",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    resultId: text("result_id").notNull(),
+    mark: text("mark").notNull(), // right_catch | was_fine
+    note: text("note"),
+    markedBy: text("marked_by").notNull(),
+    markedAt: text("marked_at").notNull(),
+  },
+  (t) => [uniqueIndex("onboarding_marks_result").on(t.resultId), index("onboarding_marks_business").on(t.businessId)]
+);
+
+/**
+ * A change the marks point to ("add a rate card for X", "connect a booking feed", "verify supplier Y"). Proposed
+ * suggestions are shown to a person; nothing changes until one of them applies it, and applying writes an audit row.
+ */
+export const onboardingSuggestions = sqliteTable(
+  "onboarding_suggestions",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    kind: text("kind").notNull(), // rate_card | booking_feed | verify_supplier | retainer
+    target: text("target").notNull(), // vendor id, a payee name key, or "business"
+    title: text("title").notNull(),
+    detail: text("detail").notNull(),
+    payloadJson: text("payload_json").notNull(), // basis (result ids, counts) and proposed values
+    status: text("status").notNull(), // proposed | applied | dismissed
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    decisionNote: text("decision_note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("onboarding_suggestions_kind_target").on(t.businessId, t.kind, t.target), index("onboarding_suggestions_status").on(t.businessId, t.status)]
+);
