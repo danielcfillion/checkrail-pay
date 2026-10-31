@@ -622,3 +622,80 @@ export const onboardingSuggestions = sqliteTable(
   },
   (t) => [uniqueIndex("onboarding_suggestions_kind_target").on(t.businessId, t.kind, t.target), index("onboarding_suggestions_status").on(t.businessId, t.status)]
 );
+
+/**
+ * The live Xero connection, one per business. Tokens are encrypted with the data key (src/lib/crypto/dataKey.ts) and
+ * never leave the server: not to the browser, not to the logs. The mapping (which accounts bills, payments and fees
+ * post to) and a cached copy of the tenant's chart of accounts live here too, so a page render never calls Xero.
+ */
+export const xeroConnections = sqliteTable("xero_connections", {
+  businessId: text("business_id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  tenantName: text("tenant_name"),
+  connectionId: text("connection_id"),
+  accessTokenEnc: text("access_token_enc").notNull(),
+  refreshTokenEnc: text("refresh_token_enc").notNull(),
+  accessExpiresAt: text("access_expires_at").notNull(),
+  scopes: text("scopes"),
+  status: text("status").notNull(), // connected | needs_reconnect
+  connectedBy: text("connected_by").notNull(),
+  connectedAt: text("connected_at").notNull(),
+  /** Account for supplier bills whose own code (310, 320, ...) is not in this tenant's chart. */
+  expenseAccountCode: text("expense_account_code"),
+  paypalAccountCode: text("paypal_account_code"),
+  stellarAccountCode: text("stellar_account_code"),
+  /** Wise and the bank file pay from an ordinary bank account. */
+  bankAccountCode: text("bank_account_code"),
+  feeAccountCode: text("fee_account_code"),
+  taxType: text("tax_type"),
+  /** Cached from Xero: accounts, tax rates, currencies, tracking categories and the base currency. */
+  chartJson: text("chart_json"),
+  chartFetchedAt: text("chart_fetched_at"),
+  /** Set from a 429's Retry-After: no call to this tenant before then. */
+  blockedUntil: text("blocked_until"),
+  lastPushAt: text("last_push_at"),
+  lastError: text("last_error"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** A pending "Connect to Xero": single use, bound to the login that started it, short lived. Only a hash of the state is kept. */
+export const xeroOauthStates = sqliteTable("xero_oauth_states", {
+  stateHash: text("state_hash").primaryKey(),
+  businessId: text("business_id").notNull(),
+  login: text("login").notNull(),
+  actor: text("actor").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * One thing Checkrail sends to Xero (a contact, a bill, a credit note, a payment or a fee) and the id Xero gave it.
+ * The unique key makes a second push a no-op. A failure is kept here in plain words and retried; nothing on the
+ * payment path reads this table.
+ */
+export const xeroRecords = sqliteTable(
+  "xero_records",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    kind: text("kind").notNull(), // contact | bill | credit_note | payment | fee
+    localKey: text("local_key").notNull(),
+    label: text("label").notNull(), // what a person sees: "Bill INV-JM-1030, Jake Morrison"
+    obligationId: text("obligation_id"),
+    accountingSyncId: text("accounting_sync_id"),
+    xeroId: text("xero_id"),
+    status: text("status").notNull(), // pending | pushed | failed
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    /** Part of the Idempotency-Key: moves on only after Xero gave a definite answer, so a retry after a dropped connection reuses the key. */
+    keySeq: integer("key_seq").notNull().default(0),
+    /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
+    uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
+    nextAttemptAt: text("next_attempt_at"),
+    pushedAt: text("pushed_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("xero_records_key").on(t.businessId, t.tenantId, t.kind, t.localKey), index("xero_records_status").on(t.businessId, t.status)]
+);

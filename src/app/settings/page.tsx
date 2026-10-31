@@ -16,6 +16,7 @@ import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
 import { usingDevKey } from "@/lib/crypto/dataKey";
 import { dualControlGap } from "@/lib/engine/orchestrator";
 import { taxFeaturesOn } from "@/lib/features";
+import { XeroConnection } from "@/components/XeroConnection";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
@@ -174,6 +175,7 @@ export default async function SettingsPage() {
                 : "To change a rail or the agent, see Live mode setup in the README."}
             </p>
           </Panel>
+          <XeroConnection />
         </Section>
       </div>
     </>

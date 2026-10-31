@@ -25,9 +25,17 @@ const AGREED = ["approved", "execution_pending", "sent", "settled"];
 
 type Row = Record<(typeof XERO_BILL_COLUMNS)[number], string | number | null>;
 
+/** The rows of one invoice in the file, and what they came from: the live Xero push sends each group as one bill. */
+export interface XeroBillGroup {
+  kind: "bill" | "credit_note";
+  billId: string | null;
+  obligationIds: string[];
+  rows: Row[];
+}
+
 const major = majorText;
 
-export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolean }): { rows: Row[]; obligationIds: string[]; billIds: string[] } {
+export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolean }): { rows: Row[]; obligationIds: string[]; billIds: string[]; groups: XeroBillGroup[] } {
   const tracking = process.env.XERO_TRACKING_NAME || "Departure";
   const taxType = process.env.XERO_TAX_TYPE || "Tax Exempt";
   // Tax kept back is owed to the tax office, not the vendor: a negative line on the bill to a liability account.
@@ -46,6 +54,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
   const rows: Row[] = [];
   const obligationIds: string[] = [];
   const billIds = new Set<string>();
+  const groups = new Map<string, XeroBillGroup>();
   for (const { o, v } of obs) {
     if (!o.amountMinor || !o.currency) continue;
     obligationIds.push(o.id);
@@ -55,25 +64,32 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     const base = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*Quantity": 1, "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: departure ? tracking : null, TrackingOption1: departure, Currency: o.currency };
     if (o.billId) {
       // The invoice once, at its total, the first time any part of it is agreed.
-      if (billIds.has(o.billId)) continue;
+      if (billIds.has(o.billId)) {
+        groups.get(o.billId)?.obligationIds.push(o.id);
+        continue;
+      }
       const b = db.select().from(bills).where(eq(bills.id, o.billId)).get();
       if (!b || b.kind === "credit_note" || (opts.onlyNew && b.xeroExportedAt)) continue;
       billIds.add(b.id);
       const docDate = b.billDate ?? o.invoiceDate ?? localDateString(new Date(b.createdAt));
       const date = posting(docDate);
       const due = [b.dueDate ?? o.dueDate ?? date, date].sort()[1];
-      rows.push({ ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode, b.kind), Currency: b.currency });
+      const main: Row = { ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode, b.kind), Currency: b.currency };
+      rows.push(main);
       const w = withholdingLine(b.reference, date, due, o.withheldMinor ?? 0, b.currency, o.withholdingNote);
       if (w) rows.push(w);
+      groups.set(b.id, { kind: "bill", billId: b.id, obligationIds: [o.id], rows: w ? [main, w] : [main] });
       continue;
     }
     const docDate = o.invoiceDate ?? localDateString(new Date(o.createdAt));
     const date = posting(docDate);
     const due = [o.dueDate ?? date, date].sort()[1];
     const ref = o.sourceRef ?? o.id;
-    rows.push({ ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) });
+    const main: Row = { ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) };
+    rows.push(main);
     const w = withholdingLine(ref, date, due, o.withheldMinor ?? 0, o.currency, o.withholdingNote);
     if (w) rows.push(w);
+    groups.set(`ob:${o.id}`, { kind: "bill", billId: null, obligationIds: [o.id], rows: w ? [main, w] : [main] });
   }
   // Credit notes: Xero imports a negative total as a credit note against the supplier; it is then allocated to the bill.
   const credits = db
@@ -86,9 +102,11 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
   for (const { b, v } of credits) {
     billIds.add(b.id);
     const date = posting(b.billDate ?? localDateString(new Date(b.createdAt)));
-    rows.push({ "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describeBill(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount() : accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency });
+    const row: Row = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describeBill(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount() : accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency };
+    rows.push(row);
+    groups.set(b.id, { kind: "credit_note", billId: b.id, obligationIds: [], rows: [row] });
   }
-  return { rows, obligationIds, billIds: [...billIds] };
+  return { rows, obligationIds, billIds: [...billIds], groups: [...groups.values()] };
 }
 
 export function xeroBillsCsv(rows: Row[]): string {

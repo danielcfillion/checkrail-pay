@@ -5,6 +5,7 @@ import { runAutopilot } from "@/lib/engine/autopilot";
 import { purgeUnlinkedUploads } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import { isLiveRails } from "@/lib/config";
+import { runXeroSyncInBackground } from "@/lib/accounting/xeroSync";
 
 /** Node-only half of the heartbeat (see instrumentation.ts). Kept separate so the edge bundle never sees the database driver. */
 export function startHeartbeat(): void {
@@ -18,6 +19,9 @@ export function startHeartbeat(): void {
   g.__checkrailSeededAt = new Date().toISOString();
   g.__checkrailHeartbeat = setInterval(() => {
     runAutopilot(getDb()).catch((e) => console.error("[autopilot] pass failed:", (e as Error).message));
+    // Books, beside the payment path: sends approved bills and settled payments to Xero when it is connected. Not
+    // awaited, and the autopilot never waits for it.
+    runXeroSyncInBackground(getDb());
     try {
       purgeUnlinkedUploads(getDb());
     } catch (e) {
