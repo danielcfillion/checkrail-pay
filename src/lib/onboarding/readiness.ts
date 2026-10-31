@@ -12,7 +12,7 @@ import { isFlagged, loadCalls, vendorIndex, weekStart, type Call } from "./calls
  *
  * It reports; it never changes the autonomy level or any other setting. The owner changes the level in Settings.
  *
- * The thresholds below are pending the owner's confirmation.
+ * The thresholds below were confirmed by the founder on 31 Oct 2026.
  */
 
 /** Holds that turned out fine, as a share of the reviewed holds in a week: under this counts. */
