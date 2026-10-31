@@ -23,8 +23,15 @@ export function idempotencyKey(obligationId: string, attemptNo: number): string 
  * HG-4D-0927, PAL-3D-0927, PO-1182. Lower-cased and de-duplicated. Used to catch the same job
  * re-submitted under a different reference.
  */
-/** A departure code in any spelling in free text: CEB-2D-1107, CEB2D1107, CEB 2D 1107. */
-const DEPARTURE_LOOSE = /\b([A-Z]{2,5})[-_ ]?(\d[A-Z]{1,3})[-_ ]?(\d{3,6})\b/g;
+/**
+ * A departure code in any spelling in free text: CEB-2D-1107, CEB2D1107, CEB 2D 1107. The middle part is a number of
+ * days ("2D", "10D"), so "NOV 2ND 2026", "ROOM 2A 1105" and "PAX 4X 1200" are not departures (AG7-4).
+ */
+const DEPARTURE_LOOSE = /\b([A-Z]{2,5})[-_ ]?(\d{1,2}D)[-_ ]?(\d{3,6})\b/g;
+
+/** Strip the strength mark from a key: "~" names one job, "^" a booking or order that one or a few jobs share. */
+export const bareKey = (k: string) => k.replace(/^[~^]/, "");
+export const isSharedKey = (k: string) => k.startsWith("^");
 
 export function jobKeys(...texts: Array<string | null | undefined>): string[] {
   const out = new Set<string>();
@@ -37,13 +44,17 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       const after = t.slice(m.index! + m[0].length, m.index! + m[0].length + 3);
       if (after.startsWith("...") || after.startsWith("…")) continue;
       const k = m[0].toUpperCase();
-      out.add(k);
+      // A booking or purchase order number in text (BK-55825, PO-7795) is shared by the parts of one job: "^" keys,
+      // a hold, not a block (AG7-6). The departure it names, if any, is still the job ("~").
+      const mark = /^(?:BK|PO)-/.test(k) ? "^" : "~";
+      out.add(mark === "^" ? `^${k}` : k);
       // Compared in its comparison forms (see canonicalForms): JOB-HG4D-0914 and the trip sheet's HG-4D-0914 are one
       // departure; INV-2026-0152 is not PO-2026-0152 (AG5-3); INV-12-345 is not INV-123-45 (AG6-4).
-      for (const f of canonicalForms(k)) out.add(`~${f}`);
+      const deps = new Set(departureForms(k));
+      for (const f of canonicalForms(k)) out.add(`${deps.has(f) ? "~" : mark}${f}`);
       // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
       const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
-      if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
+      if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`${deps.has(f) ? "~" : mark}${f}`);
     }
     // A departure written without dashes in free text ("CEB2D1107", "CEB 2D 1107") is the same departure (AG6-7).
     for (const m of t.matchAll(DEPARTURE_LOOSE)) for (const f of canonicalForms(`${m[1]}-${m[2]}-${m[3]}`)) out.add(`~${f}`);
@@ -88,14 +99,25 @@ export function canonicalForms(ref: string | null | undefined): string[] {
   const t = foldRef(ref);
   const out: string[] = [];
   const prefixed = t.match(/^(JOB|TRIP|TOUR)([^\p{L}\p{N}]*)(.*)$/u);
-  if (prefixed && prefixed[3]) out.push(...formsOf(prefixed[3]));
+  // "TOUR 2026" or "TRIP 152" is a year or a count, not a departure: a bare number after TOUR or TRIP needs five
+  // digits before it stands alone (AG7-12). JOB-152 and a bare 152 stay one job.
+  const tooShort = prefixed && prefixed[1] !== "JOB" && /^\d{1,4}$/.test(prefixed[3].replace(/[^\p{L}\p{N}]/gu, ""));
+  if (prefixed && prefixed[3] && !tooShort) out.push(...formsOf(prefixed[3]));
   out.push(...formsOf(t));
-  // An invoice, order or booking named after a departure (INV-HG4D-1031, PO-CEB2D-1024) is about that departure too
-  // (AG6-1). Only a departure-shaped remainder counts, so INV-TAM-0834 and PO-TAM-0834 stay apart.
-  const named = t.match(/^(?:INV|PO|BK|REF)[^\p{L}\p{N}]+(.+)$/u);
-  const dep = named?.[1].match(/^([A-Z]{2,5})[-_ ]?(\d[A-Z]{1,3})[-_ ]?(\d{3,6})(?:[^\p{L}\p{N}].*)?$/u);
-  if (dep) out.push(...formsOf(`${dep[1]}-${dep[2]}-${dep[3]}`));
+  out.push(...departureForms(t));
   return [...new Set(out)];
+}
+
+/**
+ * The departure an invoice, order or booking is named after (INV-HG4D-1031, PO.CEB2D.1024, INVHG4D1183), in comparison
+ * form (AG6-1, AG7-3). Only a departure-shaped remainder counts, so INV-TAM-0834 and PO-TAM-0834 stay apart.
+ */
+export function departureForms(ref: string | null | undefined): string[] {
+  if (!ref) return [];
+  const t = foldRef(ref);
+  const named = t.match(/^(?:INV|PO|BK|REF)[^\p{L}\p{N}]*(.+)$/u);
+  const dep = named?.[1].match(/^([A-Z]{2,5})[^\p{L}\p{N}]?(\d[A-Z]{1,3})[^\p{L}\p{N}]?(\d{3,6})(?:[^\p{L}\p{N}].*)?$/u);
+  return dep ? formsOf(`${dep[1]}-${dep[2]}-${dep[3]}`) : [];
 }
 
 /** The first comparison form of a reference, or null (see canonicalForms). */
@@ -138,10 +160,17 @@ export function jobOfRef(ref: string | null | undefined): string | null {
  */
 export function bookingKeys(...texts: Array<string | null | undefined>): string[] {
   const out = new Set<string>();
-  const re = /\b(?:booking|bkg|reservation|purchase\s+order|P\.?O\.?)\s*(?:ref(?:erence)?|no\.?|number|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b/gi;
+  // "PO" only in capitals: "po" is also a Tagalog particle (AG7-5).
+  const re = /\b(?:(?:[Bb]ooking|BOOKING|[Bb]kg|BKG|[Rr]eservation|RESERVATION|[Pp]urchase\s+[Oo]rder|PURCHASE\s+ORDER)|P\.?O\.?)\s*(?:[Rr]ef(?:erence)?|REF|[Nn]o\.?|NO\.?|[Nn]umber|#)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,})\b(?!\s*(?:VND|USD|PHP|THB|EUR|đ|₫|dong|nights?|guests?|pax))/g;
   for (const raw of texts) {
     if (!raw) continue;
-    for (const m of foldConfusables(raw).matchAll(re)) if (!isDateLike(m[1])) for (const f of canonicalForms(m[1])) out.add(`^${f}`);
+    for (const m of foldConfusables(raw).matchAll(re)) {
+      const r = m[1];
+      const digits = (r.match(/\d/g) ?? []).length;
+      // A year, a date run together, a phone number, an amount or a duration ("4D3N") is not a booking (AG7-5).
+      if (r.length < 5 || digits === 0 || isDateLike(r) || /^(?:19|20)\d{2}$/.test(r) || /^(?:19|20)\d{6}$/.test(r) || /^\+?0?\d{9,11}$/.test(r) || /^\d+D\d+N$/i.test(r)) continue;
+      for (const f of canonicalForms(r)) out.add(`^${f}`);
+    }
   }
   return [...out];
 }

@@ -181,7 +181,7 @@ export interface PolicyInput {
   /** An earlier payment to the vendor's current payout details came back after they were verified. */
   returnedToSameDetails?: string | null;
   /** What PayPal Transaction Search said about this job and payee, read just before this policy run. */
-  paypalHistory?: { ok: boolean; error?: string; lines: number; matches: Array<{ transactionId: string; date: string; amountMinor: number; currency: string; email: string; matched: string }> } | null;
+  paypalHistory?: { ok: boolean; error?: string; lines: number; matches: Array<{ transactionId: string; date: string; amountMinor: number; currency: string; email: string; matched: string }>; shared?: Array<{ transactionId: string; date: string; amountMinor: number; currency: string; email: string; matched: string }> } | null;
   /** The invoice's own date and the business's local today, to catch a future-dated invoice. */
   invoiceDate?: string | null;
   today?: string;

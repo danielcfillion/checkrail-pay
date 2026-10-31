@@ -4,7 +4,7 @@ import { agentChecks, obligations, paymentAttempts, settlements, vendors } from 
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
-import { canonicalRef, jobKeys, jobOfRef, sourceRefKeys } from "../domain/ids";
+import { bareKey, canonicalRef, jobKeys, jobOfRef, sourceRefKeys } from "../domain/ids";
 import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendorNames";
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
@@ -162,17 +162,21 @@ function amountFollows(sent: number, stated: Stated[], text: string): boolean {
   const bases = asked.length ? asked : stated;
   let rest = text;
   for (const x of [...stated].sort((p, q) => q.index - p.index)) rest = `${rest.slice(0, x.index)} ${rest.slice(x.index + x.length)}`;
+  // Each stated count is used once: "USD 95 a day for 2 days" is 2 days, never 2 x 2 (AG7-8).
   const counts = [...rest.matchAll(COUNT_RE)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
-  const products = new Set<number>(counts);
-  for (const p of [...products]) for (const q of counts) products.add(p * q);
+  const products = new Set<number>();
+  for (let mask = 1; mask < 1 << counts.length; mask++) products.add(counts.reduce((acc, n, i) => (mask & (1 << i) ? acc * n : acc), 1));
   const values: Array<{ v: number; from: Stated }> = [];
   for (const b of bases) {
     values.push({ v: b.amountMinor, from: b });
     if (RATE_AFTER.test(after(b)) || RATE_BEFORE.test(before(b, 6))) for (const n of products) values.push({ v: b.amountMinor * n, from: b });
   }
-  const added = stated.filter((x) => ADDED_BEFORE.test(before(x, 12)) || /^\s*(?:\p{L}+\s+){0,2}fee\b/iu.test(after(x)));
   const taken = stated.filter((x) => SUBTRACTED.test(`${before(x, 20)} ${after(x, 20)}`));
-  const pcts = [...text.matchAll(/(\d{1,3})\s?%/g)].map((m) => ({ p: Number(m[1]), off: /less|minus|discount|off\b/i.test(text.slice(Math.max(0, m.index! - 16), m.index! + m[0].length + 24)) }));
+  // A figure labelled as paid is never added on, whatever joins it ("and USD 190 already paid", AG7-8).
+  const added = stated.filter((x) => !taken.includes(x) && (ADDED_BEFORE.test(before(x, 12)) || /^\s*(?:\p{L}+\s+){0,2}fee\b/iu.test(after(x))));
+  // Percentages up to 100 only: a "200% surcharge" is a penalty clause, not the payment (AG7-8). Withholding and other
+  // deductions take a percentage off (AG7-9).
+  const pcts = [...text.matchAll(/(\d{1,3})\s?%/g)].map((m) => ({ p: Number(m[1]), off: /less|minus|discount|off\b|deduct|withh?old/i.test(text.slice(Math.max(0, m.index! - 16), m.index! + m[0].length + 24)) })).filter(({ p }) => p > 0 && p <= 100);
   for (const { v, from } of values) {
     if (v === sent) return true;
     if (added.some((y) => y !== from && v + y.amountMinor === sent)) return true;
@@ -189,7 +193,7 @@ const familyOf = (ref: string) => (canonicalRef(ref) ?? "").match(/^\p{L}+/u)?.[
  * Phrases that say who is to be paid. "Send", "transfer" and "wire" count only with money before "to" ("transfer USD 190
  * to"), so "send the receipt to Maria" and "transfer to Maria's boat" do not; "credit" only as "credit (it) to" (AG6-8).
  */
-const PAY_PHRASE = /\b(?:pay|paid to|payable to|remit(?:\s+to)?|beneficiary(?:\s+is)?|credit(?:\s+it)?\s+to|owed to|settle with|payment\s+(?:goes\s+)?to|(?:money|funds|payment)\s+goes\s+to|(?:send|transfer|release|wire)\b[^.;!?\n]{0,30}?(?:\d|USD|PHP|VND|THB|EUR|\$|₱|money|payment|funds|fee|balance|\bit\b)[^.;!?\n]{0,10}?\b(?:to|into)|deposit\b[^.;!?\n]{0,30}?\binto)\b/giu;
+const PAY_PHRASE = /\b(?:pay(?:\s+out)?|paid to|payable to|payee|recipient|remit(?:\s+to)?|beneficiary(?:\s+is)?|credit(?:\s+it)?\s+to|owed to|settle with|thanh\s+to[aá]n\s+cho|tr[aả]\s+cho|chuy[eể]n\s+(?:kho[aả]n\s+|ti[eề]n\s+)?cho|payment\s+(?:goes\s+)?to|(?:money|funds|payment)\s+goes\s+to|send\s+(?:this|it)\s+to|(?:send|transfer|release|wire)\b[^.;!?\n]{0,30}?(?:\d|USD|PHP|VND|THB|EUR|\$|₱|money|payment|funds|fee|balance|\bit\b)[^.;!?\n]{0,10}?\b(?:to|into)|deposit\b[^.;!?\n]{0,30}?\binto)\b/giu;
 
 const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -221,9 +225,22 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     [v.name, ...wordsOf(v)].some((w) => new RegExp(`(?<![\\p{L}])${escapeRe(w)}['’]s\\b(?!\\s+(?:paypal\\s+)?(?:account|wallet|paypal|bank))`, "iu").test(text));
   const payees = new Set<string>();
   for (const m of d.matchAll(PAY_PHRASE)) {
-    const clause = d.slice(m.index! + m[0].length).split(/[.;!?\n]/)[0].slice(0, 80);
+    // The clause after the phrase, up to a comma or a full stop, and before "agreed with", "confirmed by" and the like,
+    // which name who agreed, not who is paid (AG7-9).
+    const clause = d.slice(m.index! + m[0].length).split(/[.,;!?\n]/)[0].split(/\b(?:agreed|confirmed|approved|signed|arranged|checked|according|as)\b/i)[0].slice(0, 80);
     const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0 && !possessive(clause, x.v)).sort((x, y) => x.at - y.at)[0];
     if (hit) payees.add(hit.v.id);
+  }
+  // "Maria Santos should be paid": the last supplier named before the passive (AG7-7).
+  for (const m of d.matchAll(/\b(?:should|must|will|is\s+to|needs?\s+to|to)\s+be\s+paid\b/gi)) {
+    const clause = d.slice(0, m.index!).split(/[.;!?\n]/).pop() ?? "";
+    const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0).sort((x, y) => y.at - x.at)[0];
+    if (hit) payees.add(hit.v.id);
+  }
+  // Another supplier named with a payout word in the same clause ("to Maria Santos's PayPal") asks to pay them.
+  for (const clause of d.split(/[.;!?\n]/)) {
+    if (!/\b(?:paypal|account|wallet|bank|iban|stellar)\b/i.test(clause)) continue;
+    for (const v of names) if (v.id !== asked?.id && mentionAt(clause, v) >= 0 && new RegExp(`${escapeRe(v.name)}(?:['’]s)?\\s+(?:\\p{L}+\\s+)?(?:paypal|account|wallet|bank)`, "iu").test(clause)) payees.add(v.id);
   }
   const otherPayee = names.find((v) => payees.has(v.id) && v.id !== asked?.id);
   const mentioned = names.filter((v) => mentionAt(d, v) >= 0);
@@ -238,6 +255,12 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     const minor = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0") || "0");
     const at = m.index! + m[0].indexOf(m[1]);
     stated.push({ amountMinor: minor, currency: a.currency, index: at, length: m.index! + m[0].length - at });
+  }
+  // "total 190": a total with no currency is in the currency sent (AG7-8).
+  for (const m of dAmt.matchAll(/\btotal\s*[:=]?\s*(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\.(\d{1,2}))?(?!\d|[.,]\d|\s*(?:%|\p{L}))/giu)) {
+    const minor = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0") || "0");
+    const at = m.index! + m[0].indexOf(m[1]);
+    if (!stated.some((x) => x.index === at)) stated.push({ amountMinor: minor, currency: a.currency, index: at, length: m.index! + m[0].length - at });
   }
   stated.sort((x, y) => x.index - y.index);
   if (stated.length > 0) {
@@ -265,10 +288,16 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
 const probeKeyOf = (vendorId: string | null | undefined, payee: string, currency: string, reference: string | null) =>
   `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${jobOfRef(reference) ?? (reference ?? "").toLowerCase()}`;
 
-function probing(db: Db, agent: AgentKey, key: string, amountMinor: number): number {
-  const recent = db.select({ amountMinor: agentChecks.amountMinor }).from(agentChecks)
-    .where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.payeeKey, key), gte(agentChecks.createdAt, new Date(Date.now() - PROBE_WINDOW_MS).toISOString())))
-    .all();
+/** Every comparison form of a reference, as the duplicate check sees it, so a probe is caught under any spelling (AG7-11). */
+const probeForms = (reference: string | null) => new Set([...sourceRefKeys(reference), ...jobKeys(reference)].map(bareKey).filter((k) => k.length >= 3));
+
+function probing(db: Db, agent: AgentKey, key: string, amountMinor: number, reference: string | null = null): number {
+  const head = key.slice(0, key.lastIndexOf("|") + 1);
+  const mine = probeForms(reference);
+  const recent = db.select({ amountMinor: agentChecks.amountMinor, payeeKey: agentChecks.payeeKey, reference: agentChecks.reference }).from(agentChecks)
+    .where(and(eq(agentChecks.agent, agent.name), like(agentChecks.payeeKey, `${head}%`), gte(agentChecks.createdAt, new Date(Date.now() - PROBE_WINDOW_MS).toISOString())))
+    .all()
+    .filter((x) => x.payeeKey === key || (mine.size > 0 && [...probeForms(x.reference)].some((f) => mine.has(f))));
   return new Set([...recent.map((x) => x.amountMinor), amountMinor]).size;
 }
 
@@ -308,11 +337,11 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     .replace(/[^\s@<>"',;()]+@[^\s@<>"',;()]+\.[^\s@<>"',;().]{2,}/gu, "the payee's PayPal account")
     .replace(/[^\s*@<>"',;()]+\*[^\s*@<>"',;()]+\.[^\s*@<>"',;().]{2,}/gu, "[payout account]")
     .replace(/\b[GM][A-Z0-9]{34,75}\b/g, "[payout account]")
+    .replace(/\b(?:IBAN|Iban|iban)\s*:?\s*[A-Za-z]{2}\d{2}(?:[\s-]?[0-9A-Z]){10,32}/g, "[payout account]")
     // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account, AG5-7).
-    .replace(/\b[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?\b/g, "[payout account]")
-    .replace(/\b(?:acct|account|a\/c)\b(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d{3,}/gi, "[payout account]")
+    .replace(/\b[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{4}){2,7}(?:[ -][A-Z0-9]{1,4})?\b/gi, "[payout account]")
+    .replace(/\b(?:acct|account|a\/c)\b(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d[\d -]{2,}\d/gi, "[payout account]")
     .replace(/(?:\*{2,}|•{2,}|·{2,}|\b[xX]{3,})\s?\d{2,}/g, "[payout account]")
-    .replace(/\bIBAN\s*:?\s*[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){10,32}/g, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
   const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];
   const fulls = others.map((n) => wordsIn(n).map((t) => t.w)).filter((ws) => ws.join("").length >= 3).sort((x, y) => y.length - x.length);
@@ -337,6 +366,15 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     for (const [a, b] of spans.reverse()) out = `${out.slice(0, a)}another supplier${out.slice(b)}`;
   }
   return out.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+/**
+ * A rule's message as an agent may read it. That a reference is on another supplier's payment is enough for an agent
+ * to stop; which supplier, and how far that payment got, would let an agent map who was paid for what (AG7-14).
+ */
+function forAgent(rule: string, message: string): string {
+  if (rule === "reference_other_vendor") return "This reference is also on a payment to another supplier; a person checks who did the job";
+  return message;
 }
 
 function otherNames(db: Db, businessId: string, keep: Array<string | null | undefined>): string[] {
@@ -395,7 +433,9 @@ async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType
   const asked = vendorNamed(db, biz.id, a.payee);
   const concerns = disagreementsOf(db, biz.id, asked, a);
   const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") };
-  const r = await evaluatePayment(snapshotOf(db), { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}`, text: requestTextFor(kind, asked?.name ?? a.payee, a), stated });
+  // The copy is closed as soon as the check is done: a native database copy per check must not pile up (AG7 run).
+  const copy = snapshotOf(db);
+  const r = await evaluatePayment(copy, { businessId: biz.id, payee: asked?.name ?? a.payee, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, description: a.description, evidence: a.evidence, evidenceSource: evidenceSourceOf(agent), actor: `mcp:${agent.name}`, text: requestTextFor(kind, asked?.name ?? a.payee, a), stated }).finally(() => (copy as unknown as { $client: { close(): void } }).$client.close());
   return { asked, stated, r, payeeKey: probeKeyOf(asked?.id, a.payee, a.currency, a.reference) };
 }
 
@@ -406,11 +446,11 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
-  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(b.message, others, keep) }));
-  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(w.message, others, keep) }));
+  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
+  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) }));
 
   // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
-  const distinct = probing(db, agent, payeeKey, a.amountMinor);
+  const distinct = probing(db, agent, payeeKey, a.amountMinor, a.reference);
   if (distinct >= PROBE_DISTINCT_AMOUNTS && verdict !== "block") {
     verdict = "hold";
     warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payment in 15 minutes; a person confirms this one` });
@@ -476,7 +516,7 @@ function describe(db: Db, id: string): StatusAnswer {
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const policy = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) ? previewPolicy(db, id) : null;
-  const reasons = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(r.message, others, vendor?.name ?? null)).slice(0, 6);
+  const reasons = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(forAgent(r.ruleId, r.message), others, vendor?.name ?? null)).slice(0, 6);
   const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"
@@ -567,7 +607,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
       log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "refused", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: null, obligationId: null, idempotencyKey: idem });
       throw new AgentInputError(`Refused, and nothing was created: ${summary}`);
     };
-    if (probing(db, agent, payeeKey, a.amountMinor) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
+    if (probing(db, agent, payeeKey, a.amountMinor, a.reference) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
 
     // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person (AG2-1, AG2-3).
     const concerns = disagreementsOf(db, biz.id, asked, a);

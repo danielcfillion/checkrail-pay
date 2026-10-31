@@ -1,6 +1,24 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
-import { openTestDb, type Db } from "../db";
+import { openTestDb as openRawTestDb, type Db } from "../db";
+
+// Every test opens its own in-memory database. Close them after each test: native SQLite memory is not seen by the
+// garbage collector, and a hundred open copies of the seeded books outgrow the test worker.
+const opened: Db[] = [];
+function openTestDb(): Db {
+  const db = openRawTestDb();
+  opened.push(db);
+  return db;
+}
+afterEach(() => {
+  for (const db of opened.splice(0)) {
+    try {
+      (db as unknown as { $client: { close(): void } }).$client.close();
+    } catch {
+      // already closed
+    }
+  }
+});
 import { agentChecks, auditEntries, businesses, obligations, paymentAttempts } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { authenticateAgent, configuredAgentKeys, type AgentKey } from "./keys";
@@ -929,5 +947,130 @@ describe("review fixes, round 6 (31 Oct)", () => {
   it("AG6-13: unspaced IBANs and bullet or x masks are removed", () => {
     expect(clean("IBAN DE89370400440532013000 on file")).toBe("[payout account] on file");
     expect(clean("card ••••2210 and acct xxxx4417")).toBe("card [payout account] and acct [payout account]");
+  });
+});
+
+describe("review fixes, round 7 (31 Oct)", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = openTestDb();
+    await seedDemo(db);
+    setAutonomy(db, "autopilot");
+  });
+  const rules = (r: { blocks: Array<{ rule: string }>; warnings: Array<{ rule: string }> }) => [...r.blocks, ...r.warnings].map((x) => x.rule);
+  const integration = async (vendor: string, sourceRef: string, amountMinor: number, extra: Array<{ kind: string; label: string; reference: string | null; excerpt?: string }> = [], text = "") => {
+    const { ingestObligation } = await import("../engine/orchestrator");
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", sourceRef, rawInput: `${vendor} invoice ${sourceRef}, USD ${amountMinor / 100}, please pay.${text ? ` ${text}` : ""}`, evidence: [{ kind: "invoice", label: `Invoice ${sourceRef}`, amountMinor, currency: "USD", reference: sourceRef, excerpt: `${vendor}. Total USD ${amountMinor / 100}.` }, ...extra.map((e) => ({ ...e, amountMinor: null, currency: null, excerpt: e.excerpt ?? null }))], actor: "integration:test" });
+    return db.select().from(obligations).where(eq(obligations.id, id)).get()!;
+  };
+  const settle = (id: string) => db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, id)).run();
+  const dupBlocked = (o: { policyReasonsJson: string | null }) => /Same job|already used/.test(o.policyReasonsJson ?? "");
+  const notPaid = (o: { state: string }) => o.state !== "approved";
+
+  it("AG7-1: a booking or order number is caught however each side carries it", async () => {
+    const po = (r: string) => [{ kind: "purchase_order", label: `Order ${r}`, reference: r }];
+    const bk = (r: string) => [{ kind: "booking", label: `Booking ${r}`, reference: r }];
+    const pairs: Array<[string, Parameters<typeof integration>, Parameters<typeof integration>]> = [
+      ["PO as reference, then PO record", ["Maria Santos", "PO-7792", 15_000], ["Maria Santos", "INV-MS-4010", 14_000, po("PO-7792")]],
+      ["PO record, then PO in text", ["Maria Santos", "INV-MS-4011", 15_000, po("PO-7791")], ["Maria Santos", "INV-MS-4012", 14_000, [], "Against PO-7791."]],
+      ["BK as reference, then booking record", ["Maria Santos", "BK-55823", 15_000], ["Maria Santos", "INV-MS-4013", 14_000, bk("BK-55823")]],
+      ["booking record, then BKG as reference", ["Maria Santos", "INV-MS-4014", 15_000, bk("BKG-55824")], ["Maria Santos", "BKG-55824", 14_000]],
+      ["invoice record, then the same number as a booking", ["Maria Santos", "INV-MS-4015", 15_000, [{ kind: "invoice", label: "Invoice", reference: "MS-88810" }]], ["Maria Santos", "INV-MS-4016", 14_000, bk("MS-88810")]],
+      ["job sheet departure, then booking record of it", ["Rosa Villanueva", "INV-R-4017", 15_000, [{ kind: "job_sheet", label: "Sheet", reference: "HG-4D-1184" }]], ["Rosa Villanueva", "INV-R-4018", 14_000, bk("HG-4D-1184")]],
+    ];
+    for (const [why, first, second] of pairs) {
+      settle((await integration(...first)).id);
+      expect(notPaid(await integration(...second)), why).toBe(true);
+    }
+    // Through an attest agent too: never scheduled.
+    settle((await integration("Maria Santos", "PO-7799", 15_000)).id);
+    const r = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "140", currency: "USD", reference: "INV-MS-4019", description: "Maria Santos, week 2.", evidence: [{ kind: "job_sheet", label: "Sheet INV-MS-4019", amount: "140", reference: "INV-MS-4019", excerpt: "Maria Santos. Total USD 140.00." }, { kind: "purchase_order", label: "Order PO-7799", reference: "PO-7799" }], idempotency_key: "ag71-key-0001" });
+    expect(r.status).not.toBe("scheduled");
+  });
+
+  it("AG7-2: a booking's own number never cuts the departure it names", async () => {
+    settle((await integration("Rosa Villanueva", "INV-R-4101", 15_000, [{ kind: "job_sheet", label: "Sheet", reference: "HG-4D-1185" }])).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-4102", 14_000, [{ kind: "booking", label: "Booking 1185", reference: "1185", excerpt: "Booking 1185 for departure HG-4D-1185" }]))).toBe(true);
+  });
+
+  it("AG7-3: an invoice named after a departure with dots, slashes or no separator is that departure", async () => {
+    for (const [i, ref] of ["INV.HG4D.1181", "INV/HG4D/1181", "INVHG4D1181"].entries()) {
+      const db0 = db;
+      void db0;
+      settle((await integration("Rosa Villanueva", `HG-4D-118${i + 1}`, 15_000 + i)).id);
+      expect(dupBlocked(await integration("Rosa Villanueva", ref.replace("1181", `118${i + 1}`), 14_000 + i)), ref).toBe(true);
+    }
+  });
+
+  it("AG7-4: dates, rooms and counts in capitals are not departures", async () => {
+    for (const [i, text] of ["Stay NOV 2ND 2026.", "ROOM 2A 1105.", "PAX 4X 1200."].entries()) {
+      settle((await integration("Linh Family Homestay", `INV-LH-50${i}1`, 15_000 + i, [], text)).id);
+      expect(dupBlocked(await integration("Linh Family Homestay", `INV-LH-50${i}2`, 14_000 + i, [], text)), text).toBe(false);
+    }
+  });
+
+  it("AG7-5: years, amounts, phones, durations, room numbers and run-together dates are not bookings", async () => {
+    const { bookingKeys } = await import("../domain/ids");
+    for (const t of ["Booking 2026 season", "Booking 1500000 VND", "booking 0912345678", "booking 4D3N", "reservation 1203 night", "Bkg 20261102", "salamat po 2026"]) expect(bookingKeys(t), t).toEqual([]);
+    expect(bookingKeys("Booking BKG-55821")).not.toEqual([]);
+  });
+
+  it("AG7-6: a dashed order or booking number in the text holds, not blocks", async () => {
+    for (const [i, [a, b]] of [["Week 1 against PO-7795.", "Week 2 against PO-7795."], ["Booking BK-55825 deposit.", "Booking BK-55825 balance."]].entries()) {
+      settle((await integration("Maria Santos", `INV-MS-60${i}1`, 15_000 + i, [], a)).id);
+      const second = await integration("Maria Santos", `INV-MS-60${i}2`, 14_000 + i, [], b);
+      expect(dupBlocked(second), b).toBe(false);
+      expect(notPaid(second), b).toBe(true);
+    }
+  });
+
+  it("AG7-7: other ways of naming who is paid are caught", async () => {
+    for (const description of ["Rosa Villanueva trip sheet. Payee: Maria Santos.", "Rosa Villanueva trip. Recipient: Maria Santos.", "Rosa Villanueva guided. Maria Santos should be paid for this one.", "Rosa Villanueva, thanh toán cho Maria Santos.", "Rosa Villanueva trip; send this to Maria Santos's PayPal."]) {
+      expect(rules(await checkPayment(db, agent(`p7-${description.length}`, ["check", "request", "attest"]), { ...ROSA, description })), description).toContain("agent_mismatch");
+    }
+  });
+
+  it("AG7-8: a count used twice, a surcharge, a paid figure and a bare total cannot carry a larger amount", async () => {
+    for (const description of ["Please pay Rosa Villanueva USD 95 a day for 2 days.", "Rosa Villanueva USD 190. Late invoices carry a 200% surcharge.", "Rosa Villanueva, this trip USD 190 and USD 190 already paid last month.", "Rosa Villanueva, 2 days, total 190."]) {
+      expect(rules(await checkPayment(db, agent(`a7-${description.length}`, ["check", "request", "attest"]), { ...ROSA, amount: "380", description })), description).toContain("agent_mismatch");
+    }
+  });
+
+  it("AG7-9: who agreed, and withholding taken off, are not held", async () => {
+    for (const [amount, description] of [["190", "Pay Rosa Villanueva the USD 190 owed to her, as Maria Santos confirmed."], ["190", "Pay Rosa Villanueva the balance as agreed with Maria Santos."], ["190", "Rosa Villanueva USD 200, 5% withholding deducted."]]) {
+      expect(rules(await checkPayment(db, agent(`ok7-${description.length}`, ["check"]), { ...ROSA, amount, description })), description).not.toContain("agent_mismatch");
+    }
+  });
+
+  it("AG7-10: a shared booking hold says what was already paid against it", async () => {
+    const bk = [{ kind: "booking", label: "Booking BKG-66010", reference: "BKG-66010" }];
+    settle((await integration("Maria Santos", "INV-MS-7101", 15_000, bk)).id);
+    const second = await integration("Maria Santos", "INV-MS-7102", 14_000, bk);
+    expect(second.policyReasonsJson).toMatch(/USD 150\.00 \(settled/);
+    expect(second.policyReasonsJson).toMatch(/already paid or committed against it/);
+  });
+
+  it("AG7-11: the probe hold sees every spelling the duplicate check treats as one job", async () => {
+    await checkPayment(db, bookings, { ...ROSA, amount: "240", reference: "INV-2026-0452" });
+    await checkPayment(db, bookings, { ...ROSA, amount: "215", reference: "INV-2026-452" });
+    expect(rules(await checkPayment(db, bookings, { ...ROSA, reference: "INV-2026-00452" }))).toContain("agent_probing");
+    const desk = agent("dep-desk", ["check", "request", "attest"]);
+    await checkPayment(db, desk, { ...ROSA, amount: "240", reference: "HG-4D-0991" });
+    await checkPayment(db, desk, { ...ROSA, amount: "215", reference: "INV-HG4D-0991" });
+    expect(rules(await checkPayment(db, desk, { ...ROSA, reference: "PO-HG4D-0991" }))).toContain("agent_probing");
+  });
+
+  it("AG7-13: IBANs with dashes or in lower case, and dashed account numbers, are removed", () => {
+    expect(clean("IBAN: DE89-3704-0044-0532-0130-00")).toBe("[payout account]");
+    expect(clean("iban de89 3704 0044 0532 0130 00")).toBe("[payout account]");
+    expect(clean("acct no. 12-345-678 on file")).toBe("[payout account] on file");
+  });
+
+  it("AG7-14: an agent learns only that a reference is on another supplier's payment", async () => {
+    settle((await integration("Maria Santos", "INV-X-5001", 15_000)).id);
+    const r = await checkPayment(db, checker, { payee: "Rosa Villanueva", amount: "150", currency: "USD", reference: "INV-X-5001" });
+    const msg = [...r.blocks, ...r.warnings].find((x) => x.rule === "reference_other_vendor")?.message ?? "";
+    expect(msg).toMatch(/another supplier/);
+    expect(msg).not.toMatch(/settled|Maria/);
   });
 });

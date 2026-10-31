@@ -1,4 +1,4 @@
-import { canonicalForms, foldConfusables, jobKeys, sourceRefKeys } from "./ids";
+import { bareKey, canonicalForms, foldConfusables, isSharedKey, jobKeys, sourceRefKeys } from "./ids";
 
 /**
  * References in a free-text PayPal note however they were typed ("JOB HG4D 0914 guide fee", "Invoice 4471"): the
@@ -16,7 +16,9 @@ function noteRefKeys(text: string | null | undefined): string[] {
       const run = words.slice(i, i + n);
       // A short bare number ("Room 152", "Boat 2026, 1031 pax") is a room, a year or a count, not a reference, unless
       // a word says it is one ("Invoice 4471", "No. 152") or it is the whole note (AG6-6).
-      if (run.every((w) => /^\d+$/.test(w)) && run.join("").length < 5 && !(i > 0 && /^(?:invoice|inv|ref|reference|no|number|hd|bill)$/i.test(words[i - 1])) && words.length !== n) continue;
+      // "No." after a room, table or seat word is that thing's number, not a reference; "bill" is a meal (AG7-12).
+      const refWord = i > 0 && /^(?:invoice|inv|ref|reference|no|number|hd)$/i.test(words[i - 1]) && !(i > 1 && /^(?:no|number)$/i.test(words[i - 1]) && /^(?:room|table|seat|bed|unit|phone|tel|bus|van|car)$/i.test(words[i - 2]));
+      if (run.every((w) => /^\d+$/.test(w)) && run.join("").length < 5 && !refWord && words.length !== n) continue;
       for (const f of canonicalForms(run.join("-"))) out.add(`~${f}`);
     }
   }
@@ -49,6 +51,8 @@ export interface PayPalHistoryCheck {
   error?: string;
   lines: number;
   matches: PayPalHistoryMatch[];
+  /** Payouts that share only a booking or purchase order with this request: a person looks (agent guard review AG7-1). */
+  shared?: PayPalHistoryMatch[];
 }
 
 interface TsRow {
@@ -71,7 +75,7 @@ interface TsRow {
  * @param vendorEmail the payee's PayPal email
  * @param excludeIds PayPal transaction ids known to have come back (refunded here)
  */
-export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: string | null | undefined, excludeIds: Iterable<string> = []): { lines: number; matches: PayPalHistoryMatch[] } {
+export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: string | null | undefined, excludeIds: Iterable<string> = []): { lines: number; matches: PayPalHistoryMatch[]; shared: PayPalHistoryMatch[] } {
   const email = (vendorEmail ?? "").trim().toLowerCase();
   let body: { transaction_details?: TsRow[] } | null = null;
   try {
@@ -80,11 +84,18 @@ export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: str
     body = null;
   }
   const rows = Array.isArray(body?.transaction_details) ? body!.transaction_details : [];
-  if (!email || !ids.length) return { lines: rows.length, matches: [] };
+  if (!email || !ids.length) return { lines: rows.length, matches: [], shared: [] };
   // The same identity the duplicate check uses: job identifiers taken from the line's text, compared as keys, so
   // "HG4D-0914" never matches inside a longer number.
   // An agreement number names every job under a contract, not one job, so it never identifies a payment.
-  const wanted = new Set(ids.map((k) => foldConfusables(k).toLowerCase()).filter((k) => !k.startsWith("agr-") && !k.startsWith("~agr")));
+  // Keys compare bare; a match is a payout for this job when both sides name the job, and a shared booking or order
+  // (a hold) when either side has it only as one (AG7-1).
+  const wanted = new Map<string, boolean>();
+  for (const k of ids.map((x) => foldConfusables(x).toLowerCase())) {
+    const b = bareKey(k);
+    if (b.startsWith("agr")) continue;
+    wanted.set(b, (wanted.get(b) ?? false) || !isSharedKey(k));
+  }
   const reversed = new Set<string>(excludeIds);
   for (const r of rows) {
     const t = r.transaction_info;
@@ -92,6 +103,7 @@ export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: str
     if (t?.paypal_reference_id && v > 0) reversed.add(t.paypal_reference_id);
   }
   const matches: PayPalHistoryMatch[] = [];
+  const shared: PayPalHistoryMatch[] = [];
   for (const r of rows) {
     const t = r.transaction_info;
     if (!t?.transaction_id || reversed.has(t.transaction_id)) continue;
@@ -99,16 +111,18 @@ export function matchPayPalHistory(raw: unknown, ids: string[], vendorEmail: str
     if (!(value < 0)) continue;
     if (!["S", "P"].includes((t.transaction_status ?? "").toUpperCase())) continue;
     if ((r.payer_info?.email_address ?? "").trim().toLowerCase() !== email) continue;
-    const hit = [...jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id), ...sourceRefKeys(t.invoice_id), ...noteRefKeys(t.transaction_note), ...noteRefKeys(t.transaction_subject)].find((k) => wanted.has(k) && !k.startsWith("agr-") && !k.startsWith("~agr"));
+    const theirs = [...jobKeys(t.transaction_note, t.transaction_subject, t.invoice_id), ...sourceRefKeys(t.invoice_id), ...noteRefKeys(t.transaction_note), ...noteRefKeys(t.transaction_subject)].filter((k) => wanted.has(bareKey(k)) && !bareKey(k).startsWith("agr"));
+    const strong = theirs.find((k) => !isSharedKey(k) && wanted.get(bareKey(k)));
+    const hit = strong ?? theirs[0];
     if (!hit) continue;
-    matches.push({
+    (strong ? matches : shared).push({
       transactionId: t.transaction_id,
       date: (t.transaction_initiation_date ?? "").slice(0, 10),
       amountMinor: Math.round(-value * 100),
       currency: (t.transaction_amount?.currency_code ?? "").toUpperCase(),
       email,
-      matched: hit.replace(/^~/, "").toUpperCase(),
+      matched: bareKey(hit).toUpperCase(),
     });
   }
-  return { lines: rows.length, matches };
+  return { lines: rows.length, matches, shared };
 }

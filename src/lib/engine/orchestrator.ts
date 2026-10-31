@@ -536,7 +536,8 @@ const jobTexts = (ev: Array<{ kind: string; reference: string | null; label: str
   ev.flatMap((e) => {
     // A booking's or order's own number is read as a shared record ("^" keys), not as a job id that blocks.
     if (!["contract", ...SHARED_JOB_KINDS].includes(e.kind)) return [e.reference, e.label, e.excerpt];
-    const own = e.reference ? new RegExp(e.reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi") : null;
+    // Only the reference as a whole token: booking "1185" must not cut "HG-4D-1185" down to "HG-4D-" (AG7-2).
+    const own = e.reference ? new RegExp(`(?<![\\p{L}\\p{N}-])${e.reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}]|-\\p{N})`, "giu") : null;
     return [e.label, e.excerpt].map((t) => (t && own ? t.replace(own, " ") : t));
   });
 

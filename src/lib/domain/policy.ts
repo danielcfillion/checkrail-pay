@@ -1,7 +1,7 @@
 import { namesVendor as mentionsVendor, namesVendorFully } from "./vendorNames";
 import { statedRateAboveContract, statedRatesFor, UNIT_NAME } from "./statedRate";
 import { localDateString } from "../format";
-import { foldConfusables, hasConfusables, jobKeys, lookalikeWords, mixesScripts, sourceRefKeys } from "./ids";
+import { bareKey, foldConfusables, hasConfusables, isSharedKey, jobKeys, lookalikeWords, mixesScripts, sourceRefKeys } from "./ids";
 
 /** Under Autopilot, an amount at least this many times the vendor's median settled payment waits for a person. */
 export const UNUSUAL_MULTIPLE = 3;
@@ -241,18 +241,39 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;
-    const counts = (k: string) => myKeys.has(k) && !k.startsWith("~agr") && !k.startsWith("agr-");
-    const byKey = byRef ? undefined : live.find((p) => (p.keys ?? []).some((k) => counts(k) && !k.startsWith("^")));
-    // Shared only through a booking or purchase order: likely the same job, possibly a deposit and its balance (AG6-5).
-    const bySharedRecord = byRef || byKey ? undefined : live.find((p) => (p.keys ?? []).some((k) => counts(k) && k.startsWith("^")));
+    // Keys are compared bare. A key names one job ("~", or an exact reference) or a booking or order that the parts of
+    // one job share ("^"). A match blocks when both sides name the job; when either side has it only as a shared
+    // record, a person looks (AG6-5). A shared mark can only turn a block into a hold, never hide a match (AG7-1).
+    const strength = (keys: Iterable<string>) => {
+      const m = new Map<string, boolean>();
+      for (const k of keys) {
+        const b = bareKey(k);
+        if (b.startsWith("agr")) continue;
+        m.set(b, (m.get(b) ?? false) || !isSharedKey(k));
+      }
+      return m;
+    };
+    const mine = strength(myKeys);
+    const sharedWith = (p: { keys?: string[] }) => {
+      const theirs = strength(p.keys ?? []);
+      const both = [...theirs.keys()].filter((b) => mine.has(b));
+      return { hard: both.find((b) => mine.get(b) && theirs.get(b)), soft: both[0] };
+    };
+    const byKey = byRef ? undefined : live.find((p) => sharedWith(p).hard);
+    const bySharedRecord = byRef || byKey ? undefined : live.find((p) => sharedWith(p).soft);
     if (byRef) {
       rules.push(block("no_duplicate", `Reference ${obligation.sourceRef} was already used by obligation ${byRef.obligationId} (${byRef.state})`));
     } else if (byKey) {
-      const shared = (byKey.keys ?? []).find((k) => myKeys.has(k) && !k.startsWith("^"))!;
-      rules.push(block("no_duplicate", `Same job as obligation ${byKey.obligationId} (${byKey.state}): both name ${shared.replace(/^~/, "").toUpperCase()}${obligation.sourceRef ? `, this one under a new reference ${obligation.sourceRef}` : ""}`));
+      const shared = sharedWith(byKey).hard!;
+      rules.push(block("no_duplicate", `Same job as obligation ${byKey.obligationId} (${byKey.state}): both name ${shared.toUpperCase()}${obligation.sourceRef ? `, this one under a new reference ${obligation.sourceRef}` : ""}`));
     } else if (bySharedRecord) {
-      const shared = (bySharedRecord.keys ?? []).find((k) => myKeys.has(k) && k.startsWith("^"))!;
-      rules.push(warn("no_duplicate", `Shares booking or order ${shared.slice(1).toUpperCase()} with obligation ${bySharedRecord.obligationId} (${bySharedRecord.state}); confirm this is another part of the job, not the same one again`));
+      const shared = sharedWith(bySharedRecord).soft!;
+      // What the approver needs to tell a balance from a re-sent invoice: what was already paid against it, and when (AG7-10).
+      const onIt = live.filter((p) => sharedWith(p).soft === shared);
+      const cur = obligation.currency ?? "USD";
+      const paid = onIt.reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
+      const list = onIt.slice(0, 3).map((p) => `${p.amountMinor != null ? fmt(p.amountMinor, cur) : "an amount"} (${p.state}${p.updatedAt ? `, ${p.updatedAt.slice(0, 10)}` : ""})`).join(", ");
+      rules.push(warn("no_duplicate", `Shares booking or order ${shared.toUpperCase()} with ${onIt.length === 1 ? "an earlier payment" : `${onIt.length} earlier payments`} (obligation ${bySharedRecord.obligationId}): ${list}; ${fmt(paid, cur)} already paid or committed against it. Confirm this is another part of the job, not the same one again`));
     } else {
       // Only when this obligation carries no job identifier beyond its own reference. A guide paid the same
       // day rate for a different, named trip is routine; an invoice number alone with a familiar amount is not.
@@ -288,6 +309,8 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
       rules.push(pass("paypal_history", `PayPal shows ${fmt(shownMinor, bill!.currency)} already paid on ${bill!.reference}; with this payment that stays within its total of ${fmt(bill!.totalMinor, bill!.currency)}`));
     } else if (h.matches.length) {
       for (const m of h.matches.slice(0, 3)) rules.push(block("paypal_history", `PayPal transaction ${m.transactionId} on ${m.date} already paid ${fmt(m.amountMinor, m.currency)} for ${m.matched} to ${m.email}`));
+    } else if (h.shared?.length) {
+      for (const m of h.shared.slice(0, 3)) rules.push(warn("paypal_history", `PayPal transaction ${m.transactionId} on ${m.date} paid ${fmt(m.amountMinor, m.currency)} to ${m.email} against the same booking or order ${m.matched}; confirm this is another part of the job`));
     } else if (h.ok) rules.push(pass("paypal_history", "PayPal's own records show no payment for this job in the last 31 days"));
     // A read that failed, or that was cut short, is not a clean bill: only this app's own history was checked, so a person
     // confirms the vendor was not already paid from PayPal directly.

@@ -63,8 +63,20 @@ describe("PayPal's own history, rooms, years and counts in notes (agent guard re
   it("does not read a short bare number as a reference unless a word says it is one", async () => {
     const { sourceRefKeys } = await import("./ids");
     const keysFor = (r: string) => [...jobKeys(r), ...sourceRefKeys(r)];
-    expect(matchPayPalHistory(body(line("7XD", "-180.00", "Room 152 extra night", "m@x.co")), keysFor("TRIP-152"), "m@x.co").matches).toHaveLength(0);
+    expect(matchPayPalHistory(body(line("7XD", "-180.00", "Room 152 extra night", "m@x.co")), keysFor("JOB-152"), "m@x.co").matches).toHaveLength(0);
     expect(matchPayPalHistory(body(line("7XE", "-180.00", "Boat 2026, 1031 pax 3", "m@x.co")), keysFor("JOB-1031"), "m@x.co").matches).toHaveLength(0);
-    expect(matchPayPalHistory(body(line("7XF", "-180.00", "Invoice No 152", "m@x.co")), keysFor("TRIP-152"), "m@x.co").matches).toHaveLength(1);
+    expect(matchPayPalHistory(body(line("7XF", "-180.00", "Invoice No 152", "m@x.co")), keysFor("JOB-152"), "m@x.co").matches).toHaveLength(1);
+  });
+});
+
+describe("PayPal's own history, shared orders and meal or room numbers (agent guard review AG7-1, AG7-12)", () => {
+  it("holds a payout against the same order, and reads no room or bill number as a reference", async () => {
+    const { sourceRefKeys } = await import("./ids");
+    const r = matchPayPalHistory(body(line("7XG", "-180.00", "PO-7796 balance", "m@x.co")), ["^po7796"], "m@x.co");
+    expect(r.matches).toHaveLength(0);
+    expect(r.shared).toHaveLength(1);
+    const job152 = [...jobKeys("JOB-152"), ...sourceRefKeys("JOB-152")];
+    for (const note of ["Room No. 152", "Bill 152 dinner"]) expect(matchPayPalHistory(body(line("7XH", "-180.00", note, "m@x.co")), job152, "m@x.co").matches, note).toHaveLength(0);
+    expect(matchPayPalHistory(body(line("7XI", "-180.00", "Tour 2026 tips", "m@x.co")), [...jobKeys("JOB-2026"), ...sourceRefKeys("JOB-2026")], "m@x.co").matches).toHaveLength(0);
   });
 });
