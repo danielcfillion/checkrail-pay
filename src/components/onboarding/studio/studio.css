@@ -1,0 +1,267 @@
+/* "Your first weeks" (AG Studio). Scoped to .cr-frame and the cr- widget classes; colours are the app's tokens. */
+
+/* --- Studio's frame ------------------------------------------------------------------------------------------- */
+
+/* Studio insets every card 10px inside its grid cell (studioWidgetPadding): pull the frame out by the same amount
+   so card edges line up with the page header. */
+.cr-frame {
+  margin: -10px -10px 0;
+}
+/* Cards lift off the paper like .panel: Studio has no widget shadow parameter, so the shadow is set here. */
+/* Studio injects its own styles after the page's, so these carry one more class than Studio's rules. */
+/* Room inside each card, as in the app's panels: the card holds Studio's title row and the widget body. */
+.cr-frame .ag-studio-layout-widget .ag-studio-layout-widget-container {
+  box-shadow: var(--card-shadow);
+  padding: 12px 14px;
+}
+/* Custom widgets fill their card: give Studio's React wrapper the card's height. */
+.cr-frame .ag-studio-widget-container .ag-studio-react-container {
+  height: 100%;
+}
+
+/* --- Custom widgets ------------------------------------------------------------------------------------------- */
+
+.cr-widget {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  color: var(--ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+.cr-widget-title {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.cr-ok {
+  color: var(--settled);
+}
+.cr-wait {
+  color: var(--attention);
+}
+.cr-icon {
+  flex-shrink: 0;
+}
+.cr-caption {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 18px;
+}
+.cr-axis {
+  fill: var(--ink-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Readiness gauge: dial left, checks right; stacked when the card is narrow. */
+.cr-gauge {
+  container-type: inline-size;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  overflow: auto;
+  padding: 2px 4px 0;
+}
+/* The dial scales with the card (30% of its width, 120 to 168px) so a narrow card keeps room for the checks. */
+.cr-gauge-dial {
+  flex-shrink: 0;
+  width: clamp(120px, 30cqi, 168px);
+}
+.cr-gauge-dial svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.cr-gauge-body {
+  min-width: 0;
+  flex: 1;
+}
+.cr-gauge-title {
+  font-size: 19px;
+  line-height: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.cr-gauge-value {
+  fill: var(--ink);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.cr-gauge-unit {
+  fill: var(--ink-soft);
+  font-size: 12px;
+}
+.cr-checks {
+  margin-top: 10px;
+  display: grid;
+  gap: 9px;
+}
+.cr-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.cr-check > .cr-icon {
+  margin-top: 2px;
+}
+.cr-check-label {
+  display: block;
+  font-weight: 500;
+}
+.cr-check-line {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 18px;
+}
+.cr-gate {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 17px;
+}
+.cr-gate > .cr-icon {
+  margin-top: 1px;
+}
+.cr-gate-label {
+  color: var(--ink);
+  font-weight: 500;
+}
+@container (max-width: 420px) {
+  .cr-gauge {
+    flex-direction: column;
+    align-items: center;
+  }
+  .cr-gauge-body {
+    width: 100%;
+  }
+}
+
+/* Holds that turned out fine. */
+.cr-holds {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 4px 0;
+}
+.cr-holds-figure {
+  margin-top: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.cr-holds-value {
+  font-size: 34px;
+  line-height: 38px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.cr-holds-when {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+/* The SVG is sized from this box and sits out of flow, so it can never grow the box it measures. */
+.cr-holds-chart {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 120px;
+  margin-top: 8px;
+}
+.cr-holds-chart svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: visible;
+}
+.cr-target-label {
+  font-weight: 500;
+}
+.cr-holds .cr-caption {
+  margin-top: 8px;
+}
+.cr-caption-ok {
+  color: var(--ink);
+}
+.cr-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: cr-draw 700ms cubic-bezier(0.33, 1, 0.68, 1) forwards;
+}
+@keyframes cr-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cr-draw {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* --- Grid cells ----------------------------------------------------------------------------------------------- */
+
+/* The grid keeps a scrollbar gutter on the right of its last column: stay clear of it. */
+.cr-agree {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 14px;
+}
+.cr-agree .num {
+  min-width: 36px;
+  text-align: right;
+}
+.cr-agree-track {
+  width: 44px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--neutral-soft);
+  overflow: hidden;
+}
+.cr-agree-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.cr-bar-ok {
+  background: var(--settled);
+}
+.cr-bar-wait {
+  background: var(--attention);
+}
+.cr-cell-muted {
+  color: var(--ink-soft);
+}
+.cr-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--neutral-soft);
+  color: var(--ink);
+}
+.cr-pill-blocked {
+  background: var(--blocked-soft);
+  color: var(--blocked);
+}
+.cr-pill-held {
+  background: var(--attention-soft);
+  color: var(--attention);
+}
+.cr-pill-clear {
+  background: var(--settled-soft);
+  color: var(--settled);
+}
