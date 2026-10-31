@@ -6,6 +6,12 @@ Record in live mode: PayPal sandbox (the funded US business account), Claude rea
 
 Pace: plain speech, one idea per sentence. No music under the voiceover.
 
+## The opening statistic (verified 1 Nov 2026 at the source)
+
+"About three in four organizations (74%) were affected by business email compromise (BEC) in 2025," and 76% of US organizations experienced attempted or actual payments fraud. Association for Financial Professionals, 2026 AFP Payments Fraud and Control Survey Report, released 14 Apr 2026, 465 treasury practitioners surveyed in January 2026 (AFP press release: https://www.financialprofessionals.org/about/learn-more/press-releases/Details/over-75-percent-of-us-firms-experienced-payments-fraud-in-2025-while-ai-adoption-for-fraud-mitigation-lags). On screen, cite it as "AFP Payments Fraud and Control Survey, 2026".
+
+Suggested hook over the opening motion graphic: "Three in four companies were hit by fake payment emails last year. Now AI agents read those emails, and some of them can pay." It sets up the agent beat and the provenance firewall (a payment instruction that came from an outside email is held). Do not round it up or restate it as "of small businesses"; the survey is of US treasury practitioners.
+
 ## The story in one line
 
 Claude reads, policy decides, the agent pays inside your limits, and you sign off at the end of the day in two minutes.
