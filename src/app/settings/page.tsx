@@ -174,6 +174,7 @@ export default async function SettingsPage() {
                 : "To change a rail or the agent, see Live mode setup in the README."}
             </p>
           </Panel>
+          {await import("@/components/ApiKeysCard").then(({ ApiKeysCard }) => <ApiKeysCard />)}
         </Section>
       </div>
     </>
