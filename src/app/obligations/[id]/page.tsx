@@ -30,6 +30,7 @@ import { amountReadAs, correctionLine, RECORDED_LABEL, summaryWithoutCount } fro
 import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
+import { AgentGuardRecord } from "@/components/AgentFutures";
 
 export const dynamic = "force-dynamic";
 /** Tab title: "Phuong Transport, INV-2026-0152". */
@@ -301,6 +302,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 ) : null}
               </>
             )}
+            <AgentGuardRecord obligationId={o.id} />
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
           </WorkingPanel>
 
