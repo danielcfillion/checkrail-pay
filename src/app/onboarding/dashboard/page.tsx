@@ -1,10 +1,10 @@
 import { EmptyState } from "@/components/ui";
+import { Stepper } from "@/components/onboarding/Stepper";
 import { FirstWeeksDashboard } from "@/components/onboarding/studio/FirstWeeksDashboard";
 import { isLiveAi } from "@/lib/config";
 import { getDb } from "@/lib/db";
 import { onboardingDashboard, type DashboardData } from "@/lib/onboarding/dashboard";
 import { getBusiness } from "@/lib/queries";
-import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Your first weeks" };
@@ -20,8 +20,7 @@ export const metadata = { title: "Your first weeks" };
  */
 export default async function FirstWeeksPage() {
   const biz = getBusiness();
-  const viewer = await getViewer();
-  if (!biz || !viewer) return <EmptyState title="No business configured" body="Reset the demo from the overview." />;
+  if (!biz) return <EmptyState title="No business configured" body="Reset the demo from the overview." />;
 
   let data: DashboardData;
   try {
@@ -32,8 +31,7 @@ export default async function FirstWeeksPage() {
 
   return (
     <>
-      {/* TODO(stepper): replace this line with the shared onboarding stepper (src/components/onboarding/Stepper.tsx), step 3 of 3. */}
-      <p className="dense mb-2 uppercase tracking-[0.08em] text-ink-soft">Setup · Step 3 of 3</p>
+      <Stepper current={3} />
       <FirstWeeksDashboard data={data} licenseKey={process.env.AG_STUDIO || undefined} assistant={isLiveAi() ? { business: biz.name } : null} />
     </>
   );
