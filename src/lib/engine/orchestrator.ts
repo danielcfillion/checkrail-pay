@@ -15,7 +15,7 @@ import { DEFAULT_POLICY, effectiveAutonomy, fingerprintCovered, warningFingerpri
 import { evaluatePolicy } from "../domain/policy";
 import { chooseRoute } from "../domain/routing";
 import { audit, transition } from "../domain/stateMachine";
-import { hashPayoutDetails, idempotencyKey, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
+import { bookingKeys, hashPayoutDetails, idempotencyKey, isDateLike, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef, safeRefForMemo } from "../domain/money";
 import { runObligationAgent } from "../ai/agent";
 import { listPayPalTransactionsRaw } from "../ai/paypalTools";
@@ -523,17 +523,40 @@ function sharedPayout(db: Db, v: typeof vendors.$inferSelect): string[] {
  * sheet is shared by many payments to the vendor, so its reference names no single job (agent guard review AG4-2).
  */
 /** Records that name one job. A booking or purchase order does: the same booking on two invoices is one job paid twice (AG5-1). */
-const SINGLE_JOB_KINDS = ["invoice", "job_sheet", "receipt", "booking", "purchase_order"];
-/** Text that can name a job. A contract's own number is shared by every payment under it, so it is not read (AG5-2). */
-const jobTexts = (ev: Array<{ kind: string; reference: string | null; label: string; excerpt: string | null }>) => ev.filter((e) => e.kind !== "contract").flatMap((e) => [e.reference, e.label, e.excerpt]);
+const SINGLE_JOB_KINDS = ["invoice", "job_sheet", "receipt"];
+/** A booking or purchase order usually names one job, but a deposit and its balance, or weekly invoices on a blanket
+ *  order, honestly share one: a match through them alone holds the payment for a person instead of blocking it (AG6-5). */
+const SHARED_JOB_KINDS = ["booking", "purchase_order"];
+/**
+ * Text that can name a job. A contract's own number is shared by every payment under it, so it is not read (AG5-2),
+ * and a booking's or order's own number is matched as a shared record (AG6-5); the rest of each record is read, since
+ * a charter for one departure names that departure (AG6-2).
+ */
+const jobTexts = (ev: Array<{ kind: string; reference: string | null; label: string; excerpt: string | null }>) =>
+  ev.flatMap((e) => {
+    // A booking's or order's own number is read as a shared record ("^" keys), not as a job id that blocks.
+    if (!["contract", ...SHARED_JOB_KINDS].includes(e.kind)) return [e.reference, e.label, e.excerpt];
+    const own = e.reference ? new RegExp(e.reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi") : null;
+    return [e.label, e.excerpt].map((t) => (t && own ? t.replace(own, " ") : t));
+  });
 
+/**
+ * Reference keys from records: invoices, job sheets and receipts name one job ("~" keys, a match blocks); bookings and
+ * purchase orders name one job or a few ("^" keys, a match holds). Only comparison forms, which need a digit, so a
+ * placeholder ("N/A", "TBC", "ROSA") names nothing; and a date is not a job (AG6-3).
+ */
 function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>): string[] {
-  return ev.filter((e) => SINGLE_JOB_KINDS.includes(e.kind)).flatMap((e) => sourceRefKeys(e.reference));
+  const forms = (r: string | null) => (r && !isDateLike(r) ? sourceRefKeys(r).filter((k) => k.startsWith("~")) : []);
+  return [
+    ...ev.filter((e) => SINGLE_JOB_KINDS.includes(e.kind)).flatMap((e) => forms(e.reference)),
+    ...ev.filter((e) => SHARED_JOB_KINDS.includes(e.kind)).flatMap((e) => forms(e.reference).map((k) => `^${k.slice(1)}`)),
+  ];
 }
 
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
-  return [...new Set([...jobKeys(ob.sourceRef, ob.rawInput, ob.description, ...jobTexts(ev), ...docTexts.map((d) => d.text?.slice(0, 4000))), ...sourceRefKeys(ob.sourceRef), ...jobRecordRefKeys(ev)])];
+  const texts = [ob.sourceRef, ob.rawInput, ob.description, ...jobTexts(ev), ...docTexts.map((d) => d.text?.slice(0, 4000))];
+  return [...new Set([...jobKeys(...texts), ...bookingKeys(...texts), ...sourceRefKeys(ob.sourceRef), ...jobRecordRefKeys(ev)])];
 }
 
 /**
@@ -649,7 +672,8 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
           const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
           const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
-          return { ...p, keys: [...new Set([...jobKeys(p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
+          const all = [p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))];
+          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
@@ -666,6 +690,13 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   // Exact references on this obligation (its own and its evidence's), checked against other payees' obligations.
   // Compared in every form a reference is compared in, so a respelled reference still shows on another vendor (AG4-8).
   const myRefs = new Set([ob.sourceRef, ...myEvidence.map((e) => e.reference)].filter((r): r is string => Boolean(r)).flatMap((r) => [r.toUpperCase(), ...sourceRefKeys(r).filter((k) => k.startsWith("~"))]));
+  const untrustedOpenIds = new Set(
+    db.select({ id: auditEntries.obligationId, detail: auditEntries.detailJson, state: obligations.state }).from(auditEntries).innerJoin(obligations, eq(obligations.id, auditEntries.obligationId))
+      .where(and(eq(auditEntries.action, "obligation.stated"), eq(obligations.businessId, ob.businessId), inArray(obligations.state, ["drafted", "needs_evidence", "awaiting_approval", "verified", "blocked"])))
+      .all()
+      .filter((r) => (JSON.parse(r.detail ?? "{}") as StatedFields).trusted !== true)
+      .map((r) => r.id!),
+  );
   const otherVendorRefs = ob.vendorId && myRefs.size
     ? db
         .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, state: obligations.state, vendorName: vendors.name })
@@ -673,6 +704,9 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
         .innerJoin(vendors, eq(vendors.id, obligations.vendorId))
         .where(and(eq(obligations.businessId, ob.businessId), ne(obligations.vendorId, ob.vendorId), ne(obligations.id, obligationId)))
         .all()
+        // An outside agent's unapproved request without attest, or any request still drafted or waiting for evidence,
+        // is nobody's payment yet: it does not hold another supplier's request (AG6-11).
+        .filter((o) => !["drafted", "needs_evidence"].includes(o.state) && !untrustedOpenIds.has(o.obligationId))
         .filter((o) => o.state !== "cancelled" && o.state !== "failed" && o.sourceRef && (myRefs.has(o.sourceRef.toUpperCase()) || sourceRefKeys(o.sourceRef).some((k) => k.startsWith("~") && myRefs.has(k))))
         .map((o) => ({ obligationId: o.obligationId, vendorName: o.vendorName, reference: o.sourceRef!, state: o.state }))
     : [];

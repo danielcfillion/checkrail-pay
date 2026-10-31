@@ -23,6 +23,9 @@ export function idempotencyKey(obligationId: string, attemptNo: number): string 
  * HG-4D-0927, PAL-3D-0927, PO-1182. Lower-cased and de-duplicated. Used to catch the same job
  * re-submitted under a different reference.
  */
+/** A departure code in any spelling in free text: CEB-2D-1107, CEB2D1107, CEB 2D 1107. */
+const DEPARTURE_LOOSE = /\b([A-Z]{2,5})[-_ ]?(\d[A-Z]{1,3})[-_ ]?(\d{3,6})\b/g;
+
 export function jobKeys(...texts: Array<string | null | undefined>): string[] {
   const out = new Set<string>();
   const re = /\b(?:(?:INV|JOB|BK|PO|REF|TRIP|TOUR|AGR)-[A-Z0-9][A-Z0-9-]{2,}|[A-Z]{2,5}-\d[A-Z0-9]{0,3}-\d{3,6})\b/gi;
@@ -35,20 +38,15 @@ export function jobKeys(...texts: Array<string | null | undefined>): string[] {
       if (after.startsWith("...") || after.startsWith("…")) continue;
       const k = m[0].toUpperCase();
       out.add(k);
-      // JOB-HG4D-0914 and trip sheet HG-4D-0914 name the same departure: normalise by stripping the prefix and dashes.
-      // Only JOB, TRIP and TOUR name a departure; INV, BK, PO and REF stay, so INV-2026-0152 is not PO-2026-0152
-      // (AG5-3), and an agreement number stays an agreement number (AGR...) for the shared-contract exclusions (AG4-2).
-      const core = k.replace(/^(JOB|TRIP|TOUR)-/, "").replace(/-/g, "");
-      if (core.length >= 6) out.add(`~${core}`);
+      // Compared in its comparison forms (see canonicalForms): JOB-HG4D-0914 and the trip sheet's HG-4D-0914 are one
+      // departure; INV-2026-0152 is not PO-2026-0152 (AG5-3); INV-12-345 is not INV-123-45 (AG6-4).
       for (const f of canonicalForms(k)) out.add(`~${f}`);
       // A re-issued invoice often carries a suffix: INV-TAM-0834-B, INV-0152-R, INV-0152-REV2. Index it under the original too.
       const reissue = k.match(/^(.*\d{3,6})-(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/);
-      if (reissue) {
-        const base = reissue[1].replace(/^(JOB|TRIP|TOUR)-/, "").replace(/-/g, "");
-        if (base.length >= 6) out.add(`~${base}`);
-        for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
-      }
+      if (reissue) for (const f of canonicalForms(reissue[1])) out.add(`~${f}`);
     }
+    // A departure written without dashes in free text ("CEB2D1107", "CEB 2D 1107") is the same departure (AG6-7).
+    for (const m of t.matchAll(DEPARTURE_LOOSE)) for (const f of canonicalForms(`${m[1]}-${m[2]}-${m[3]}`)) out.add(`~${f}`);
   }
   return [...out].map((k) => k.toLowerCase());
 }
@@ -71,8 +69,10 @@ function formsOf(t: string): string[] {
     dotted += digits ? r.replace(/^0+(?=\d)/, "") : r;
   });
   const out = [dotted];
+  // A long number written once with a separator and once without (INV-2026-0152, INV20260152) is one number; three or
+  // more numbers are not run together, so INV-2026-1-123 is not INV-2026-11-23 (AG6-4).
   const compact = runs.join("");
-  if ((compact.match(/\d/g) ?? []).length >= 8) out.push(compact);
+  if ((compact.match(/\d/g) ?? []).length >= 8 && runs.filter((r) => /^\d+$/.test(r)).length <= 2) out.push(compact);
   return out.filter((f) => f.replace(/\./g, "").length >= 3 && /\d/.test(f)).map((f) => f.toLowerCase());
 }
 
@@ -90,6 +90,11 @@ export function canonicalForms(ref: string | null | undefined): string[] {
   const prefixed = t.match(/^(JOB|TRIP|TOUR)([^\p{L}\p{N}]*)(.*)$/u);
   if (prefixed && prefixed[3]) out.push(...formsOf(prefixed[3]));
   out.push(...formsOf(t));
+  // An invoice, order or booking named after a departure (INV-HG4D-1031, PO-CEB2D-1024) is about that departure too
+  // (AG6-1). Only a departure-shaped remainder counts, so INV-TAM-0834 and PO-TAM-0834 stay apart.
+  const named = t.match(/^(?:INV|PO|BK|REF)[^\p{L}\p{N}]+(.+)$/u);
+  const dep = named?.[1].match(/^([A-Z]{2,5})[-_ ]?(\d[A-Z]{1,3})[-_ ]?(\d{3,6})(?:[^\p{L}\p{N}].*)?$/u);
+  if (dep) out.push(...formsOf(`${dep[1]}-${dep[2]}-${dep[3]}`));
   return [...new Set(out)];
 }
 
@@ -113,14 +118,37 @@ export function sourceRefKeys(ref: string | null | undefined): string[] {
   return [...out];
 }
 
-/** The re-issue base of a reference when it has one, else its first comparison form: what a probe for one job keys on. */
+/**
+ * What a probe for one job keys on: the re-issue base, JOB/TRIP/TOUR set aside, and a long number run together, so
+ * every spelling the duplicate check treats as one job keys the same (AG5-6, AG6-12).
+ */
 export function jobOfRef(ref: string | null | undefined): string | null {
   if (!ref) return null;
   const t = foldRef(ref);
   const reissue = t.match(/^(.*\d{3,6})[^\p{L}\p{N}]+(?:[A-Z]|R\d?|REV\d*|COPY|V\d)$/u);
-  // The first form is the departure form (JOB/TRIP/TOUR set aside, numbers kept apart), the same for every spelling
-  // the duplicate check treats as one job (AG5-6).
-  return canonicalForms(reissue ? reissue[1] : t)[0] ?? null;
+  const base = reissue ? reissue[1] : t;
+  const stripped = base.match(/^(?:JOB|TRIP|TOUR)[^\p{L}\p{N}]*(.+)$/u)?.[1] ?? base;
+  const forms = formsOf(stripped);
+  return forms.find((f) => !f.includes(".") && (f.match(/\d/g) ?? []).length >= 8) ?? forms[0] ?? null;
+}
+
+/**
+ * A booking or purchase order named in free text ("booking BKG-55821", "PO# 7781", "reservation no. 4471"): soft "^"
+ * keys, since one booking can honestly carry a deposit and a balance (AG6-5, AG6-7).
+ */
+export function bookingKeys(...texts: Array<string | null | undefined>): string[] {
+  const out = new Set<string>();
+  const re = /\b(?:booking|bkg|reservation|purchase\s+order|P\.?O\.?)\s*(?:ref(?:erence)?|no\.?|number|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b/gi;
+  for (const raw of texts) {
+    if (!raw) continue;
+    for (const m of foldConfusables(raw).matchAll(re)) if (!isDateLike(m[1])) for (const f of canonicalForms(m[1])) out.add(`^${f}`);
+  }
+  return [...out];
+}
+
+/** A date written as a reference ("2026-10-31", "31/10/2026") names a day, not a job (AG6-3). */
+export function isDateLike(ref: string): boolean {
+  return /^\s*(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*$/.test(ref);
 }
 
 /**

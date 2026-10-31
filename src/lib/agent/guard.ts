@@ -133,91 +133,108 @@ function vendorNamed(db: Db, businessId: string, payee: string) {
 
 /** Units a count can be of: "2 days", "9 guests", "x 2". */
 const COUNT_RE = /(?<![\p{L}\p{N}.,/-])(\d{1,3})\s*(?:days?|nights?|guests?|pax|people|persons?|adults?|children|kids|vehicles?|vans?|cars?|bikes?|boats?|rooms?|hours?|trips?|departures?|seats?|porters?|guides?)\b|\bx\s*(\d{1,3})(?!\p{N}|[.,]\p{N})|(?<![\p{L}\p{N}.,/-])(\d{1,3})\s*x\b/giu;
-/** A figure labelled as paid already, a deposit or taken off: the one a difference may subtract. */
+/** A figure labelled as paid already, a deposit or taken off. */
 const SUBTRACTED = /(deposit|paid|less|minus|discount|credit|advance|already)/i;
 /** A figure the text asks to be paid now: right after "pay", "please pay", "balance due", "amount due". */
 const ASKED = /(?:please pay|pay|balance due|amount due|now due)[^0-9$₱₫฿]{0,12}$/i;
 /** A figure labelled as the total. */
 const TOTALLED = /(?:total|sum|=)[^0-9$₱₫฿]{0,12}$/i;
+/** A figure that is a rate: "USD 95 a day", "USD 95/day", "USD 18 per guest", "at USD 95", "x USD 18", "@ USD 18". */
+const RATE_AFTER = /^\s*(?:\/\s*\p{L}|per\b|a\s+(?:day|night|guest|person|pax|head|trip|hour|vehicle)\b|each\b)/iu;
+const RATE_BEFORE = /(?:@|\bx|\bat)\s*$/i;
+/** A figure added on: "plus USD 10", "+ USD 10", "and a USD 10 boat fee". */
+const ADDED_BEFORE = /(?:\bplus|\+|\band(?:\s+an?)?)\s*$/i;
 
 type Stated = { amountMinor: number; currency: string; index: number; length: number };
 
 /**
- * Does the amount sent follow from the figures stated (agent guard reviews AG3-5, AG4-7, AG5-4)?
- *  - A figure the text asks to be paid now must be the amount sent; nothing else rescues a different one.
- *  - Otherwise: one of the figures; the sum of two (a fee plus a boat fee); a figure less one labelled as a deposit,
- *    paid or taken off; or a stated rate times counts the text states with a unit ("2 days", "9 guests x 2 nights").
- *  - A part never exceeds a figure labelled as the total.
- * Numbers inside references and dates are not counts.
+ * Does the amount sent follow from the figures stated (agent guard reviews AG3-5, AG4-7, AG5-4, AG6-9, AG6-10)?
+ * The figures it may start from are the one the text asks to pay when there is one, else any. From those: the figure
+ * itself, a rate times counts stated with a unit, then plus a figure added on ("plus", "+"), less a figure labelled as
+ * a deposit, paid or a discount, less a stated discount percentage, or a stated percentage of it (a deposit). A part
+ * never exceeds a figure labelled as the total. Numbers in references and dates are not counts.
  */
 function amountFollows(sent: number, stated: Stated[], text: string): boolean {
-  const lead = (x: Stated) => text.slice(Math.max(0, x.index - 24), x.index);
-  const around = (x: Stated) => `${text.slice(Math.max(0, x.index - 24), x.index)} ${text.slice(x.index + x.length, x.index + x.length + 24)}`;
-  const asked = stated.filter((x) => ASKED.test(lead(x)));
-  if (asked.length > 0) return asked.some((x) => x.amountMinor === sent);
-  const totals = stated.filter((x) => TOTALLED.test(lead(x))).map((x) => x.amountMinor);
-  if (totals.some((t) => sent > t)) return false;
-  const figures = stated.map((x) => x.amountMinor);
-  if (figures.includes(sent)) return true;
-  if (figures.some((x, i) => figures.some((y, j) => i !== j && x + y === sent))) return true;
-  if (stated.some((x) => stated.some((y) => y !== x && SUBTRACTED.test(around(y)) && x.amountMinor - y.amountMinor === sent))) return true;
-  // "total USD 600, 50% deposit now"
-  for (const m of text.matchAll(/(\d{1,3})\s?%/g)) if (figures.some((x) => Math.round((x * Number(m[1])) / 100) === sent)) return true;
+  const before = (x: Stated, n = 24) => text.slice(Math.max(0, x.index - n), x.index);
+  const after = (x: Stated, n = 24) => text.slice(x.index + x.length, x.index + x.length + n);
+  if (stated.some((x) => TOTALLED.test(before(x)) && sent > x.amountMinor)) return false;
+  const asked = stated.filter((x) => ASKED.test(before(x)));
+  const bases = asked.length ? asked : stated;
   let rest = text;
   for (const x of [...stated].sort((p, q) => q.index - p.index)) rest = `${rest.slice(0, x.index)} ${rest.slice(x.index + x.length)}`;
   const counts = [...rest.matchAll(COUNT_RE)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
   const products = new Set<number>(counts);
   for (const p of [...products]) for (const q of counts) products.add(p * q);
-  return figures.some((x) => x > 0 && sent % x === 0 && products.has(sent / x));
+  const values: Array<{ v: number; from: Stated }> = [];
+  for (const b of bases) {
+    values.push({ v: b.amountMinor, from: b });
+    if (RATE_AFTER.test(after(b)) || RATE_BEFORE.test(before(b, 6))) for (const n of products) values.push({ v: b.amountMinor * n, from: b });
+  }
+  const added = stated.filter((x) => ADDED_BEFORE.test(before(x, 12)) || /^\s*(?:\p{L}+\s+){0,2}fee\b/iu.test(after(x)));
+  const taken = stated.filter((x) => SUBTRACTED.test(`${before(x, 20)} ${after(x, 20)}`));
+  const pcts = [...text.matchAll(/(\d{1,3})\s?%/g)].map((m) => ({ p: Number(m[1]), off: /less|minus|discount|off\b/i.test(text.slice(Math.max(0, m.index! - 16), m.index! + m[0].length + 24)) }));
+  for (const { v, from } of values) {
+    if (v === sent) return true;
+    if (added.some((y) => y !== from && v + y.amountMinor === sent)) return true;
+    if (taken.some((y) => y !== from && v - y.amountMinor === sent)) return true;
+    if (pcts.some(({ p, off }) => Math.round((v * (off ? 100 - p : p)) / 100) === sent)) return true;
+  }
+  return false;
 }
 
 /** The leading letters of a reference in its comparison form ("ceb" of CEB-2D-1024 and of JOB-CEB3D-1102). */
 const familyOf = (ref: string) => (canonicalRef(ref) ?? "").match(/^\p{L}+/u)?.[0] ?? "";
 
-/** Phrases that say who is to be paid. "Send" and "transfer" count only with money ("send the payment to"), so "send the receipt to Maria" does not (AG5-4). */
-const PAY_PHRASE = /\b(?:pay|paid to|payable to|remit|wire|beneficiary(?:\s+is)?|credit|owed to|settle with|(?:send|transfer|release)(?:\s+(?:the\s+)?(?:fee|payment|money|funds|amount|balance|it))\s+to|release\s+to)\b/gi;
+/**
+ * Phrases that say who is to be paid. "Send", "transfer" and "wire" count only with money before "to" ("transfer USD 190
+ * to"), so "send the receipt to Maria" and "transfer to Maria's boat" do not; "credit" only as "credit (it) to" (AG6-8).
+ */
+const PAY_PHRASE = /\b(?:pay|paid to|payable to|remit(?:\s+to)?|beneficiary(?:\s+is)?|credit(?:\s+it)?\s+to|owed to|settle with|payment\s+(?:goes\s+)?to|(?:money|funds|payment)\s+goes\s+to|(?:send|transfer|release|wire)\b[^.;!?\n]{0,30}?(?:\d|USD|PHP|VND|THB|EUR|\$|₱|money|payment|funds|fee|balance|\bit\b)[^.;!?\n]{0,10}?\b(?:to|into)|deposit\b[^.;!?\n]{0,30}?\binto)\b/giu;
+
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Where the agent's own description disagrees with the fields it sent: one sentence per field, or none. Only the
  * description is read, never the header Checkrail writes from the fields (review AG2-3). It disagrees when:
- *  - the supplier it asks to pay (named right after a paying phrase) is not the payee, or it names another supplier
- *    in full before, or without, the payee (AG5-4);
+ *  - any paying phrase names, in the same clause, a supplier who is not the payee ("do not pay Rosa; pay Maria
+ *    instead", "transfer USD 190 to Maria", "pay Rosa's partner Maria"), or, with no paying phrase, the words name
+ *    other suppliers and never the payee (AG5-4, AG6-8);
  *  - it states amounts, in any currency, and the amount sent does not follow from them (see amountFollows);
  *  - it names another job of the same kind as the reference sent (CEB-3D-1102 for CEB-2D-1024), however written.
+ * Text is read after NFKC with zero-width characters removed, so full-width or hidden letters change nothing.
  * Disagreement is a hold for a person, never a reason to change a field.
  */
 function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: string } | null, a: ReturnType<typeof validatePaymentArgs>): string[] {
-  const d = a.description;
-  if (!d) return [];
+  if (!a.description) return [];
+  const d = a.description.normalize("NFKC").replace(/[\u200B-\u200D\u2060\uFEFF\u00AD]/g, "");
   const parts: string[] = [];
   const names = db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.businessId, businessId)).all();
+  const wordsOf = (v: { id: string; name: string }) => distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name));
   const mentionAt = (text: string, v: { id: string; name: string }): number => {
     const t = ` ${normaliseName(text)} `;
     const full = normaliseName(v.name);
-    const hits = [full && t.indexOf(` ${full} `), ...distinctiveWords(v.name, names.filter((o) => o.id !== v.id).map((o) => o.name)).map((w) => t.indexOf(` ${w} `))].filter((i): i is number => typeof i === "number" && i >= 0);
+    const hits = [full && t.indexOf(` ${full} `), ...wordsOf(v).map((w) => t.indexOf(` ${w} `))].filter((i): i is number => typeof i === "number" && i >= 0);
     return hits.length ? Math.min(...hits) : -1;
   };
-  const fullAt = (v: { name: string }) => {
-    const full = normaliseName(v.name);
-    return full ? ` ${normaliseName(d)} `.indexOf(` ${full} `) : -1;
-  };
-  // Who the words ask to pay: the first supplier named within a few words after a paying phrase.
-  let payTo: { id: string; name: string } | null = null;
+  // A possessive names someone else's thing ("Rosa's partner", "Maria's boat"), not the payee, unless it is an account.
+  const possessive = (text: string, v: { id: string; name: string }) =>
+    [v.name, ...wordsOf(v)].some((w) => new RegExp(`(?<![\\p{L}])${escapeRe(w)}['’]s\\b(?!\\s+(?:paypal\\s+)?(?:account|wallet|paypal|bank))`, "iu").test(text));
+  const payees = new Set<string>();
   for (const m of d.matchAll(PAY_PHRASE)) {
-    const window = d.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
-    const hit = names.map((v) => ({ v, at: mentionAt(window, v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
-    if (hit) {
-      payTo = hit.v;
-      break;
-    }
+    const clause = d.slice(m.index! + m[0].length).split(/[.;!?\n]/)[0].slice(0, 80);
+    const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0 && !possessive(clause, x.v)).sort((x, y) => x.at - y.at)[0];
+    if (hit) payees.add(hit.v.id);
   }
-  const askedAt = asked ? mentionAt(d, asked) : -1;
-  const firstOther = names.filter((v) => v.id !== asked?.id).map((v) => ({ v, at: fullAt(v) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0];
-  if (payTo && payTo.id !== asked?.id) parts.push(`it asks to pay ${payTo.name}, not the payee sent`);
-  else if (!payTo && firstOther && (askedAt < 0 || firstOther.at < askedAt)) parts.push(`it names ${firstOther.v.name} before or instead of the payee sent`);
-  const stated: Stated[] = amountsIn(d);
+  const otherPayee = names.find((v) => payees.has(v.id) && v.id !== asked?.id);
+  const mentioned = names.filter((v) => mentionAt(d, v) >= 0);
+  if (otherPayee) parts.push(`it asks to pay ${otherPayee.name}, not the payee sent`);
+  else if (payees.size === 0 && mentioned.length > 0 && !mentioned.some((v) => v.id === asked?.id)) parts.push(`it names ${mentioned[0].name} and not the payee sent`);
+  // Amounts are read with supplier names taken out, so "Please pay Rosa Villanueva USD 190" is an asked figure.
+  let dAmt = d;
+  for (const v of [...names].sort((x, y) => y.name.length - x.name.length)) dAmt = dAmt.replace(new RegExp(escapeRe(v.name), "giu"), " ");
+  const stated: Stated[] = amountsIn(dAmt);
   // "pay 95 only": a figure right after "pay" with no currency is in the currency sent.
-  for (const m of d.matchAll(/\bpay\s+(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\.(\d{1,2}))?(?![\d.,]|\s*(?:%|days?|nights?|guests?|pax|people|persons?)\b)/gi)) {
+  for (const m of dAmt.matchAll(/\bpay\s+(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\.(\d{1,2}))?(?![\d.,]|\s*(?:%|days?|nights?|guests?|pax|people|persons?)\b)/gi)) {
     const minor = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0") || "0");
     const at = m.index! + m[0].indexOf(m[1]);
     stated.push({ amountMinor: minor, currency: a.currency, index: at, length: m.index! + m[0].length - at });
@@ -225,7 +242,7 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
   stated.sort((x, y) => x.index - y.index);
   if (stated.length > 0) {
     const same = stated.filter((x) => x.currency === a.currency);
-    if (same.length === 0 || !amountFollows(a.amountMinor, same, d)) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
+    if (same.length === 0 || !amountFollows(a.amountMinor, same, dAmt)) parts.push(`it states ${[...new Set(stated.map((x) => formatMoney(x.amountMinor, x.currency, { code: true })))].slice(0, 3).join(", ")}, not the ${formatMoney(a.amountMinor, a.currency, { code: true })} sent`);
   }
   if (a.reference) {
     const sent = new Set([...sourceRefKeys(a.reference), ...jobKeys(a.reference)].filter((k) => k.startsWith("~")));
@@ -294,7 +311,8 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account, AG5-7).
     .replace(/\b[A-Z]{2}\d{2}(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?\b/g, "[payout account]")
     .replace(/\b(?:acct|account|a\/c)\b(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d{3,}/gi, "[payout account]")
-    .replace(/\*{2,}\s?\d{2,}/g, "[payout account]")
+    .replace(/(?:\*{2,}|•{2,}|·{2,}|\b[xX]{3,})\s?\d{2,}/g, "[payout account]")
+    .replace(/\bIBAN\s*:?\s*[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){10,32}/g, "[payout account]")
     .replace(/(?<![\p{L}\p{N}-])\+?\d(?:[ .-]?\d){8,}(?![\p{L}\p{N}])/gu, "[number]");
   const keepWords = keep ? wordsIn(keep).map((t) => t.w) : [];
   const fulls = others.map((n) => wordsIn(n).map((t) => t.w)).filter((ws) => ws.join("").length >= 3).sort((x, y) => y.length - x.length);

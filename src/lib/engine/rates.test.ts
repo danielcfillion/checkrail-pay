@@ -102,7 +102,7 @@ describe("rate cards and departures", () => {
   });
 
   it("a reference hidden behind a look-alike letter in the request is flagged for a person (SEC2-7)", async () => {
-    const spoof = "JOB-HG4D-0914".replace("O", "\u0555"); // Armenian O: not folded, so no job key and no duplicate block
+    const spoof = "JOB-HG4D-0914".replace("O", "\u0555"); // Armenian O: not folded, so the reference itself keys nothing
     const id = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,
       sourceType: "invoice",
@@ -112,7 +112,10 @@ describe("rate cards and departures", () => {
     });
     const rule = runPolicy(db, id).rules.find((r) => r.ruleId === "reference_lookalike");
     expect(rule?.passed).toBe(false);
-    expect(ob(id).policyDecision).toBe("require_approval");
+    // The departure inside it (HG4D-0914) is still read, so the job paid before is found and the payment blocked
+    // (agent guard review AG6-7); before that it was held for a person.
+    expect(ob(id).policyDecision).toBe("block");
+    expect(runPolicy(db, id).rules.find((r) => r.ruleId === "no_duplicate")?.passed).toBe(false);
     // Ordinary text, Vietnamese diacritics and a Thai amount glued to a word are not references and raise nothing.
     const plain = await ingestObligation(db, {
       businessId: DEMO_BUSINESS_ID,

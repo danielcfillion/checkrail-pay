@@ -722,17 +722,20 @@ describe("review fixes, round 5 (31 Oct)", () => {
   const settle = (id: string) => db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, id)).run();
   const dupBlocked = (o: { policyReasonsJson: string | null }) => /Same job|already used/.test(o.policyReasonsJson ?? "");
 
-  it("AG5-1: two invoices on one booking or purchase order are one job", async () => {
-    for (const [n, [kind, ref]] of [["booking", "BKG-55821"], ["booking", "BK 55822"], ["purchase_order", "PO7781"]].entries()) {
+  it("AG5-1, AG6-5: two invoices on one booking or purchase order are never both paid without a person", async () => {
+    for (const [n, [kind, ref]] of [["booking", "BKG-55821"], ["booking", "BK 55822"], ["purchase_order", "PO7781"], ["booking", "BK-55823"]].entries()) {
       const extra = [{ kind, label: `${kind} ${ref}`, reference: ref }];
       await integration("Maria Santos", `INV-MS-70${n}1`, 17_000, extra);
-      expect(dupBlocked(await integration("Maria Santos", `INV-MS-70${n}2`, 17_500, extra)), ref).toBe(true);
+      const second = await integration("Maria Santos", `INV-MS-70${n}2`, 17_500, extra);
+      expect(second.state, ref).not.toBe("approved");
+      expect(second.policyReasonsJson, ref).toMatch(/Shares booking or order/);
     }
     const booking = [{ kind: "booking", label: "Booking BKG-66001", amount: null, reference: "BKG-66001" }];
     const first = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "170", currency: "USD", reference: "INV-MS-8001", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8001", amount: "170", reference: "INV-MS-8001", excerpt: "Maria Santos. Total USD 170.00." }, ...booking], idempotency_key: "ag51-key-0001" });
     const second = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "175", currency: "USD", reference: "INV-MS-8002", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8002", amount: "175", reference: "INV-MS-8002", excerpt: "Maria Santos. Total USD 175.00." }, ...booking], idempotency_key: "ag51-key-0002" });
-    expect([first.status, second.status]).not.toEqual(["scheduled", "scheduled"]);
-    expect(second.status).toBe("blocked");
+    expect(first.status).not.toBe("blocked");
+    expect(second.status).toBe("waiting_for_approval");
+    expect(second.reasons.join(" ")).toMatch(/Shares booking or order/);
   });
 
   it("AG5-2: a contract number shaped like a job id blocks no later payment", async () => {
@@ -758,7 +761,7 @@ describe("review fixes, round 5 (31 Oct)", () => {
       [{ ...ROSA, amount: "380", description: "Rosa Villanueva, trip CEB-2D-1024, USD 190." }, "reference digit as a count"],
       [{ ...ROSA, amount: "460", description: "Pay USD 230; total USD 690, USD 230 already paid." }, "asked figure"],
       [{ ...ROSA, description: "Trip sheet attached. Beneficiary is Maria Santos." }, "beneficiary"],
-      [{ ...ROSA, description: "Maria Santos guided CEB-2D-1024 with help from Rosa Villanueva." }, "other name first"],
+      [{ ...ROSA, description: "Maria Santos guided CEB-2D-1024." }, "another supplier and not the payee"],
       [{ ...ROSA, description: "Rosa Villanueva, trip USD 190, but pay 95 only." }, "shorthand beside a currency amount"],
     ];
     for (const [c, why] of held) expect(rules(await checkPayment(db, agent(`h-${why.replace(/\W/g, "")}`, ["check", "request", "attest"]), c)), why).toContain("agent_mismatch");
@@ -792,5 +795,139 @@ describe("review fixes, round 5 (31 Oct)", () => {
     expect(clean("paid to acct ending 4417")).toBe("paid to [payout account]");
     expect(clean("send to maria*lobstr.co")).toBe("send to [payout account]");
     expect(clean(`G${"A".repeat(39)} is the wallet`)).toBe("[payout account] is the wallet");
+  });
+});
+
+describe("review fixes, round 6 (31 Oct)", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = openTestDb();
+    await seedDemo(db);
+    setAutonomy(db, "autopilot");
+  });
+  const rules = (r: { blocks: Array<{ rule: string }>; warnings: Array<{ rule: string }> }) => [...r.blocks, ...r.warnings].map((x) => x.rule);
+  const integration = async (vendor: string, sourceRef: string, amountMinor: number, extra: Array<{ kind: string; label: string; reference: string | null; excerpt?: string }> = [], text = "") => {
+    const { ingestObligation } = await import("../engine/orchestrator");
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", sourceRef, rawInput: `${vendor} invoice ${sourceRef}, USD ${amountMinor / 100}, please pay.${text ? ` ${text}` : ""}`, evidence: [{ kind: "invoice", label: `Invoice ${sourceRef}`, amountMinor, currency: "USD", reference: sourceRef, excerpt: `${vendor}. Total USD ${amountMinor / 100}.` }, ...extra.map((e) => ({ ...e, amountMinor: null, currency: null, excerpt: e.excerpt ?? null }))], actor: "integration:test" });
+    return db.select().from(obligations).where(eq(obligations.id, id)).get()!;
+  };
+  const settle = (id: string) => db.update(obligations).set({ state: "settled" }).where(eq(obligations.id, id)).run();
+  const dupBlocked = (o: { policyReasonsJson: string | null }) => /Same job|already used/.test(o.policyReasonsJson ?? "");
+  const held = (o: { state: string }) => o.state !== "approved";
+
+  it("AG6-1: an invoice named after a departure is that departure, in either order", async () => {
+    for (const [i, [first, second]] of [["INV-HG4D-1031", "HG-4D-1031"], ["INV-HG4D-1032", "JOB-HG4D-1032"], ["HG-4D-1033", "INV-HG4D-1033"], ["BK-HG4D-1034", "HG-4D-1034"], ["INV-CEB2D-1025", "JOB-CEB2D-1025"], ["PO-HG4D-1035", "HG-4D-1035"], ["REF-HG4D-1036", "JOB-HG4D-1036"], ["INV-HG4D-1037-A", "HG-4D-1037"]].entries()) {
+      settle((await integration("Rosa Villanueva", first, 15_000 + i)).id);
+      expect(dupBlocked(await integration("Rosa Villanueva", second, 14_000 + i)), `${first} then ${second}`).toBe(true);
+    }
+    // An attest agent cannot get it scheduled either.
+    const r = await requestPayment(db, bookings, { payee: "Rosa Villanueva", amount: "140", currency: "USD", reference: "HG-4D-1031", description: "Rosa Villanueva, departure HG-4D-1031.", evidence: [{ kind: "job_sheet", label: "Sheet HG-4D-1031", amount: "140", reference: "HG-4D-1031", excerpt: "Guide: Rosa Villanueva. Total USD 140.00." }], idempotency_key: "ag61-key-0001" });
+    expect(r.status).toBe("blocked");
+    // INV-TAM-0834 and PO-TAM-0834 are still different documents.
+    settle((await integration("Tam Motorbike Rental", "INV-TAM-0834", 20_000)).id);
+    expect(dupBlocked(await integration("Tam Motorbike Rental", "PO-TAM-0834", 21_000))).toBe(false);
+  });
+
+  it("AG6-2: a charter contract for one departure links the invoices for it; its own number does not", async () => {
+    const charter = [{ kind: "contract", label: "Charter agreement CH-2026-0042", reference: "CH-2026-0042", excerpt: "Charter agreement for departure HG-4D-1031 only" }];
+    settle((await integration("Rosa Villanueva", "INV-R-7001", 15_000, charter)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-7002", 14_000, charter))).toBe(true);
+  });
+
+  it("AG6-3: placeholder and date references name no job", async () => {
+    for (const [i, [kind, ref]] of [["booking", "N/A"], ["booking", "none"], ["purchase_order", "TBC"], ["job_sheet", "ROSA"], ["receipt", "2026-10-31"]].entries()) {
+      const extra = [{ kind, label: `${kind} record`, reference: ref }];
+      settle((await integration("Rosa Villanueva", `INV-R-80${i}1`, 15_000 + i, extra)).id);
+      const second = await integration("Rosa Villanueva", `INV-R-80${i}2`, 14_000 + i, extra);
+      expect(dupBlocked(second), ref).toBe(false);
+      expect(second.policyReasonsJson ?? "", ref).not.toMatch(/Shares booking/);
+    }
+  });
+
+  it("AG6-4: numbers kept apart by a separator are not run together", async () => {
+    settle((await integration("Rosa Villanueva", "INV-12-345", 12_345)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-123-45", 12_300))).toBe(false);
+    settle((await integration("Rosa Villanueva", "INV-2026-1-123", 11_230)).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-2026-11-23", 11_200))).toBe(false);
+  });
+
+  it("AG6-5: a deposit and a balance on one booking, or weekly invoices on one order, wait for a person, not a block", async () => {
+    for (const [i, [kind, ref]] of [["booking", "BKG-55821"], ["purchase_order", "PO7781"], ["booking", "BK-55830"], ["purchase_order", "PO-7790"]].entries()) {
+      const extra = [{ kind, label: `${kind} ${ref}`, reference: ref }];
+      settle((await integration("Maria Santos", `INV-MS-90${i}1`, 10_000 + i, extra)).id);
+      const second = await integration("Maria Santos", `INV-MS-90${i}2`, 9_000 + i, extra);
+      expect(dupBlocked(second), ref).toBe(false);
+      expect(held(second), ref).toBe(true);
+    }
+  });
+
+  it("AG6-7: a trip written without dashes, or a booking named only in the text, links the invoices", async () => {
+    settle((await integration("Rosa Villanueva", "INV-R-9101", 15_000, [], "Trip CEB2D1107.")).id);
+    expect(dupBlocked(await integration("Rosa Villanueva", "INV-R-9102", 14_000, [], "Trip CEB 2D 1107."))).toBe(true);
+    settle((await integration("Maria Santos", "INV-MS-9201", 15_000, [], "Booking BKG-66821.")).id);
+    expect(held(await integration("Maria Santos", "INV-MS-9202", 14_000, [], "For booking BKG-66821."))).toBe(true);
+  });
+
+  it("AG6-8: every way of asking to pay someone else holds the payment", async () => {
+    for (const description of [
+      "Do not pay Rosa Villanueva; pay Maria Santos instead.",
+      "Rosa Villanueva trip sheet. Transfer USD 190 to Maria Santos.",
+      "Please pay Rosa Villanueva's partner Maria Santos for this one.",
+      "Rosa Villanueva trip; payment to Maria Santos.",
+      "Rosa Villanueva trip; the money goes to Maria Santos.",
+      "Rosa Villanueva trip; deposit USD 190 into Maria Santos's account.",
+      "Rosa Villanueva trip; pay Ｍａｒｉａ Ｓａｎｔｏｓ.",
+      "Rosa Villanueva trip; pay Ma​ria San​tos.",
+    ]) {
+      const r = await checkPayment(db, agent(`p-${description.length}-${description.charCodeAt(30)}`, ["check", "request", "attest"]), { ...ROSA, description });
+      expect(rules(r), description).toContain("agent_mismatch");
+      expect(r.verdict, description).not.toBe("pay");
+    }
+  });
+
+  it("AG6-9: a figure asked for, a count without a rate, or a repeated figure cannot carry a larger amount", async () => {
+    for (const [amount, description] of [
+      ["380", "Please pay Rosa Villanueva USD 190 for the 2 days."],
+      ["380", "Rosa Villanueva: USD 190. Last trip's USD 190 is settled."],
+      ["370", "Pay Rosa Villanueva USD 190 (guiding USD 180, boat USD 10)."],
+      ["1900", "Rosa Villanueva, USD 190 for her group of 10 guests."],
+      ["570", "Rosa Villanueva finished 3 days ago, USD 190."],
+      ["380", "Rosa Villanueva, ＵＳＤ １９０."],
+    ]) {
+      expect(rules(await checkPayment(db, agent(`a-${amount}-${description.length}`, ["check", "request", "attest"]), { ...ROSA, amount, description })), description).toContain("agent_mismatch");
+    }
+  });
+
+  it("AG6-10: honest arithmetic and passing mentions are not held", async () => {
+    for (const [amount, description] of [
+      ["190", "Please pay Rosa USD 95 a day for 2 days."],
+      ["190", "Pay USD 180 plus USD 10 boat fee to Rosa Villanueva."],
+      ["190", "Rosa Villanueva: amount due USD 200 less USD 10 deposit."],
+      ["190", "Rosa Villanueva: USD 200 less 5% early-payment discount."],
+      ["210", "Rosa Villanueva, 2 days at USD 95 each, plus USD 20 boat fee."],
+      ["190", "Rosa Villanueva guided; photo credit Jake Morrison."],
+      ["190", "Rosa Villanueva; credit note from Tam Motorbike Rental is separate."],
+      ["190", "Boat by Bayan Island Boats, guide Rosa Villanueva."],
+      ["190", "Pay Rosa Villanueva USD 190; transfer to Maria Santos's boat at 9."],
+    ]) {
+      expect(rules(await checkPayment(db, agent(`ok6-${amount}-${description.length}`, ["check"]), { ...ROSA, amount, description })), description).not.toContain("agent_mismatch");
+    }
+  });
+
+  it("AG6-11: another agent's unapproved request does not hold an honest payment to another supplier", async () => {
+    await requestPayment(db, requester, { payee: "Maria Santos", amount: "50", currency: "USD", reference: "invr9001", idempotency_key: "ag611-key-001" });
+    const r = await requestPayment(db, bookings, { payee: "Rosa Villanueva", amount: "150", currency: "USD", reference: "INV-R-9001", description: "Rosa Villanueva, day trip.", evidence: [{ kind: "job_sheet", label: "Sheet INV-R-9001", amount: "150", reference: "INV-R-9001", excerpt: "Guide: Rosa Villanueva. Total USD 150.00." }], idempotency_key: "ag611-key-002" });
+    expect(r.reasons.join(" ")).not.toMatch(/also on a payment to/);
+  });
+
+  it("AG6-12: the probe hold is the same for a long number with or without separators", async () => {
+    await checkPayment(db, bookings, { ...ROSA, amount: "240", reference: "INV-2026-0452" });
+    await checkPayment(db, bookings, { ...ROSA, amount: "215", reference: "INV20260452" });
+    expect(rules(await checkPayment(db, bookings, { ...ROSA, reference: "INV-2026-0452" }))).toContain("agent_probing");
+  });
+
+  it("AG6-13: unspaced IBANs and bullet or x masks are removed", () => {
+    expect(clean("IBAN DE89370400440532013000 on file")).toBe("[payout account] on file");
+    expect(clean("card ••••2210 and acct xxxx4417")).toBe("card [payout account] and acct [payout account]");
   });
 });

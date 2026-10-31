@@ -13,7 +13,11 @@ function noteRefKeys(text: string | null | undefined): string[] {
   const out = new Set<string>();
   for (let i = 0; i < words.length; i++) {
     for (let n = 1; n <= 4 && i + n <= words.length; n++) {
-      for (const f of canonicalForms(words.slice(i, i + n).join("-"))) out.add(`~${f}`);
+      const run = words.slice(i, i + n);
+      // A short bare number ("Room 152", "Boat 2026, 1031 pax") is a room, a year or a count, not a reference, unless
+      // a word says it is one ("Invoice 4471", "No. 152") or it is the whole note (AG6-6).
+      if (run.every((w) => /^\d+$/.test(w)) && run.join("").length < 5 && !(i > 0 && /^(?:invoice|inv|ref|reference|no|number|hd|bill)$/i.test(words[i - 1])) && words.length !== n) continue;
+      for (const f of canonicalForms(run.join("-"))) out.add(`~${f}`);
     }
   }
   return [...out];

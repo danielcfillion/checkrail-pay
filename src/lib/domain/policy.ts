@@ -241,12 +241,18 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: PolicyInput): Poli
     const myKeys = new Set((input.jobKeys ?? []).filter((k) => !k.startsWith("~agr") && !k.startsWith("agr-")));
     if (obligation.sourceRef) myKeys.add(refKey(obligation.sourceRef));
     const byRef = obligation.sourceRef ? live.find((p) => p.sourceRef && refKey(p.sourceRef) === refKey(obligation.sourceRef!)) : undefined;
-    const byKey = byRef ? undefined : live.find((p) => (p.keys ?? []).some((k) => myKeys.has(k) && !k.startsWith("~agr") && !k.startsWith("agr-")));
+    const counts = (k: string) => myKeys.has(k) && !k.startsWith("~agr") && !k.startsWith("agr-");
+    const byKey = byRef ? undefined : live.find((p) => (p.keys ?? []).some((k) => counts(k) && !k.startsWith("^")));
+    // Shared only through a booking or purchase order: likely the same job, possibly a deposit and its balance (AG6-5).
+    const bySharedRecord = byRef || byKey ? undefined : live.find((p) => (p.keys ?? []).some((k) => counts(k) && k.startsWith("^")));
     if (byRef) {
       rules.push(block("no_duplicate", `Reference ${obligation.sourceRef} was already used by obligation ${byRef.obligationId} (${byRef.state})`));
     } else if (byKey) {
-      const shared = (byKey.keys ?? []).find((k) => myKeys.has(k))!;
+      const shared = (byKey.keys ?? []).find((k) => myKeys.has(k) && !k.startsWith("^"))!;
       rules.push(block("no_duplicate", `Same job as obligation ${byKey.obligationId} (${byKey.state}): both name ${shared.replace(/^~/, "").toUpperCase()}${obligation.sourceRef ? `, this one under a new reference ${obligation.sourceRef}` : ""}`));
+    } else if (bySharedRecord) {
+      const shared = (bySharedRecord.keys ?? []).find((k) => myKeys.has(k) && k.startsWith("^"))!;
+      rules.push(warn("no_duplicate", `Shares booking or order ${shared.slice(1).toUpperCase()} with obligation ${bySharedRecord.obligationId} (${bySharedRecord.state}); confirm this is another part of the job, not the same one again`));
     } else {
       // Only when this obligation carries no job identifier beyond its own reference. A guide paid the same
       // day rate for a different, named trip is routine; an invoice number alone with a familiar amount is not.

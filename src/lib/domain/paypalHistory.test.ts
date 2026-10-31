@@ -58,3 +58,13 @@ describe("PayPal's own history, short references and amounts in notes (agent gua
     expect(matchPayPalHistory(body(line("7XC", "-180.00", "PHP 10830 for the boats", "m@x.co")), keysFor("10830"), "m@x.co").matches).toHaveLength(0);
   });
 });
+
+describe("PayPal's own history, rooms, years and counts in notes (agent guard review AG6-6)", () => {
+  it("does not read a short bare number as a reference unless a word says it is one", async () => {
+    const { sourceRefKeys } = await import("./ids");
+    const keysFor = (r: string) => [...jobKeys(r), ...sourceRefKeys(r)];
+    expect(matchPayPalHistory(body(line("7XD", "-180.00", "Room 152 extra night", "m@x.co")), keysFor("TRIP-152"), "m@x.co").matches).toHaveLength(0);
+    expect(matchPayPalHistory(body(line("7XE", "-180.00", "Boat 2026, 1031 pax 3", "m@x.co")), keysFor("JOB-1031"), "m@x.co").matches).toHaveLength(0);
+    expect(matchPayPalHistory(body(line("7XF", "-180.00", "Invoice No 152", "m@x.co")), keysFor("TRIP-152"), "m@x.co").matches).toHaveLength(1);
+  });
+});
