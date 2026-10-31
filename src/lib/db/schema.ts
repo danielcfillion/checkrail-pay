@@ -510,8 +510,10 @@ export const agentChecks = sqliteTable(
     obligationId: text("obligation_id"), // request_payment only: the request it created
     idempotencyKey: text("idempotency_key"), // request_payment only: the agent's key for "this one payment"
     createdAt: text("created_at").notNull(),
+    provenanceJson: text("provenance_json"), // where the agent said the instruction and its facts came from (agent/provenance.ts)
+    mandateId: text("mandate_id"), // request_payment only: the signed mandate it was made under (agent/mandates.ts)
   },
-  (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey)]
+  (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey), index("agent_checks_mandate").on(t.mandateId)]
 );
 
 // ---------- Onboarding and calibration ----------
@@ -621,4 +623,70 @@ export const onboardingSuggestions = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (t) => [uniqueIndex("onboarding_suggestions_kind_target").on(t.businessId, t.kind, t.target), index("onboarding_suggestions_status").on(t.businessId, t.status)]
+);
+
+// ---------- Agent futures: signed spending mandates and counter-offers to suppliers' agents ----------
+
+/**
+ * A signed spending mandate: what the owner allows one agent key to ask for. Signed with Checkrail's Ed25519 mandate
+ * key (src/lib/agent/mandates.ts), so the agent can present it and anyone with the public key can verify it. It only
+ * narrows what the agent may request: policy, approval and autonomy still apply to every request made under it.
+ * Revocation and the remaining budget live here, never in the token.
+ */
+export const agentMandates = sqliteTable(
+  "agent_mandates",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    agent: text("agent").notNull(), // the agent key's name it was issued to
+    payeesJson: text("payees_json").notNull(), // vendor ids the agent may ask to pay
+    rolesJson: text("roles_json").notNull(), // supplier roles the agent may ask to pay (guide, driver, ...)
+    perPaymentMinor: integer("per_payment_minor").notNull(),
+    totalMinor: integer("total_minor").notNull(),
+    currency: text("currency").notNull(),
+    purpose: text("purpose"), // null | "departures": the payment must be for a departure on file that the supplier serves
+    note: text("note"), // the owner's own words for what it is for
+    validFrom: text("valid_from").notNull(),
+    validUntil: text("valid_until").notNull(),
+    token: text("token").notNull(), // the signed token, for the owner to hand to the agent
+    tokenHash: text("token_hash").notNull(),
+    issuedBy: text("issued_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    revokedAt: text("revoked_at"),
+    revokedBy: text("revoked_by"),
+  },
+  (t) => [index("agent_mandates_business").on(t.businessId, t.createdAt), uniqueIndex("agent_mandates_token_hash").on(t.tokenHash)]
+);
+
+/**
+ * A counter-offer Checkrail made to a supplier's own agent whose check or request was blocked for more than the
+ * evidence or the rate card supports. The supplier's agent accepts it (a new request at the offered amount, through
+ * the normal ingest and still subject to rules and approval) or disputes it (a person reads its reason). Append-only
+ * apart from the outcome.
+ */
+export const agentOffers = sqliteTable(
+  "agent_offers",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    agent: text("agent").notNull(), // the supplier key's name
+    vendorId: text("vendor_id").notNull(),
+    checkId: text("check_id").notNull(), // the agent_checks row it answered
+    obligationId: text("obligation_id"), // the blocked request it answered, when it came from request_payment
+    askedMinor: integer("asked_minor").notNull(),
+    offerMinor: integer("offer_minor").notNull(),
+    currency: text("currency").notNull(),
+    reference: text("reference"),
+    basisRule: text("basis_rule").notNull(), // expected_amount | amount_matches_evidence
+    basis: text("basis").notNull(), // "rate card and departure HG-4D-0927 (4 vehicle-days x USD 200.00)"
+    requestJson: text("request_json").notNull(), // payee, description and evidence as the supplier's agent sent them
+    status: text("status").notNull(), // open | accepted | disputed (expired is open past expiresAt)
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedAt: text("decided_at"),
+    resultObligationId: text("result_obligation_id"), // the request accepting or disputing it put in the inbox
+    disputeReason: text("dispute_reason"),
+    disputeEvidenceJson: text("dispute_evidence_json"),
+  },
+  (t) => [index("agent_offers_business").on(t.businessId, t.createdAt), index("agent_offers_obligation").on(t.obligationId), index("agent_offers_agent").on(t.agent, t.vendorId)]
 );

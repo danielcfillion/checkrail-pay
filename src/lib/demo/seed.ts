@@ -9,6 +9,7 @@ import { approveObligation, confirmSettlement, executeObligation, ingestObligati
 import { encryptField } from "../crypto/dataKey";
 import { withMockRails } from "../rails";
 import { seedOnboarding } from "../onboarding/seed";
+import { seedAgentFutures } from "../agent/futuresSeed";
 
 /**
  * Demo data: Ridgeline Expeditions, a US tour operator running small-group
@@ -156,6 +157,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     await seedDeposit(db);
   }
 
+  seedAgentFutures(db, DEMO_BUSINESS_ID);
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
 

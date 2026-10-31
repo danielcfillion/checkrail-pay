@@ -8,6 +8,10 @@ vi.hoisted(() => {
 import { POST, GET } from "./route";
 import { getDb } from "@/lib/db";
 import { agentChecks } from "@/lib/db/schema";
+import { DEMO_INBOX_AGENT, DEMO_SUPPLIER_AGENT } from "@/lib/agent/futuresSeed";
+
+// The demo seed writes a few questions from its own demo agents; these tests count only the ones they ask.
+const asked = () => getDb().select().from(agentChecks).all().filter((c) => c.agent !== DEMO_INBOX_AGENT && c.agent !== DEMO_SUPPLIER_AGENT);
 import { seedDemo } from "@/lib/demo/seed";
 
 const KEY = "route-test-secret-0123456789abcdef";
@@ -37,7 +41,7 @@ describe("POST /api/mcp", () => {
     const r = await post(rpc("tools/call", { name: "check_payment", arguments: { payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" } }), auth);
     const body = (await r.json()) as { result: { structuredContent: { verdict: string } } };
     expect(body.result.structuredContent.verdict).toBe("block");
-    expect(getDb().select().from(agentChecks).all().map((c) => [c.agent, c.verdict])).toEqual([["assistant", "block"]]);
+    expect(asked().map((c) => [c.agent, c.verdict])).toEqual([["assistant", "block"]]);
   });
 
   it("refuses a missing or wrong key", async () => {
@@ -95,7 +99,7 @@ describe("POST /api/mcp", () => {
     const call = (ip: string) => post(rpc("tools/call", { name: "check_payment", arguments: { payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" } }), { "x-forwarded-for": ip });
     await call("203.0.113.7");
     await call("198.51.100.9");
-    const names = getDb().select().from(agentChecks).all().map((c) => c.agent);
+    const names = asked().map((c) => c.agent);
     expect(new Set(names).size).toBe(2);
     expect(names.every((n) => /^demo-[0-9a-f]{8}$/.test(n))).toBe(true);
   });
