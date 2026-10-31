@@ -275,6 +275,13 @@ function Icon({ name }: { name: string }) {
           <path d="M2 8h3l2-4 2 8 2-4h3" />
         </svg>
       );
+    case "setup":
+      return (
+        <svg {...common}>
+          <path d="M3 4.5h6M3 8h5M3 11.5h4" />
+          <path d="M10 10.5l1.6 1.6 2.9-3.6" />
+        </svg>
+      );
     case "inbox":
       return (
         <svg {...common}>
