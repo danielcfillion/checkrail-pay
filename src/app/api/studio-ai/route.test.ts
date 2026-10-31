@@ -11,7 +11,8 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-import { POST, GET, BODY_LIMIT, MAX_OUTPUT_TOKENS, TURN_LIMIT } from "./route";
+import { POST, GET } from "./route";
+import { BODY_LIMIT, MAX_OUTPUT_TOKENS, TURN_LIMIT } from "@/lib/studio/studioRequest";
 import { config } from "@/lib/config";
 import { ACTOR_HEADER } from "@/lib/basicAuth";
 
