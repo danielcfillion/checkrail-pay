@@ -45,13 +45,14 @@ export function offerOutcome(o: OfferView): string {
 }
 
 /** Used versus the total under a mandate, with the numbers written out: colour is never the only signal. */
-export function BudgetBar({ spentMinor, totalMinor, currency, active }: { spentMinor: number; totalMinor: number; currency: string; active: boolean }) {
+export function BudgetBar({ label, spentMinor, totalMinor, currency, active }: { label: string; spentMinor: number; totalMinor: number; currency: string; active: boolean }) {
   const pct = totalMinor > 0 ? Math.min(100, Math.round((spentMinor / totalMinor) * 100)) : 0;
   const tone = !active ? "var(--rule-strong)" : pct >= 100 ? "var(--blocked)" : pct >= 80 ? "var(--attention)" : "var(--settled)";
   const left = Math.max(0, totalMinor - spentMinor);
   return (
     <div>
-      <div className="h-2 w-full rounded-sm" style={{ background: "var(--rule)" }} role="img" aria-label={`${formatMoneySymbol(spentMinor, currency)} used of ${formatMoneySymbol(totalMinor, currency)}, ${pct}%`}>
+      <p className="dense mb-1 text-ink-soft">{label}</p>
+      <div className="h-2 w-full rounded-sm" style={{ background: "var(--rule)" }} role="img" aria-label={`${label}: ${formatMoneySymbol(spentMinor, currency)} used of ${formatMoneySymbol(totalMinor, currency)}, ${pct}%`}>
         <div className="h-2 rounded-sm" style={{ width: `${pct}%`, background: tone }} />
       </div>
       <p className="num mt-1 flex justify-between gap-3 text-xs text-ink-soft">

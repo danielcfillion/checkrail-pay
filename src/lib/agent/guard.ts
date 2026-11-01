@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, like } from "drizzle-orm";
 import { snapshotOf, type Db } from "../db";
-import { agentChecks, agentMandates, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
+import { agentChecks, agentMandates, auditEntries, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
@@ -17,7 +17,7 @@ import { guideFor } from "./rules";
 import { AgentInputError } from "./errors";
 import { assessProvenance, isProvenanceHold, PROVENANCE_HINT, validateProvenance } from "./provenance";
 import { loadMandate, outOfScope, spentUnder, type MandateRow } from "./mandates";
-import { counterOfferFrom, offerForAgent, offerOnObligation, recordOffer, type CounterOffer } from "./offers";
+import { counterOfferFrom, offerForAgent, offerOnObligation, recordOffer, supplierLabel, type CounterOffer } from "./offers";
 
 /**
  * The agent guard: what outside agents may ask Checkrail, and nothing more.
@@ -381,10 +381,22 @@ export function clean(message: string, others: string[] = [], keep: string | nul
  * A rule's message as an agent may read it. That a reference is on another supplier's payment is enough for an agent
  * to stop; which supplier, and how far that payment got, would let an agent map who was paid for what (AG7-14).
  */
-function forAgent(rule: string, message: string): string {
+function forAgent(rule: string, message: string, supplier = false): string {
   if (rule === "reference_other_vendor") return "This reference is also on a payment to another supplier; a person checks who did the job";
+  // A supplier's agent attaches its own records: they are its say-so, not a clerk's typing (review AF-7). They are
+  // stored as operator rows so they can never set a bill ceiling (AG-5); see SUPPLIER_EVIDENCE below.
+  if (supplier && rule === "evidence_provenance") return "The records attached are the supplier's own say-so; a person checks them against the business's records";
   return message;
 }
+
+/**
+ * How a supplier key's attachments are stored: "operator", not "vendor". Policy and every independence test treat both
+ * as say-so, but the bill-ceiling guard in engine/orchestrator.ts (linkToBill, review AG-5) excludes only "operator"
+ * rows of an outside agent, so a "vendor" row from a supplier's agent could set the total for later payments. Storing
+ * them as "vendor" needs that money-path line changed first; until then the agent layer and the request page label them
+ * as the supplier's say-so (review AF-7).
+ */
+export const SUPPLIER_EVIDENCE = "operator" as const;
 
 function otherNames(db: Db, businessId: string, keep: Array<string | null | undefined>): string[] {
   const kept = new Set(keep.filter(Boolean).map((n) => norm(n!)));
@@ -494,11 +506,11 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
-  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
+  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message, isSupplierKey(agent)), others, keep) }));
   // A provenance hold is Checkrail's own sentence around an address the agent itself sent: shown whole, not redacted.
   const mapped = r.warnings.map((w) =>
-    w.rule === "ai_flag" && isProvenanceHold(w.message) ? { rule: PROVENANCE_HOLD_RULE, message: w.message }
-    : { rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) },
+    w.rule === "ai_flag" && found.holds.includes(w.message) ? { rule: PROVENANCE_HOLD_RULE, message: w.message }
+    : { rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message, isSupplierKey(agent)), others, keep) },
   );
   const warnings = [...mapped.filter((w) => w.rule === PROVENANCE_HOLD_RULE), ...mapped.filter((w) => w.rule !== PROVENANCE_HOLD_RULE)];
   // Payout details from anywhere but the verified supplier flow: refused, whatever the rules say.
@@ -531,7 +543,7 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   // A supplier's agent asking more than the record supports gets the supported figure back, as an offer it can take.
   let offer: CounterOffer | undefined;
   if (supplier && verdict === "block" && !found.refusal && asked) {
-    const basis = counterOfferFrom(r.blocks, a.amountMinor, a.currency);
+    const basis = counterOfferFrom(db, { businessId: biz.id, vendorId: asked.id, obligationId: null }, r.blocks, a.amountMinor, a.currency);
     if (basis) offer = offerForAgent(recordOffer(db, { businessId: biz.id, agent: agent.name, vendorId: asked.id, checkId, obligationId: null, askedMinor: a.amountMinor, currency: a.currency, reference: a.reference, basis, request: { payee: a.payee, reference: a.reference, description: a.description, evidence: a.evidence } }));
   }
   return {
@@ -578,7 +590,17 @@ export function whenRelease(iso: string, at = Date.now()): string {
   return `at ${hhmm}, ${mins === 0 ? "within a minute" : `in ${mins} minute${mins === 1 ? "" : "s"}`},`;
 }
 
-function describe(db: Db, id: string): StatusAnswer {
+/** The concerns the agent layer itself stated on a request (stated.flags, as ingest recorded them). */
+function guardFlagsOf(db: Db, id: string): Set<string> {
+  const row = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, id), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
+  try {
+    return new Set(((JSON.parse(row?.detail ?? "{}") as { flags?: string[] }).flags ?? []).filter((f) => typeof f === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function describe(db: Db, id: string, supplier = false): StatusAnswer {
   const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
   if (!ob) throw new AgentInputError("No such request");
   const vendor = ob.vendorId ? db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
@@ -587,10 +609,17 @@ function describe(db: Db, id: string): StatusAnswer {
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const policy = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) ? previewPolicy(db, id) : null;
-  // A provenance hold is Checkrail's own sentence around an address the agent itself sent: first, and never redacted.
+  // Blocks first, then the agent layer's own provenance holds, then every other warning (review AF-6). A provenance hold
+  // is Checkrail's own sentence around an address the agent itself sent, so it is not redacted; a warning only counts as
+  // one if the guard itself stated it on this request, not because a reader wrote a sentence of that shape (AF-12).
   const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info");
-  const reasons = [...failing.filter((r) => r.ruleId === "ai_flag" && isProvenanceHold(r.message)).map((r) => r.message), ...failing.filter((r) => !(r.ruleId === "ai_flag" && isProvenanceHold(r.message))).map((r) => clean(forAgent(r.ruleId, r.message), others, vendor?.name ?? null))].slice(0, 6);
-  const provenanceFirst = Boolean(reasons[0] && isProvenanceHold(reasons[0]));
+  const stated = guardFlagsOf(db, id);
+  const own = (r: { ruleId: string; message: string }) => r.ruleId === "ai_flag" && stated.has(r.message) && isProvenanceHold(r.message);
+  const say = (r: { ruleId: string; message: string }) => (own(r) ? r.message : clean(forAgent(r.ruleId, r.message, supplier), others, vendor?.name ?? null));
+  const blockReasons = failing.filter((r) => r.severity === "block");
+  const holdReasons = failing.filter((r) => r.severity !== "block" && own(r));
+  const reasons = [...blockReasons, ...holdReasons, ...failing.filter((r) => r.severity !== "block" && !own(r))].map(say).slice(0, 6);
+  const provenanceFirst = blockReasons.length === 0 && holdReasons.length > 0;
   const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"
@@ -704,7 +733,7 @@ export async function submitRequest(db: Db, agent: AgentKey, raw: unknown, opts:
       const m = existing.mandateId ? db.select().from(agentMandates).where(eq(agentMandates.id, existing.mandateId)).get() : undefined;
       const left = m ? Math.max(0, m.totalMinor - spentUnder(db, m.id)) : 0;
       return {
-        ...describe(db, existing.obligationId),
+        ...describe(db, existing.obligationId, supplier),
         replayed: true,
         ...(m ? { mandate: { mandate_id: m.id, remaining: formatMoney(left, m.currency, { code: true }), summary: `${formatMoney(left, m.currency, { code: true })} left of ${formatMoney(m.totalMinor, m.currency, { code: true })} under this mandate.` } } : {}),
         ...(offerRow ? { counter_offer: offerForAgent(offerRow) } : {}),
@@ -758,7 +787,7 @@ export async function submitRequest(db: Db, agent: AgentKey, raw: unknown, opts:
         sourceType: "operator_instruction",
         sourceRef: a.reference,
         rawInput: requestTextFor(`request ${claim}`, asked?.name ?? a.payee, a),
-        evidence: a.evidence,
+        evidence: supplier ? a.evidence.map((e) => ({ ...e, label: supplierLabel(e.label) })) : a.evidence,
         evidenceSource: evidenceSourceOf(agent),
         actor: `mcp:${agent.name}`,
         stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") },
@@ -779,14 +808,14 @@ export async function submitRequest(db: Db, agent: AgentKey, raw: unknown, opts:
       db.update(agentChecks).set({ obligationId: id, verdict: "refused", summary: `Refused: ${why}.` }).where(eq(agentChecks.id, claim)).run();
       throw new AgentInputError(`Refused, and the request was cancelled: ${why}.`);
     }
-    const answer = describe(db, id);
+    const answer = describe(db, id, supplier);
     const verdict = answer.status === "blocked" ? "block" : answer.status === "scheduled" || answer.status === "approved" ? "pay" : "hold";
     db.update(agentChecks).set({ obligationId: id, verdict, summary: answer.summary, rulesJson: JSON.stringify(answer.reasons) }).where(eq(agentChecks.id, claim)).run();
     // A supplier's agent asking more than the record supports gets the supported figure back, as an offer it can take.
     let offer: CounterOffer | undefined;
     if (supplier && answer.status === "blocked" && asked) {
       const failing = previewPolicy(db, id).rules.filter((x) => !x.passed && x.severity === "block").map((x) => ({ rule: x.ruleId, message: x.message }));
-      const basis = counterOfferFrom(failing, a.amountMinor, a.currency);
+      const basis = counterOfferFrom(db, { businessId: biz.id, vendorId: asked.id, obligationId: id }, failing, a.amountMinor, a.currency);
       if (basis) offer = offerForAgent(recordOffer(db, { businessId: biz.id, agent: agent.name, vendorId: asked.id, checkId: claim, obligationId: id, askedMinor: a.amountMinor, currency: a.currency, reference: a.reference, basis, request: { payee: a.payee, reference: a.reference, description: a.description, evidence: a.evidence } }));
     }
     const left = mandate ? Math.max(0, mandate.totalMinor - spentUnder(db, mandate.id)) : 0;
@@ -806,7 +835,7 @@ export function paymentStatus(db: Db, agent: AgentKey, raw: unknown): StatusAnsw
   const mine = db.select({ id: agentChecks.id }).from(agentChecks).where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.obligationId, id))).get();
   if (!mine) throw new AgentInputError("No request with that id was made by this agent");
   if (isSupplierKey(agent) && db.select({ v: obligations.vendorId }).from(obligations).where(eq(obligations.id, id)).get()?.v !== agent.vendorId) throw new AgentInputError("No request with that id was made by this agent");
-  return describe(db, id);
+  return describe(db, id, isSupplierKey(agent));
 }
 
 // ---------- lookup_payee and explain_rule ----------

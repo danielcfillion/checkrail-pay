@@ -4,7 +4,7 @@ import type { Db } from "../db";
 import { agentChecks, agentMandates, departureServices, departures, obligations, vendors } from "../db/schema";
 import { bareKey, jobKeys, newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES } from "../domain/money";
-import { subKey } from "../crypto/dataKey";
+import { subKey, usingDevKey } from "../crypto/dataKey";
 import { formatMoney } from "../format";
 import { AgentInputError } from "./errors";
 import type { AgentKey } from "./keys";
@@ -53,11 +53,19 @@ function signingKey(): KeyObject {
   return createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, subKey("agent-mandates/ed25519/v1")]), format: "der", type: "pkcs8" });
 }
 
+/**
+ * Without CHECKRAIL_DATA_KEY the signing seed comes from the public development key in crypto/dataKey.ts, so anyone can
+ * derive the private key and forge a mandate that verifies (review AF-3). Such keys and tokens say so wherever they
+ * appear, and a production server refuses to issue with one.
+ */
+export const DEV_KEY_LABEL = "development key, not trustworthy outside this demo";
+export const mandateKeyIsDevelopment = (): boolean => usingDevKey();
+
 /** Checkrail's mandate public key: raw 32 bytes, base64url, and as a Stellar account key (G...). */
-export function mandatePublicKey(): { raw: Buffer; base64url: string; stellar: string; key: KeyObject } {
+export function mandatePublicKey(): { raw: Buffer; base64url: string; stellar: string; key: KeyObject; development: boolean } {
   const key = createPublicKey(signingKey());
   const raw = (key.export({ format: "der", type: "spki" }) as Buffer).subarray(-32);
-  return { raw, base64url: raw.toString("base64url"), stellar: stellarAccountId(raw), key };
+  return { raw, base64url: raw.toString("base64url"), stellar: stellarAccountId(raw), key, development: usingDevKey() };
 }
 
 /**
@@ -108,6 +116,8 @@ export interface MandatePayload {
   nbf: string;
   exp: string;
   iat: string;
+  /** Present only when signed with the public development key: such a token proves nothing outside this demo. */
+  signing_key?: typeof DEV_KEY_LABEL;
 }
 
 export function signMandate(payload: MandatePayload): string {
@@ -178,6 +188,8 @@ const isoOf = (v: unknown, name: string, endOfDay: boolean): string => {
 
 /** Sign and record a mandate. The caller has checked the person may (the owner: the settings permission). */
 export function issueMandate(db: Db, businessId: string, actor: string, input: IssueInput): typeof agentMandates.$inferSelect {
+  // A production server with only the public development key would sign mandates anyone can forge (review AF-3).
+  if (usingDevKey() && process.env.NODE_ENV === "production") throw new Error("Mandates cannot be issued on this server: CHECKRAIL_DATA_KEY is not set, so a mandate would be signed with the public development key and anyone could forge one. Set CHECKRAIL_DATA_KEY first.");
   const agent = typeof input.agent === "string" ? input.agent.trim().toLowerCase() : "";
   if (!/^[a-z0-9][a-z0-9-]{1,39}$/.test(agent)) throw new Error("Choose the agent key the mandate is for (its name, such as claude-desktop)");
   const currency = typeof input.currency === "string" ? input.currency.trim().toUpperCase() : "";
@@ -199,7 +211,7 @@ export function issueMandate(db: Db, businessId: string, actor: string, input: I
   if (Date.parse(exp) - Date.parse(nbf) > MAX_DAYS * 86_400_000) throw new Error("A mandate can last a year at most");
   const id = newId("mdt");
   const iat = now();
-  const token = signMandate({ v: 1, id, iss: businessId, agent, payees, roles, per_payment_minor: perPayment, total_minor: total, currency, purpose: purpose as MandatePurpose | null, note, nbf, exp, iat });
+  const token = signMandate({ v: 1, id, iss: businessId, agent, payees, roles, per_payment_minor: perPayment, total_minor: total, currency, purpose: purpose as MandatePurpose | null, note, nbf, exp, iat, ...(usingDevKey() ? { signing_key: DEV_KEY_LABEL } : {}) });
   const row = { id, businessId, agent, payeesJson: JSON.stringify(payees.map((p) => p.id)), rolesJson: JSON.stringify(roles), perPaymentMinor: perPayment, totalMinor: total, currency, purpose: purpose as string | null, note, validFrom: nbf, validUntil: exp, token, tokenHash: tokenHash(token), issuedBy: actor, createdAt: iat, revokedAt: null, revokedBy: null };
   db.insert(agentMandates).values(row).run();
   return row;
@@ -216,13 +228,21 @@ export function revokeMandate(db: Db, businessId: string, id: string, actor: str
 
 export type MandateRow = typeof agentMandates.$inferSelect;
 
-/** Committed under a mandate: its requests that were not refused and not cancelled, those still being created included. */
+/**
+ * Request states that use a mandate's budget: on their way to being paid (waiting for evidence or a person, approved or
+ * scheduled), being paid, or paid. Blocked, cancelled, failed and returned requests do not; nor does a refusal. A
+ * blocked request a person later clears starts using it again, which can take the total over the cap: that is the
+ * person's decision, not the agent's (review AF-5).
+ */
+export const BUDGET_STATES = ["drafted", "needs_evidence", "verified", "awaiting_approval", "approved", "execution_pending", "sent", "settled", "disputed"] as const;
+
+/** Used under a mandate: its requests in a budget state, and those still being created (no request yet). */
 export function spentUnder(db: Db, mandateId: string): number {
   const r = db
     .select({ total: sql<number>`coalesce(sum(${agentChecks.amountMinor}), 0)` })
     .from(agentChecks)
     .leftJoin(obligations, eq(obligations.id, agentChecks.obligationId))
-    .where(and(eq(agentChecks.mandateId, mandateId), eq(agentChecks.tool, "request_payment"), ne(agentChecks.verdict, "refused"), or(isNull(obligations.state), ne(obligations.state, "cancelled"))))
+    .where(and(eq(agentChecks.mandateId, mandateId), eq(agentChecks.tool, "request_payment"), ne(agentChecks.verdict, "refused"), or(isNull(agentChecks.obligationId), inArray(obligations.state, [...BUDGET_STATES]))))
     .get();
   return Number(r?.total ?? 0);
 }
@@ -260,13 +280,16 @@ export function outOfScope(db: Db, row: MandateRow, agent: AgentKey, a: { amount
   const roles = JSON.parse(row.rolesJson) as string[];
   if (!vendor || !(ids.includes(vendor.id) || roles.includes(vendor.role))) return `${PREFIX} does not cover this payee`;
   if (a.amountMinor > row.perPaymentMinor) return `${PREFIX} allows at most ${formatMoney(row.perPaymentMinor, row.currency, { code: true })} per payment; this asks for ${formatMoney(a.amountMinor, a.currency, { code: true })}`;
-  if (row.purpose === "departures" && !servesDeparture(db, row.businessId, vendor.id, a.reference, a.description)) return `${PREFIX} covers departures in the booking system only, and this names no departure on file that this supplier serves`;
+  if (row.purpose === "departures" && !servesDeparture(db, row.businessId, vendor.id, a.reference)) return `${PREFIX} covers departures in the booking system only, and this payment's reference is not a departure on file that this supplier serves`;
   return null;
 }
 
-/** The reference or the request names a departure on file, and this supplier is on its services. */
-function servesDeparture(db: Db, businessId: string, vendorId: string, reference: string | null, description: string | null): boolean {
-  const named = new Set([...jobKeys(reference, description), ...sourceRefKeys(reference)].map(bareKey).filter((k) => k.length >= 3));
+/**
+ * The payment's reference is a departure on file, and this supplier is on its services. Only the reference: free text
+ * in the description is the agent's own word and could name any departure (review AF-11).
+ */
+function servesDeparture(db: Db, businessId: string, vendorId: string, reference: string | null): boolean {
+  const named = new Set([...jobKeys(reference), ...sourceRefKeys(reference)].map(bareKey).filter((k) => k.length >= 3));
   if (named.size === 0) return false;
   const served = db.select({ code: departures.code }).from(departures).innerJoin(departureServices, eq(departureServices.departureId, departures.id)).where(and(eq(departures.businessId, businessId), eq(departureServices.vendorId, vendorId))).all();
   return served.some((d) => jobKeys(d.code).map(bareKey).some((k) => named.has(k)));
@@ -294,6 +317,8 @@ export interface MandateView {
   revokedAt: string | null;
   token: string;
   requests: number;
+  /** Signed with the public development key: proves nothing outside this demo. */
+  development: boolean;
 }
 
 export function viewOf(db: Db, row: MandateRow): MandateView {
@@ -321,6 +346,13 @@ export function viewOf(db: Db, row: MandateRow): MandateView {
     revokedAt: row.revokedAt,
     token: row.token,
     requests: Number(requests),
+    development: (() => {
+      try {
+        return (JSON.parse(Buffer.from(row.token.split(".")[1] ?? "", "base64url").toString("utf8")) as MandatePayload).signing_key === DEV_KEY_LABEL;
+      } catch {
+        return false;
+      }
+    })(),
   };
 }
 
@@ -358,7 +390,7 @@ export function mandateStatus(db: Db, agent: AgentKey, businessId: string, raw: 
     purpose: v.purpose,
     valid_from: v.validFrom,
     valid_until: v.validUntil,
-    signer_public_key: { ed25519_base64url: pk.base64url, stellar: pk.stellar },
+    signer_public_key: { ed25519_base64url: pk.base64url, stellar: pk.stellar, ...(pk.development ? { trust: DEV_KEY_LABEL } : {}) },
     note: "A mandate narrows what this agent may request. Every request under it still goes through the business's rules and approval; it never approves or sends a payment.",
   };
 }

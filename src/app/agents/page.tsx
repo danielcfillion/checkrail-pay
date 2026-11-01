@@ -12,7 +12,7 @@ import { getDb } from "@/lib/db";
 import { getBusiness, listVendors } from "@/lib/queries";
 import { getViewer } from "@/lib/viewer";
 import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
-import { listMandates, mandatePublicKey, PURPOSE_LABEL } from "@/lib/agent/mandates";
+import { DEV_KEY_LABEL, listMandates, mandatePublicKey, PURPOSE_LABEL } from "@/lib/agent/mandates";
 import { listOffers, offerLine } from "@/lib/agent/offers";
 import { IssueMandateForm, RevokeMandateButton } from "./MandateControls";
 
@@ -50,7 +50,7 @@ export default async function AgentsPage() {
   const mandates = biz ? listMandates(db, biz.id) : [];
   const offers = biz ? listOffers(db, biz.id) : [];
   const suppliers = biz ? listVendors().map((v) => ({ id: v.id, name: v.name, role: v.role })) : [];
-  let signer: { stellar: string; base64url: string } | null = null;
+  let signer: { stellar: string; base64url: string; development: boolean } | null = null;
   try {
     signer = mandatePublicKey();
   } catch {
@@ -242,11 +242,12 @@ export default async function AgentsPage() {
                       <TonePill tone={st.tone}>{st.label}</TonePill>
                     </div>
                     <p className="text-ink-soft">
-                      Up to <span className="num text-ink">{formatMoney(m.perPaymentMinor, m.currency, { code: true })}</span> a payment to {who}
+                      Per-payment cap <span className="num text-ink">{formatMoney(m.perPaymentMinor, m.currency, { code: true })}</span>. Pays {who}
                       {m.purpose ? `. ${PURPOSE_LABEL[m.purpose]}` : ""}. Until <span className="num">{m.validUntil.slice(0, 10)}</span>.
                     </p>
                     {m.note ? <p className="text-xs text-ink-soft">{m.note}</p> : null}
-                    <BudgetBar spentMinor={m.spentMinor} totalMinor={m.totalMinor} currency={m.currency} active={m.status === "active"} />
+                    <BudgetBar label="Total cap" spentMinor={m.spentMinor} totalMinor={m.totalMinor} currency={m.currency} active={m.status === "active"} />
+                    {m.development ? <p className="text-xs text-attention">Signed with the {DEV_KEY_LABEL}.</p> : null}
                     <p className="text-xs text-ink-soft">
                       {pluralise(m.requests, "request")} under it. Issued by {m.issuedBy.replace(/^user:/, "")}
                       {m.revokedAt ? (
@@ -275,6 +276,11 @@ export default async function AgentsPage() {
                   <p className="num mt-1 flex items-center gap-1 break-all text-2xs leading-4">
                     {signer.stellar} <CopyButton value={signer.stellar} label="Copy the public key" />
                   </p>
+                  {signer.development ? (
+                    <p className="mt-1 text-xs text-attention">
+                      This is the {DEV_KEY_LABEL}: it comes from the public development key, so anyone can forge a mandate it verifies. Set CHECKRAIL_DATA_KEY before mandates mean anything outside this demo.
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <p className="text-xs text-attention">Mandates cannot be signed here: set CHECKRAIL_DATA_KEY.</p>
@@ -330,6 +336,9 @@ export default async function AgentsPage() {
               </li>
               <li>
                 <span className="font-medium">System of record.</span> For your booking or dispatch system&apos;s own agent: what it attaches counts as your records. Your caps, the cancel window and the re-check at release still apply.
+              </li>
+              <li>
+                <span className="font-medium">Where an instruction came from.</span> An agent can say where its instruction and each fact came from. That is its own word: it protects an agent that reports honestly, it can only add holds, and it never relaxes a rule. Payout details are never taken from an agent, whatever it claims.
               </li>
               <li>
                 <span className="font-medium">A supplier&apos;s own agent.</span> Checks and requests for that one supplier only. Asking more than your records support gets a counter-offer it can accept or dispute; it never sees other suppliers or your rules.

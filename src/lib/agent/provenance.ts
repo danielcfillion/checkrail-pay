@@ -7,8 +7,9 @@ import { AgentInputError } from "./errors";
  * a supplier's email with hidden lines, a web page, a forwarded PDF. The agent says where the instruction to pay came
  * from, and where each key fact came from (payee, amount, payout details, reference). Checkrail then:
  *
- *  - refuses outright any payout-detail change that does not come through the verified supplier flow (the supplier's
- *    own portal link, checked by a second person). An agent never changes where money goes;
+ *  - refuses outright payout details an agent says came from anywhere but the supplier portal, and holds those it says
+ *    came from the portal. An agent never changes where money goes: payout details change only through the verified
+ *    supplier flow (the supplier's own link, checked by a second person);
  *  - holds for a person an instruction that traces to an outside email, the web or a source the agent cannot name;
  *  - holds for a person a payee or amount whose only source is outside content;
  *  - passes system-of-record and owner-chat sources (and internal email, the supplier portal and documents) through to
@@ -17,6 +18,8 @@ import { AgentInputError } from "./errors";
  * All of this happens in the agent layer, before the request reaches ingest. A hold is one of the agent's own concerns
  * (`stated.flags`, see engine/orchestrator.ts), which policy turns into a warning a person must clear. Without
  * provenance nothing changes, and the answer says provenance is supported.
+ *
+ * Provenance is self-asserted. It protects a cooperative agent; it can only add holds, never relax a rule.
  */
 
 export const SOURCE_KINDS = ["owner_chat", "system_of_record", "vendor_portal", "email_internal", "email_external", "web", "document", "unknown"] as const;
@@ -56,7 +59,7 @@ export const KIND_LABEL: Record<SourceKind, string> = {
 export const FACT_LABEL: Record<Fact | "instruction", string> = { instruction: "Instruction", payee: "Payee", amount: "Amount", payout_details: "Payout details", reference: "Reference" };
 
 export const PROVENANCE_HINT =
-  "Checkrail also takes provenance: where the instruction to pay came from and where the payee, amount, payout details and reference came from (owner_chat, system_of_record, vendor_portal, email_internal, email_external, web, document, unknown). An instruction from an outside email or the web is held for a person, and payout details from anywhere but the verified supplier flow are refused.";
+  "Checkrail also takes provenance: where the instruction to pay came from and where the payee, amount, payout details and reference came from (owner_chat, system_of_record, vendor_portal, email_internal, email_external, web, document, unknown). An instruction from an outside email or the web is held for a person, and payout details are never taken from an agent. It can only add holds: it never relaxes a rule.";
 
 // ---------- Input ----------
 
@@ -149,9 +152,18 @@ export interface ProvenanceFinding {
 const listed = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
 /**
- * What the provenance means for this payment. Payout details are only ever taken from the supplier portal: Checkrail
- * has no agent path to change where money goes, so payout details from anywhere else are refused, whoever sent them.
- * A payee or amount with mixed sources (the booking system and an email) passes: a record the business owns backs it.
+ * What the provenance means for this payment.
+ *
+ * Provenance is the agent's own word. It protects a cooperative agent that reports honestly; a hijacked agent can leave
+ * it out or claim owner_chat or system_of_record. So it can only add holds and refusals: it never relaxes a rule, and
+ * a check with any provenance is never easier to pass than the same check without it (review AF-2).
+ *
+ * Payout details are never accepted from an agent, whatever it claims. There is no agent path that changes where money
+ * goes: payouts go only to the details on file, which change only through the verified supplier flow (the supplier's
+ * own link, checked by a second person). Payout details an agent says came from anywhere else are refused; payout
+ * details it says came from the supplier portal are held, since that claim is unverified too.
+ * A payee or amount with mixed sources (the booking system and an email) is not held for its source.
+ * At most two holds come back, so the cap on an agent's concerns never drops another one.
  */
 export function assessProvenance(p: Provenance | null): ProvenanceFinding {
   if (!p) return { refusal: null, holds: [] };
@@ -160,19 +172,26 @@ export function assessProvenance(p: Provenance | null): ProvenanceFinding {
   const refusal = foreign
     ? `this instruction gives payout details from ${described(foreign)}. Checkrail never takes payout details from an agent: a supplier changes them only through the verified supplier flow, checked by a second person`
     : null;
+  // Most telling first. Any one of them holds the payment, so a third adds only words and is left off.
   const holds: string[] = [];
   if (OUTSIDE.has(p.instruction.kind)) holds.push(`This instruction came from ${described(p.instruction)}. A person confirms it.`);
+  if (!foreign && payout.length > 0) holds.push(PORTAL_PAYOUT_HOLD);
   const onlyOutside = (["payee", "amount"] as const).filter((f) => (p.facts[f] ?? []).length > 0 && p.facts[f]!.every((s) => OUTSIDE.has(s.kind)));
   if (onlyOutside.length) {
     const from = [...new Set(onlyOutside.flatMap((f) => p.facts[f]!.map(described)))];
     holds.push(`The ${listed(onlyOutside.map((f) => (f === "payee" ? "payee" : "amount")))} came only from ${listed(from.slice(0, 2))}. A person confirms ${onlyOutside.length === 1 ? "it" : "them"}.`);
   }
-  return { refusal, holds };
+  return { refusal, holds: holds.slice(0, 2) };
 }
 
-/** A policy warning that is one of these holds (they are the agent's own concerns once stored). */
+const PORTAL_PAYOUT_HOLD = "The agent says payout details came from the supplier portal. Checkrail never takes payout details from an agent and pays only the details on file. A person confirms it.";
+
+/**
+ * A message shaped like one of these holds. On its own it proves nothing: the reader could write such a sentence. The
+ * guard treats a warning as its own provenance hold only when it is also one it added itself (review AF-12).
+ */
 export function isProvenanceHold(message: string): boolean {
-  return /^This instruction came from .+\. A person confirms it\.$/.test(message) || /^The (?:payee|amount|payee and amount) came only from .+\. A person confirms (?:it|them)\.$/.test(message);
+  return message === PORTAL_PAYOUT_HOLD || /^This instruction came from .+\. A person confirms it\.$/.test(message) || /^The (?:payee|amount|payee and amount) came only from .+\. A person confirms (?:it|them)\.$/.test(message);
 }
 
 // ---------- Display ----------

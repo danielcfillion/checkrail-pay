@@ -62,7 +62,7 @@ const sourceList = { anyOf: [sourceSchema, { type: "array", items: sourceSchema,
 const provenanceProp = {
   provenance: {
     type: "object",
-    description: "Where the instruction to pay came from, and where each key fact came from. Send it whenever you can: an instruction or a payee or amount that traces only to an outside email, the web or an unknown source is held for a person; payout details from anywhere but the supplier portal are refused. Without it Checkrail judges as before.",
+    description: "Where the instruction to pay came from, and where each key fact came from. Send it whenever you can: an instruction or a payee or amount that traces only to an outside email, the web or an unknown source is held for a person; payout details are never taken from an agent (refused, or held if you say they came from the supplier portal). It is your own word, so it can only add holds: it never relaxes a rule. Without it Checkrail judges as before.",
     properties: {
       instruction: sourceSchema,
       facts: {

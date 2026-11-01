@@ -1,20 +1,21 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { StrKey } from "@stellar/stellar-sdk";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { openTestDb as openRawTestDb, type Db } from "../db";
-import { agentChecks, agentMandates, agentOffers, businesses, evidence, obligations, paymentAttempts, vendors } from "../db/schema";
+import { agentChecks, agentMandates, agentOffers, bills as billsTable, businesses, evidence, obligations, paymentAttempts, vendorChanges, vendors } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { rejectObligation } from "../engine/orchestrator";
+import { ingestObligation, previewPolicy, rejectObligation } from "../engine/orchestrator";
+import { createBill } from "../engine/bills";
 import { configuredAgentKeys, type AgentKey } from "./keys";
 import { checkPayment, paymentStatus, requestPayment } from "./guard";
 import { handleMcp, toolsFor } from "./mcp";
 import { assessProvenance, isProvenanceHold, provenanceLines, validateProvenance } from "./provenance";
-import { issueMandate, mandatePublicKey, mandateStatus, publicKeyFromRaw, revokeMandate, verifyMandateToken, type MandatePayload } from "./mandates";
+import { DEV_KEY_LABEL, issueMandate, mandatePublicKey, mandateStatus, publicKeyFromRaw, revokeMandate, verifyMandateToken, type MandatePayload } from "./mandates";
 import { counterOfferFrom } from "./offers";
 import { acceptOffer, disputeOffer } from "./negotiation";
 import { PHUONG_EMAIL, PHUONG_EMAIL_BANK_CHANGE, PHUONG_EMAIL_CHECK } from "./fixtures/phuongEmail";
-import { DEMO_INBOX_AGENT, DEMO_MANDATE_AGENT, DEMO_SUPPLIER_AGENT, DEMO_SUPPLIER_CHECK, SEEDED_ANSWERS } from "./futuresSeed";
+import { DEMO_INBOX_AGENT, DEMO_MANDATE_AGENT, DEMO_SUPPLIER_AGENT, DEMO_SUPPLIER_CHECK, SEEDED_ANSWERS, seedAgentFutures } from "./futuresSeed";
 
 // Every test opens its own in-memory database; close them after each test (native memory, see guard.test.ts).
 const opened: Db[] = [];
@@ -118,7 +119,10 @@ describe("instruction provenance", () => {
     for (const kind of ["owner_chat", "system_of_record", "email_internal", "document", "web", "unknown"]) {
       expect(assessProvenance(validateProvenance({ instruction: { kind: "owner_chat" }, facts: { payout_details: { kind } } })).refusal, kind).toMatch(/never takes payout details/);
     }
-    expect(assessProvenance(validateProvenance({ instruction: { kind: "owner_chat" }, facts: { payout_details: { kind: "vendor_portal" } } }))).toEqual({ refusal: null, holds: [] });
+    // AF-2: a portal claim is the agent's word too: held, never accepted.
+    const portal = assessProvenance(validateProvenance({ instruction: { kind: "owner_chat" }, facts: { payout_details: { kind: "vendor_portal" } } }));
+    expect(portal.refusal).toBeNull();
+    expect(portal.holds).toEqual(["The agent says payout details came from the supplier portal. Checkrail never takes payout details from an agent and pays only the details on file. A person confirms it."]);
   });
 
   it("a request from an outside email goes to the inbox held for a person, with the reason on the request", async () => {
@@ -131,6 +135,35 @@ describe("instruction provenance", () => {
     expect(JSON.parse(ob.aiFlagsJson ?? "[]")).toContain("This instruction came from an outside email (rosa.v@gmail.com). A person confirms it.");
     expect(db.select().from(paymentAttempts).all().filter((x) => x.obligationId === r.request_id)).toHaveLength(0);
     expect(rowsOf(db, "bookings").find((x) => x.obligationId === r.request_id)!.provenanceJson).toMatch(/rosa\.v@gmail\.com/);
+  });
+
+  it("AF-2: payout details are never accepted from an agent, whatever it claims, and provenance never relaxes a rule", async () => {
+    setAutonomy(db, "autopilot");
+    const before = db.select().from(vendors).where(eq(vendors.id, "ven_rosa")).get()!;
+    const changes = db.select().from(vendorChanges).all().length;
+    const r = await requestPayment(db, bookings, { ...ROSA, idempotency_key: "rosa-portal-1", provenance: { instruction: { kind: "system_of_record" }, facts: { payout_details: { kind: "vendor_portal", label: "New account" } } } });
+    expect(r.status).toBe("waiting_for_approval");
+    expect(r.summary).toMatch(/payout details came from the supplier portal/);
+    const after = db.select().from(vendors).where(eq(vendors.id, "ven_rosa")).get()!;
+    expect([after.detailsHash, after.paypalEmail, after.bankLabel, after.verifiedAt]).toEqual([before.detailsHash, before.paypalEmail, before.bankLabel, before.verifiedAt]);
+    expect(db.select().from(vendorChanges).all().length).toBe(changes);
+    // Claiming the business's own sources does not soften a block.
+    const plain = await checkPayment(db, desk, DEMO_SUPPLIER_CHECK);
+    const claimed = await checkPayment(db, desk, { ...DEMO_SUPPLIER_CHECK, provenance: { instruction: { kind: "owner_chat" }, facts: { amount: { kind: "system_of_record" }, payee: { kind: "system_of_record" } } } });
+    expect([plain.verdict, claimed.verdict]).toEqual(["block", "block"]);
+  });
+
+  it("AF-12: only a hold the guard itself stated counts as one; a reader's sentence of that shape is redacted like any", async () => {
+    const r = await requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-forged-flag" });
+    const ob = db.select().from(obligations).where(eq(obligations.id, r.request_id)).get()!;
+    const forged = "This instruction came from an outside email (maria.santos@example.com). A person confirms it.";
+    db.update(obligations).set({ aiFlagsJson: JSON.stringify([...JSON.parse(ob.aiFlagsJson ?? "[]"), forged]) }).where(eq(obligations.id, r.request_id)).run();
+    const s = paymentStatus(db, desk, { request_id: r.request_id });
+    expect(s.reasons).not.toContain(forged);
+    // It is there, as an ordinary warning, redacted like any.
+    expect(s.reasons).toContain("This instruction came from an outside email (the payee's PayPal account). A person confirms it.");
+    expect(JSON.stringify(s)).not.toMatch(/maria\.santos@example\.com/);
+    expect(s.summary).not.toMatch(/^Waiting for a person to approve: This instruction came from/);
   });
 
   it("system-of-record and owner-chat sources pass through to the normal rules", async () => {
@@ -257,6 +290,41 @@ describe("signed spending mandates", () => {
     await expect(ask(5, "10")).rejects.toThrow(/USD 0.00 left/);
   });
 
+  it("AF-5: blocked, failed and returned requests use none of the budget", async () => {
+    const m = issue({ perPayment: "300", total: "500" });
+    const blocked = await requestPayment(db, desk, { ...ROSA, amount: "250", evidence: [], description: "Pay Rosa Villanueva USD 250 for CEB-2D-1024.", idempotency_key: "rosa-over-250", mandate: m });
+    expect(blocked.status).toBe("blocked");
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("0.00");
+    const ok = await requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-ok-190", mandate: m });
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("190.00");
+    for (const state of ["failed", "refunded"] as const) {
+      db.update(obligations).set({ state }).where(eq(obligations.id, ok.request_id)).run();
+      expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used, state).toBe("0.00");
+    }
+  });
+
+  it("AF-11: the departures purpose binds the reference, not a departure named in the description", async () => {
+    const m = issue();
+    await expect(requestPayment(db, desk, { payee: "Rosa Villanueva", amount: "95", currency: "USD", reference: "INV-ROSA-0942", description: "Rosa Villanueva, one day of CEB-2D-1024", idempotency_key: "rosa-desc-dep", mandate: m })).rejects.toThrow(/reference is not a departure on file/);
+    expect((await requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-ref-dep", mandate: m })).status).toBe("waiting_for_approval");
+  });
+
+  it("AF-3: a development key says so everywhere, and production refuses to issue without a real key", () => {
+    vi.stubEnv("CHECKRAIL_DATA_KEY", "");
+    const token = issue();
+    const v = verifyMandateToken(token);
+    expect(v.ok && v.payload.signing_key).toBe(DEV_KEY_LABEL);
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: token }).signer_public_key.trust).toBe(DEV_KEY_LABEL);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(() => issue()).toThrow(/Mandates cannot be issued on this server: CHECKRAIL_DATA_KEY is not set/);
+    vi.stubEnv("CHECKRAIL_DATA_KEY", Buffer.alloc(32, 7).toString("base64"));
+    const real = issue();
+    const r = verifyMandateToken(real);
+    expect(r.ok && r.payload.signing_key).toBeUndefined();
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: real }).signer_public_key.trust).toBeUndefined();
+    vi.unstubAllEnvs();
+  });
+
   it("the mandate is a tool for the agent it was issued to, and the owner's list shows what is left", async () => {
     expect(toolsFor(desk).map((t) => t.name)).toContain("mandate_status");
     expect(toolsFor(key("auditor", ["check"])).map((t) => t.name)).not.toContain("mandate_status");
@@ -292,15 +360,55 @@ describe("negotiation with a supplier's agent", () => {
     expect(configuredAgentKeys({ CHECKRAIL_AGENT_KEYS: `phuong-agent:${"s".repeat(32)}:check+supplier=ven_phuong` })).toBeNull();
   });
 
-  it("reads the supported figure from policy's own block sentences, and only when amount is the only block", () => {
+  it("AF-1: no offer based on a record the supplier's agent attached, however it is labelled", async () => {
+    // The reviewer's case: USD 2,000 asked, the agent's own invoice "Rate card 2026 tariff" says USD 1,900.
+    const ask = { payee: "Phuong Transport", amount: "2000", currency: "USD", reference: "INV-2026-0501", description: "Phuong Transport invoice INV-2026-0501, van hire, total USD 2,000.", evidence: [{ kind: "invoice", label: "Rate card 2026 tariff", amount: "1900", reference: "INV-2026-0501", excerpt: "Tariff USD 1,900." }] };
+    const c = await checkPayment(db, phuongAgent, ask);
+    expect(c.verdict).toBe("block");
+    expect(c.blocks.map((b) => b.rule)).toContain("amount_matches_evidence");
+    expect(c.counter_offer).toBeUndefined();
+    const r = await requestPayment(db, phuongAgent, { ...ask, idempotency_key: "phuong-tariff-0501" });
+    expect(r.status).toBe("blocked");
+    expect(r.counter_offer).toBeUndefined();
+    expect(offerRows()).toHaveLength(0);
+  });
+
+  it("AF-8: the trip sheet sentence is pinned to live policy output, only for a system record, matched by its whole label", async () => {
+    const sheet = (label: string) => ({ kind: "job_sheet", label, amount: "800", reference: "INV-2026-0190", excerpt: "Vehicle days: 4. Driver: Phuong. USD 800.00." });
+    const blocksOf = (id: string) => previewPolicy(db, id).rules.filter((x) => !x.passed && x.severity === "block").map((x) => ({ rule: x.ruleId, message: x.message }));
+    const ctx = (id: string) => ({ businessId: DEMO_BUSINESS_ID, vendorId: "ven_phuong", obligationId: id });
+    // A record from an integration (an attest key's): the business's own.
+    const own = await requestPayment(db, bookings, { payee: "Phuong Transport", amount: "960", currency: "USD", reference: "INV-2026-0190", description: "Phuong Transport INV-2026-0190, total USD 960.", evidence: [sheet("Trip sheet INV-2026-0190")], idempotency_key: "phuong-sheet-0190" });
+    expect(blocksOf(own.request_id).map((b) => b.message)).toContain("Requested USD 960.00 but Trip sheet INV-2026-0190 says USD 800.00 (+USD 160.00)");
+    expect(counterOfferFrom(db, ctx(own.request_id), blocksOf(own.request_id), 96_000, "USD")).toEqual({ offerMinor: 80_000, rule: "amount_matches_evidence", record: "Trip sheet INV-2026-0190", detail: null });
+    // A label with " says USD 10.00" in it cannot be read as the figure.
+    const tricky = await requestPayment(db, bookings, { payee: "Phuong Transport", amount: "960", currency: "USD", reference: "INV-2026-0191", description: "Phuong Transport INV-2026-0191, total USD 960.", evidence: [{ ...sheet("Trip sheet says USD 10.00"), reference: "INV-2026-0191" }], idempotency_key: "phuong-sheet-0191" });
+    expect(counterOfferFrom(db, ctx(tricky.request_id), blocksOf(tricky.request_id), 96_000, "USD")?.offerMinor).toBe(80_000);
+    // The same sentence from a record an agent without attest typed: no basis.
+    const typed = await requestPayment(db, desk, { payee: "Phuong Transport", amount: "960", currency: "USD", reference: "INV-2026-0192", description: "Phuong Transport INV-2026-0192, total USD 960.", evidence: [{ ...sheet("Trip sheet INV-2026-0192"), reference: "INV-2026-0192" }], idempotency_key: "phuong-sheet-0192" });
+    expect(blocksOf(typed.request_id).some((b) => b.rule === "amount_matches_evidence")).toBe(true);
+    expect(counterOfferFrom(db, ctx(typed.request_id), blocksOf(typed.request_id), 96_000, "USD")).toBeNull();
+    // Only amount blocks, only lower figures, only the request's currency.
     const rate = { rule: "expected_amount", message: "Rate card and departure HG-4D-0927 say USD 800.00 (4 vehicle-days x USD 200.00); this asks for USD 960.00" };
-    const sheet = { rule: "amount_matches_evidence", message: "Requested USD 960.00 but Trip sheet HG-4D-0927 says USD 850.00 (+USD 110.00)" };
-    expect(counterOfferFrom([rate], 96_000, "USD")).toEqual({ offerMinor: 80_000, rule: "expected_amount", record: "Rate card and departure HG-4D-0927", detail: "4 vehicle-days x USD 200.00" });
-    expect(counterOfferFrom([sheet, rate], 96_000, "USD")?.offerMinor).toBe(80_000);
-    expect(counterOfferFrom([sheet], 96_000, "USD")?.record).toBe("Trip sheet HG-4D-0927");
-    expect(counterOfferFrom([rate, { rule: "no_duplicate", message: "Reference X was already used" }], 96_000, "USD")).toBeNull();
-    expect(counterOfferFrom([rate], 80_000, "USD")).toBeNull();
-    expect(counterOfferFrom([rate], 96_000, "PHP")).toBeNull();
+    const check = { businessId: DEMO_BUSINESS_ID, vendorId: "ven_phuong", obligationId: null };
+    expect(counterOfferFrom(db, check, [rate], 96_000, "USD")?.offerMinor).toBe(80_000);
+    expect(counterOfferFrom(db, check, [rate, { rule: "no_duplicate", message: "Reference X was already used" }], 96_000, "USD")).toBeNull();
+    expect(counterOfferFrom(db, check, [rate], 80_000, "USD")).toBeNull();
+    // A rate card sentence that does not match the business's rate card and departure for this supplier: no basis.
+    expect(counterOfferFrom(db, check, [{ ...rate, message: rate.message.replace("USD 800.00", "USD 900.00") }], 96_000, "USD")).toBeNull();
+    expect(counterOfferFrom(db, { ...check, vendorId: "ven_maria" }, [rate], 96_000, "USD")).toBeNull();
+  });
+
+  it("AF-8: the bill sentence is pinned to live policy output and to a bill on file", async () => {
+    const billId = createBill(db, DEMO_BUSINESS_ID, "agent", "ven_phuong", { kind: "invoice", reference: "INV-2026-0300", totalMinor: 50_000, currency: "USD" });
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", sourceRef: "INV-2026-0300", rawInput: "Phuong Transport INV-2026-0300, pay USD 600.", billId, actor: "user:lan", stated: { vendorId: "ven_phuong", amountMinor: 60_000, currency: "USD", sourceRef: "INV-2026-0300" } });
+    const blocks = previewPolicy(db, id).rules.filter((x) => !x.passed && x.severity === "block").map((x) => ({ rule: x.ruleId, message: x.message }));
+    expect(blocks.map((b) => b.message)).toEqual([expect.stringMatching(/^Requested USD 600.00 but only USD 500.00 is still open on INV-2026-0300 \(total /)]);
+    const ctx = { businessId: DEMO_BUSINESS_ID, vendorId: "ven_phuong", obligationId: id };
+    expect(counterOfferFrom(db, ctx, blocks, 60_000, "USD")).toEqual({ offerMinor: 50_000, rule: "amount_matches_evidence", record: "Bill INV-2026-0300", detail: "what is still open on it" });
+    // The same sentence naming a bill that is not on file, or a different open figure: no basis.
+    expect(counterOfferFrom(db, ctx, [{ ...blocks[0], message: blocks[0].message.replaceAll("INV-2026-0300", "INV-2026-0399") }], 60_000, "USD")).toBeNull();
+    expect(counterOfferFrom(db, ctx, [{ ...blocks[0], message: blocks[0].message.replace("only USD 500.00", "only USD 100.00") }], 60_000, "USD")).toBeNull();
   });
 
   it("Phuong's agent asks USD 960 and gets an offer of USD 800 against the rate card and departure, and no business settings", async () => {
@@ -384,7 +492,7 @@ describe("negotiation with a supplier's agent", () => {
     expect(d.amount).toBe("USD 960.00");
     expect(["blocked", "waiting_for_approval"]).toContain(d.status);
     const ev = db.select().from(evidence).where(eq(evidence.obligationId, d.request_id)).all();
-    expect(ev.map((e) => e.label)).toEqual(expect.arrayContaining(["The supplier's agent disputes the counter-offer (its own say-so)", "From the supplier's agent: Guide chat 30 Sept"]));
+    expect(ev.map((e) => e.label)).toEqual(expect.arrayContaining(["From the supplier's agent: its dispute of the counter-offer", "From the supplier's agent: Guide chat 30 Sept"]));
     const ob = db.select().from(obligations).where(eq(obligations.id, d.request_id)).get()!;
     expect(ob.aiFlagsJson).toMatch(/disputes Checkrail's counter-offer of USD 800.00/);
     const row = db.select().from(agentOffers).where(eq(agentOffers.id, offer.offer_id)).get()!;
@@ -398,8 +506,9 @@ describe("negotiation with a supplier's agent", () => {
     const r = await requestPayment(db, phuongAgent, { ...DEMO_SUPPLIER_CHECK, idempotency_key: "phuong-0177-disp" });
     const d = await disputeOffer(db, phuongAgent, { offer_id: r.counter_offer!.offer_id, reason: "The van waited an extra day at Dong Van for the group." });
     expect(d.request_id).toBe(r.request_id);
-    const ev = db.select().from(evidence).where(and(eq(evidence.obligationId, r.request_id), eq(evidence.provenance, "vendor"))).all();
+    const ev = db.select().from(evidence).where(and(eq(evidence.obligationId, r.request_id), eq(evidence.label, "From the supplier's agent: its dispute of the counter-offer"))).all();
     expect(ev[0].excerpt).toMatch(/extra day/);
+    expect(ev[0].provenance).toBe("operator");
     expect(db.select().from(obligations).where(eq(obligations.id, r.request_id)).get()!.state).toBe("blocked");
   });
 
@@ -408,6 +517,39 @@ describe("negotiation with a supplier's agent", () => {
     expect(r.verdict).toBe("block");
     expect(r.counter_offer).toBeUndefined();
     expect(offerRows()).toHaveLength(0);
+  });
+
+  it("AF-6: a blocked request's headline is its first block, and provenance holds stay in the list", async () => {
+    const r = await requestPayment(db, phuongAgent, { ...DEMO_SUPPLIER_CHECK, idempotency_key: "phuong-0177-head", provenance: { instruction: { kind: "web", sender: "phuong-transport.vn" } } });
+    expect(r.status).toBe("blocked");
+    expect(r.summary).toBe("Blocked: Rate card and departure HG-4D-0927 say USD 800.00 (4 vehicle-days x USD 200.00); this asks for USD 960.00.");
+    expect(r.reasons[0]).toMatch(/^Rate card and departure/);
+    expect(r.reasons[1]).toBe("This instruction came from a web page (phuong-transport.vn). A person confirms it.");
+  });
+
+  it("AF-7: a supplier agent's records are labelled its say-so, never as a clerk's, and set no bill total", async () => {
+    const r = await requestPayment(db, phuongAgent, { ...DEMO_SUPPLIER_CHECK, idempotency_key: "phuong-0177-label" });
+    const ev = db.select().from(evidence).where(eq(evidence.obligationId, r.request_id)).all();
+    expect(ev.map((e) => [e.label, e.provenance])).toEqual([["From the supplier's agent: Invoice INV-2026-0177", "operator"]]);
+    expect(JSON.stringify(r)).not.toMatch(/supplied by operator/);
+    expect(r.reasons).toContain("The records attached are the supplier's own say-so; a person checks them against the business's records");
+    // A deposit against the supplier's own invoice total creates no bill (review AG-5 holds for supplier keys).
+    const bills = () => db.select().from(billsTable).all().length;
+    const before = bills();
+    await requestPayment(db, phuongAgent, { payee: "Phuong Transport", amount: "480", currency: "USD", reference: "INV-2026-0400", description: "Phuong Transport INV-2026-0400: 50% deposit USD 480 of the total USD 960.", evidence: [{ kind: "invoice", label: "Invoice INV-2026-0400", amount: "960", reference: "INV-2026-0400" }], idempotency_key: "phuong-deposit-0400" });
+    expect(bills()).toBe(before);
+  });
+
+  it("AF-10: accept and dispute at once: one wins, and a dispute is never overwritten or its request cancelled", async () => {
+    const r = await requestPayment(db, phuongAgent, { ...DEMO_SUPPLIER_CHECK, idempotency_key: "phuong-0177-race" });
+    const id = r.counter_offer!.offer_id;
+    const [d, a] = await Promise.allSettled([disputeOffer(db, phuongAgent, { offer_id: id, reason: "The van waited an extra day at Dong Van." }), acceptOffer(db, phuongAgent, { offer_id: id })]);
+    expect(d.status).toBe("fulfilled");
+    expect(a.status).toBe("rejected");
+    expect(String((a as PromiseRejectedResult).reason)).toMatch(/disputed/);
+    expect(db.select().from(agentOffers).where(eq(agentOffers.id, id)).get()!.status).toBe("disputed");
+    expect(db.select().from(obligations).where(eq(obligations.id, r.request_id)).get()!.state).toBe("blocked");
+    expect(outsideRequests(db)).toHaveLength(1);
   });
 
   it("a supplier key whose supplier is not on file is refused", async () => {
@@ -422,6 +564,21 @@ describe("the agent futures demo seed", () => {
   beforeEach(async () => {
     db = openTestDb();
     await seedDemo(db);
+  });
+
+  it("AF-9: reseeding touches only the demo business, leaves no question pointing at a gone mandate, and the offer stays open", () => {
+    const old = db.select().from(agentMandates).all()[0];
+    db.insert(agentChecks).values({ id: "agc_pointsatold", businessId: DEMO_BUSINESS_ID, agent: DEMO_MANDATE_AGENT, tool: "request_payment", verdict: "hold", summary: "x", createdAt: new Date().toISOString(), mandateId: old.id }).run();
+    db.insert(agentMandates).values({ ...old, id: "mdt_otherbusiness0", businessId: "biz_other", tokenHash: "other-hash" }).run();
+    db.insert(agentOffers).values({ ...db.select().from(agentOffers).all()[0], id: "ofr_otherbusiness0", businessId: "biz_other" }).run();
+    seedAgentFutures(db, DEMO_BUSINESS_ID);
+    expect(db.select().from(agentChecks).where(eq(agentChecks.id, "agc_pointsatold")).all()).toHaveLength(0);
+    const mandateIds = new Set(db.select().from(agentMandates).all().map((m) => m.id));
+    expect(db.select().from(agentChecks).all().filter((c) => c.mandateId && !mandateIds.has(c.mandateId))).toHaveLength(0);
+    expect(mandateIds.has("mdt_otherbusiness0")).toBe(true);
+    expect(db.select().from(agentOffers).where(eq(agentOffers.id, "ofr_otherbusiness0")).all()).toHaveLength(1);
+    const offer = db.select().from(agentOffers).where(eq(agentOffers.businessId, DEMO_BUSINESS_ID)).get()!;
+    expect(Date.parse(offer.expiresAt) - Date.now()).toBeGreaterThan(300 * 86_400_000);
   });
 
   it("seeds a mandate, the email questions and Phuong's offer, as the guard answers them today", async () => {
