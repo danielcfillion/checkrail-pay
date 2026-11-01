@@ -16,6 +16,8 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { CountUp } from "@/components/motion/CountUp";
 import { DemoVisit } from "@/components/DemoProgress";
 import { waitingLine } from "@/components/waiting-line";
+import { tourEnabled } from "@/components/tour/enabled";
+import { activeSandboxId } from "@/lib/sandbox/server";
 
 export const dynamic = "force-dynamic";
 // The root segment does not get the layout's title template, so spell it out.
@@ -27,8 +29,12 @@ export default async function OverviewPage() {
   const all = listObligations({ limit: 1000 });
   const base = o.business?.baseCurrency ?? "USD";
   const points = listPaymentPoints(120);
-  const canReset = !viewer || viewer.can("reset_demo");
-  const demo = Boolean(viewer?.personas);
+  const mayResetShared = !viewer || viewer.can("reset_demo");
+  const mine = Boolean(activeSandboxId());
+  // Start over touches only this visitor's own copy, so every demo person may use it.
+  const canReset = mayResetShared || mine;
+  const tour = tourEnabled();
+  const demo = Boolean(viewer?.personas) || mine;
   // The opening request of the demo story, for the banner's first button.
   const phuong = demo ? findObligationsBySourceRef(["INV-2026-0152"]).find((r) => r.vendorId === "ven_phuong") : undefined;
   const activity = activityFeed(listAudit(400), 10);
@@ -67,10 +73,10 @@ export default async function OverviewPage() {
     <>
       <AutoRefresh seconds={10} />
       <DemoVisit page="overview" />
-      {demo ? <DemoBanner startHref={phuong ? `/obligations/${phuong.id}` : "/demo"} canReset={canReset} heading={heading} /> : (
+      {demo ? <DemoBanner startHref={phuong ? `/obligations/${phuong.id}` : "/demo"} canReset={canReset} heading={heading} tour={tour} mine={mine} /> : (
         <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">{heading}</div>
-          {canReset ? <ResetDemoButton /> : null}
+          {canReset ? <ResetDemoButton mine={mine} /> : null}
         </header>
       )}
 

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { pauseAutopilotAction, setAutonomyAction } from "@/app/actions";
 import { useToast } from "./Toast";
+import { cancelWindowMinutesField, cancelWindowText } from "./cancel-window";
 
 type Level = "review" | "assist" | "autopilot";
 
@@ -38,7 +39,7 @@ export function AutonomyControl({ view }: { view: AutonomyView }) {
   const [level, setLevel] = useState<Level>(view.level);
   const [perPayment, setPerPayment] = useState(dollars(view.perPaymentCapMinor));
   const [daily, setDaily] = useState(dollars(view.dailyCapMinor));
-  const [minutes, setMinutes] = useState(String(Math.round(view.cancelWindowSeconds / 60)));
+  const [minutes, setMinutes] = useState(cancelWindowMinutesField(view.cancelWindowSeconds));
   const [arm, setArm] = useState(false);
   const [pending, start] = useTransition();
   const { toast } = useToast();
@@ -132,6 +133,7 @@ export function AutonomyControl({ view }: { view: AutonomyView }) {
               <input id="cap-window" className="field num" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
               <span className="text-ink-soft">minutes</span>
             </div>
+            {view.cancelWindowSeconds < 60 ? <p className="mt-1 text-xs text-ink-soft">Now {cancelWindowText(view.cancelWindowSeconds)}. Saving sets at least 1 minute.</p> : null}
           </div>
         </div>
       ) : null}

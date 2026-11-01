@@ -5,9 +5,18 @@ import { runAutopilot } from "@/lib/engine/autopilot";
 import { purgeUnlinkedUploads } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
 import { isLiveRails } from "@/lib/config";
+import { startSandboxes } from "@/lib/sandbox/server";
 
-/** Node-only half of the heartbeat (see instrumentation.ts). Kept separate so the edge bundle never sees the database driver. */
-export function startHeartbeat(): void {
+/**
+ * Node-only half of the heartbeat (see instrumentation.ts). Kept separate so the edge bundle never sees the database driver.
+ *
+ * Sandbox mode (a private copy of the demo per browser, src/lib/sandbox/server.ts) is started here first. With it on,
+ * there is no heartbeat over the shared database: autopilot runs per copy when that copy is used (and when a countdown
+ * reaches zero), the idle reset is not needed because each copy is deleted after its own idle time, and sandbox mode
+ * keeps its own housekeeping timer (deleting idle copies, reseeding the template at a quiet moment).
+ */
+export async function startHeartbeat(): Promise<void> {
+  if (await startSandboxes()) return;
   if (process.env.AUTOPILOT_HEARTBEAT === "off") return;
   const g = globalThis as unknown as { __checkrailHeartbeat?: ReturnType<typeof setInterval>; __checkrailSeededAt?: string };
   if (g.__checkrailHeartbeat) return;

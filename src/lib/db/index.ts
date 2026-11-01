@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -11,8 +12,32 @@ export type Db = BetterSQLite3Database<typeof schema>;
 let _db: Db | null = null;
 let _sqlite: Database.Database | null = null;
 
-/** Opens (and migrates) the database. Safe to call repeatedly; returns a singleton. */
+/*
+ * Which database a call gets. Normally the process singleton below. Two things can stand in for it, both kept on
+ * globalThis because Next can load this module more than once in one process:
+ *  - a scope: `withDb(db, fn)` makes every getDb() inside fn (and everything it awaits) return `db`. Used to seed the
+ *    sandbox template and to run an autopilot pass on one visitor's copy.
+ *  - a resolver: in sandbox mode (src/lib/sandbox/server.ts) it returns the copy of the database that belongs to the
+ *    browser making the current request, or null outside a request. Not installed otherwise, so with sandbox mode off
+ *    (development, tests, live mode) getDb() is exactly the singleton it always was.
+ */
+const g = globalThis as typeof globalThis & { __checkrailDbScope?: AsyncLocalStorage<Db>; __checkrailDbResolver?: (() => Db | null) | null };
+const scope = (g.__checkrailDbScope ??= new AsyncLocalStorage<Db>());
+
+/** Run `fn` with `db` as the database every getDb() inside it returns, including after awaits. */
+export function withDb<T>(db: Db, fn: () => T): T {
+  return scope.run(db, fn);
+}
+
+/** Install the per-request database resolver (sandbox mode), or remove it with null. */
+export function setDbResolver(fn: (() => Db | null) | null): void {
+  g.__checkrailDbResolver = fn;
+}
+
+/** Opens (and migrates) the database. Safe to call repeatedly; returns a singleton (or the scoped copy, see above). */
 export function getDb(dbPath: string = config.dbPath): Db {
+  const scoped = scope.getStore() ?? g.__checkrailDbResolver?.() ?? null;
+  if (scoped) return scoped;
   if (_db) return _db;
   if (dbPath !== ":memory:") {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });

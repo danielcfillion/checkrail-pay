@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ResetDemoButton } from "./ResetDemoButton";
+import { TakeTourButton } from "./tour/TakeTourButton";
 
 const KEY = "checkrail.demoBanner.dismissed";
 /** Set the first time the banner is shown, so a phone folds it to one line from the second view on. */
@@ -12,8 +13,9 @@ const SEEN = "checkrail.demoBanner.seen";
  * First thing a judge sees on the hosted demo: what the business is, what the product does, and where to click.
  * Dismissing it is remembered in this browser only. Once dismissed it folds into a one-line chip beside the page
  * title (DS2-25), with the guide and Reset demo still one click away. `heading` is the page's own title block.
+ * `tour`: the guided tour is offered, and leads. `mine`: sandbox mode, where this browser has its own copy of the demo.
  */
-export function DemoBanner({ startHref, canReset, heading }: { startHref: string; canReset: boolean; heading: ReactNode }) {
+export function DemoBanner({ startHref, canReset, heading, tour = false, mine = false }: { startHref: string; canReset: boolean; heading: ReactNode; tour?: boolean; mine?: boolean }) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     try {
@@ -42,11 +44,12 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
       {chip ? (
         <section aria-label="Demo" className="flex flex-wrap items-center gap-1.5 rounded-full border bg-sheet py-1 pl-3 pr-1 text-sm hairline">
           <span className="dense text-attention">Demo</span>
+          {tour ? <TakeTourButton size="sm" /> : null}
           <Link href="/demo" className="btn btn-sm">
             Demo guide
           </Link>
           {/* Reset is destructive on a shared demo: off the phone's first screen (it is on the demo guide too). */}
-          {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" /></span> : null}
+          {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" mine={mine} /></span> : null}
           <button type="button" className="btn btn-sm" onClick={() => set(false)} aria-label="Show the demo introduction again">
             Show intro
           </button>
@@ -70,7 +73,8 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
         </button>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Link href={startHref} className="btn btn-primary">
+        {tour ? <TakeTourButton primary /> : null}
+        <Link href={startHref} className={`btn ${tour ? "" : "btn-primary"}`}>
           Start with the USD 960 invoice
         </Link>
         <Link href="/demo" className="btn">
@@ -78,8 +82,8 @@ export function DemoBanner({ startHref, canReset, heading }: { startHref: string
         </Link>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-sm text-ink-soft hairline">
-        <span>This demo is shared by everyone using it. Reset puts the four opening requests back.</span>
-        {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" /></span> : null}
+        <span>{mine ? "This copy of the demo is yours: other visitors do not see your clicks. Start over puts the four opening requests back." : "This demo is shared by everyone using it. Reset puts the four opening requests back."}</span>
+        {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" mine={mine} /></span> : null}
       </div>
     </section>
     </>

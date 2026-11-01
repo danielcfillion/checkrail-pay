@@ -1,0 +1,14 @@
+/* The tour card. A bottom sheet above the phone navigation, a floating card from md up. Doubled class names so these
+   win over .panel's radius and shadow, which sit outside Tailwind's layers. */
+.sheet.sheet {
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -6px 24px rgb(10 22 40 / 0.14), var(--card-shadow);
+  border-color: var(--rule-strong);
+}
+
+@media (min-width: 768px) {
+  .sheet.sheet {
+    border-radius: 16px;
+    box-shadow: 0 14px 36px rgb(10 22 40 / 0.18), var(--card-shadow);
+  }
+}

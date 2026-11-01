@@ -11,6 +11,9 @@ import { ROLE_LABEL } from "@/lib/auth/roles";
 import { getDb } from "@/lib/db";
 import { pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
 import { listRuns } from "@/lib/engine/runs";
+import { TourMount } from "@/components/tour/TourMount";
+import { SandboxBusyPage } from "@/components/SandboxBusy";
+import { sandboxBusy } from "@/lib/sandbox/server";
 
 /* Geist and Geist Mono (SIL OFL), vendored by the geist package so the build needs no network. Covers Vietnamese. */
 const fontVars = `${GeistSans.variable} ${GeistMono.variable}`;
@@ -50,6 +53,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       </html>
     );
   }
+  // Sandbox mode: no copy of the demo could be made for this visitor right now.
+  if (sandboxBusy()) return <SandboxBusyPage className={fontVars} />;
   let businessName: string | null = null;
   let system = null;
   let viewer: Awaited<ReturnType<typeof getViewer>> = null;
@@ -84,6 +89,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           >
             {children}
           </Shell>
+          <TourMount />
         </ToastProvider>
       </body>
     </html>

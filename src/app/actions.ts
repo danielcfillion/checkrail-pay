@@ -19,6 +19,7 @@ import { exportPendingCsv } from "@/lib/accounting/record";
 import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
+import { resetActiveSandbox, sandboxActive } from "@/lib/sandbox/server";
 import type { Rail, SourceType } from "@/lib/domain/types";
 import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
@@ -321,6 +322,14 @@ export async function resetDemoAction(): Promise<ActionResult> {
   try {
     // Resetting wipes obligations, payment attempts, settlements and the audit log. Never with real rails.
     if (isLiveRails()) return { ok: false, message: "Demo reset is disabled when RAIL_MODE=live." };
+    // Sandbox mode: Start over replaces this browser's own copy with a fresh one. Nobody else's copy changes, so
+    // anyone signed in may do it, whichever demo person they are acting as.
+    if (sandboxActive()) {
+      await currentActor();
+      if (!resetActiveSandbox()) return { ok: false, message: "No copy of the demo was found for this browser. Reload the page and try again." };
+      done();
+      return { ok: true, message: "Started over. Your copy has the four opening requests again: two are blocked, one is ready to pay over PayPal, one needs approval." };
+    }
     await act("reset_demo", "reset the demo");
     await seedDemo(getDb(), { history: true });
     done();
