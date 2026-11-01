@@ -38,7 +38,17 @@ export interface SandboxSetting {
   refused: string | null;
   max: number;
   ttlMinutes: number;
+  /**
+   * New copies one client address may start in ten minutes. Behind a host's proxies the address is only known when
+   * CHECKRAIL_CLIENT_IP_HEADER names the header that carries it; in production without it, every visitor may share one
+   * edge address, so the limit is raised (and the server says so once at start).
+   */
+  newPerClient: number;
+  addressVerified: boolean;
 }
+
+export const NEW_PER_CLIENT = 5;
+export const NEW_PER_UNVERIFIED_CLIENT = 30;
 
 function positiveInt(v: string | undefined, fallback: number): number {
   const n = Number(v);
@@ -61,7 +71,8 @@ export function sandboxSetting(env: Env): SandboxSetting {
     else if (realMoneyEnv(env)) refused = "PAYPAL_ENV=live, STELLAR_NETWORK=public or WISE_ENV=live is set";
     else if (env.NODE_ENV === "production" && !sandboxKeyMaterial(env)) refused = `CHECKRAIL_SANDBOX_SECRET is not set (at least ${MIN_SANDBOX_SECRET} characters), which production requires`;
   }
-  return { requested, on: requested && refused === null, refused, max, ttlMinutes };
+  const addressVerified = env.NODE_ENV !== "production" || Boolean(env.CHECKRAIL_CLIENT_IP_HEADER?.trim());
+  return { requested, on: requested && refused === null, refused, max, ttlMinutes, newPerClient: addressVerified ? NEW_PER_CLIENT : NEW_PER_UNVERIFIED_CLIENT, addressVerified };
 }
 
 /** The signing key: CHECKRAIL_SANDBOX_SECRET, or null when it is missing or too short. Never derived from other settings. */
@@ -100,6 +111,12 @@ export function verifySandboxToken(token: string | null | undefined, material: s
   return sameText(sign(id, exp, material), sig) ? id : null;
 }
 
+/** When a well-formed token expires (ms since 1970), unverified; null when malformed. */
+export function tokenExpiry(token: string | null | undefined): number | null {
+  const exp = token?.split(".")[1];
+  return exp && /^[a-z0-9]{1,10}$/.test(exp) ? parseInt(exp, 36) * 1000 : null;
+}
+
 /** The id part of a well-formed token, unverified. */
 export function idOf(token: string | null | undefined): string | null {
   const id = token?.split(".")[0] ?? "";
@@ -114,13 +131,18 @@ export function sameText(a: string, b: string): boolean {
 }
 
 /**
- * The middleware's half: keep this browser's sandbox when its cookie is valid, otherwise start a new one. `fresh`
- * means the response must set the cookie. Null when there is no key to sign with (the server then refuses, see
+ * The middleware's half: keep this browser's sandbox when its cookie is valid (renewed once it is past half its life),
+ * otherwise start a new one. `fresh` means the response must set the cookie. Null when there is no key to sign with (the server then refuses, see
  * server.ts, rather than falling back to the shared database).
  */
 export function sandboxForRequest(cookie: string | undefined, env: Env, nowMs: number = Date.now()): { token: string; fresh: boolean } | null {
   const material = sandboxKeyMaterial(env);
   if (!material) return null;
-  if (cookie && verifySandboxToken(cookie, material, nowMs)) return { token: cookie, fresh: false };
+  const id = cookie ? verifySandboxToken(cookie, material, nowMs) : null;
+  if (id) {
+    // Sliding expiry: past half its life, a token in use is renewed for the same copy.
+    const left = (tokenExpiry(cookie) ?? 0) - nowMs;
+    return left > (SANDBOX_COOKIE_MAX_AGE * 1000) / 2 ? { token: cookie!, fresh: false } : { token: signSandboxId(id, material, nowMs), fresh: true };
+  }
   return { token: signSandboxId(newSandboxId(), material, nowMs), fresh: true };
 }

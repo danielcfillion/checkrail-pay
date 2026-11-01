@@ -20,7 +20,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external";
 import { getDb, type Db } from "@/lib/db";
-import { agentChecks, auditEntries, obligations } from "@/lib/db/schema";
+import { agentChecks, auditEntries, businesses, obligations } from "@/lib/db/schema";
 import { seedDemo } from "@/lib/demo/seed";
 import { ACTOR_HEADER, ROLE_HEADER } from "@/lib/basicAuth";
 import { amendAction, resetDemoAction } from "@/app/actions";
@@ -63,13 +63,22 @@ describe("sandbox setting", () => {
     expect(sandboxForRequest(undefined, {})).toBeNull();
   });
 
+  it("raises the per-address limit when the client address is unverified in production", () => {
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1" })).toMatchObject({ newPerClient: 5, addressVerified: true });
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", NODE_ENV: "production", CHECKRAIL_SANDBOX_SECRET: MATERIAL })).toMatchObject({ newPerClient: 30, addressVerified: false });
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", NODE_ENV: "production", CHECKRAIL_SANDBOX_SECRET: MATERIAL, CHECKRAIL_CLIENT_IP_HEADER: "cf-connecting-ip" })).toMatchObject({ newPerClient: 5, addressVerified: true });
+  });
+
   it("makes up a random secret for a development server that has none", async () => {
     const env: Record<string, string | undefined> = { CHECKRAIL_SANDBOX: "1" };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
+      expect(getDb().select().from(businesses).all()).toEqual([]); // the shared database starts empty here
       expect(await startSandboxes(env, tmp())).toBe(true);
       expect(env.CHECKRAIL_SANDBOX_SECRET?.length).toBeGreaterThanOrEqual(32);
+      // Seeded at start, for outside agents on /api/mcp that carry no cookie.
+      expect(workUnitAsyncStorage.run({ type: "request", headers: new Headers(), url: { pathname: "/api/mcp" } } as never, () => getDb().select().from(businesses).all()).length).toBe(1);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/random one/));
     } finally {
       uninstallSandboxPool();
@@ -129,6 +138,18 @@ describe("the signed cookie", () => {
     expect(verifySandboxToken(token, MATERIAL, t0 + 25 * 3600_000)).toBeNull();
     const env = { CHECKRAIL_SANDBOX_SECRET: MATERIAL };
     expect(sandboxForRequest(token, env, t0 + 25 * 3600_000)?.fresh).toBe(true);
+  });
+
+  it("renews a token in use once it is past half its life, for the same copy", () => {
+    const t0 = Date.UTC(2026, 10, 1);
+    const env = { CHECKRAIL_SANDBOX_SECRET: MATERIAL };
+    const id = newSandboxId();
+    const token = signSandboxId(id, MATERIAL, t0);
+    expect(sandboxForRequest(token, env, t0 + 3600_000)).toEqual({ token, fresh: false });
+    const renewed = sandboxForRequest(token, env, t0 + 13 * 3600_000)!;
+    expect(renewed.fresh).toBe(true);
+    expect(renewed.token).not.toBe(token);
+    expect(verifySandboxToken(renewed.token, MATERIAL, t0 + 30 * 3600_000)).toBe(id);
   });
 
   it("keeps a valid cookie and replaces a forged one", () => {
@@ -299,6 +320,15 @@ describe("one request, one visitor's copy", () => {
     expect(shared.select().from(agentChecks).all()).toEqual([]);
   });
 
+  it("Start over works for every demo person in sandbox mode: it only touches their own copy", async () => {
+    const lan = signSandboxId(newSandboxId(), MATERIAL);
+    const r = await workUnitAsyncStorage.run({ type: "request", headers: new Headers({ [SANDBOX_HEADER]: lan, [ACTOR_HEADER]: "lan", [ROLE_HEADER]: "clerk" }), url: { pathname: "/" } } as never, () => {
+      state.headers = new Headers({ [ACTOR_HEADER]: "lan", [ROLE_HEADER]: "clerk" });
+      return resetDemoAction();
+    });
+    expect(r).toMatchObject({ ok: true, message: expect.stringMatching(/Started over/) });
+  });
+
   it("Start over resets only the visitor's copy, and gives it a new copy time", async () => {
     expect(inRequest(a, () => activeSandboxId())).toBe(a.split(".")[0]);
     const before = inRequest(a, () => activeCopiedAt());
@@ -349,6 +379,39 @@ describe("a busy pool never pushes out a judge in the middle of the demo", () =>
     pool.dbFor(late, { client: "192.0.2.99" });
     expect(pool.has(judges[0])).toBe(false);
     expect(pool.has(judges[1]) && pool.has(judges[2]) && pool.has(late)).toBe(true);
+  });
+
+  it("a returning visitor whose copy was deleted does not use up the address's allowance", () => {
+    let own = 9_000_000;
+    const p2 = new SandboxPool({ dir: tmp(), max: 50, ttlMs: 60_000, seed, now: () => own, retireDelayMs: 0, newPerClient: 2 });
+    fs.copyFileSync(pool.templatePath, p2.templatePath);
+    const [v1, v2] = [newSandboxId(), newSandboxId()];
+    p2.dbFor(v1, { client: "203.0.113.50" });
+    p2.dbFor(v2, { client: "203.0.113.50" });
+    own += 2 * 60_000;
+    expect(p2.sweep(own, true).sort()).toEqual([v1, v2].sort()); // both idle past the TTL
+    expect(() => p2.dbFor(v1, { client: "203.0.113.50" })).not.toThrow(); // known visitors come back
+    expect(() => p2.dbFor(newSandboxId(), { client: "203.0.113.50" })).toThrow(SandboxBusyError); // a third new one does not
+    p2.close();
+  });
+
+  it("deletes a copy four hours after it was made, even if a tab keeps refreshing it", () => {
+    let own = 9_000_000;
+    const p3 = new SandboxPool({ dir: tmp(), max: 5, ttlMs: 3600_000, seed, now: () => own, retireDelayMs: 0 });
+    fs.copyFileSync(pool.templatePath, p3.templatePath);
+    const v = newSandboxId();
+    p3.dbFor(v);
+    const made = p3.copiedAt(v);
+    for (let i = 0; i < 8; i++) {
+      own += 30 * 60_000;
+      p3.sweep(own, true);
+      expect(p3.copiedAt(v)).toBe(made); // still the same copy up to four hours
+      p3.dbFor(v); // refreshed every half hour
+    }
+    own += 30 * 60_000;
+    p3.sweep(own, true);
+    expect(p3.has(v)).toBe(false); // four and a half hours: gone, refreshes or not
+    p3.close();
   });
 
   it("closes replaced copies promptly, so open files cannot pile up", () => {

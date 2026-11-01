@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import * as nextStore from "next/dist/server/app-render/work-unit-async-storage.external";
 import { config } from "../config";
-import { setDbResolver, withDb, type Db } from "../db";
+import { getDb, setDbResolver, withDb, type Db } from "../db";
+import { businesses } from "../db/schema";
 import { seedDemo } from "../demo/seed";
 import { runAutopilot } from "../engine/autopilot";
 import { clientIp } from "../throttle";
@@ -173,7 +174,11 @@ export async function startSandboxes(env: Env = process.env, dir: string = sandb
     env.CHECKRAIL_SANDBOX_SECRET = randomBytes(32).toString("base64url");
     console.warn(`[sandbox] CHECKRAIL_SANDBOX_SECRET is not set (at least ${MIN_SANDBOX_SECRET} characters): using a random one for this development server.`);
   }
-  const pool = new SandboxPool({ dir, max: s.max, ttlMs: s.ttlMinutes * 60_000, seed: async (db) => void (await seedDemo(db, { history: true })), onUse: passOnUse });
+  // The shared database still answers outside agents on /api/mcp (no cookie): give it the demo if it has none.
+  const shared = getDb();
+  if (!shared.select({ id: businesses.id }).from(businesses).get()) await seedDemo(shared, { history: true });
+  if (!s.addressVerified) console.warn(`[sandbox] CHECKRAIL_CLIENT_IP_HEADER is not set: client addresses are unverified (they may be one shared edge address), so each may start ${s.newPerClient} copies in 10 minutes. See docs/JUDGES.md to verify with CHECKRAIL_LOG_CLIENT_IP.`);
+  const pool = new SandboxPool({ dir, max: s.max, ttlMs: s.ttlMinutes * 60_000, newPerClient: s.newPerClient, seed: async (db) => void (await seedDemo(db, { history: true })), onUse: passOnUse });
   const t = Date.now();
   await pool.init();
   installSandboxPool(pool, sandboxKeyMaterial(env)!);

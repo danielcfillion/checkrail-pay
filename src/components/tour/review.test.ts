@@ -60,10 +60,9 @@ describe("step 5's message names what was scheduled", () => {
   it("from the result, not a fixed sentence", () => {
     const rosa = { vendorName: "Rosa Villanueva", amountMinor: 19_000, currency: "USD" };
     const maria = { vendorName: "Maria Santos", amountMinor: 18_000, currency: "USD" };
-    expect(autopilotMessage([rosa], "1 minute", null)).toMatch(/Rosa Villanueva USD 190\.00 is scheduled/);
-    expect(autopilotMessage([rosa, maria], "1 minute", null)).toMatch(/Rosa Villanueva USD 190\.00 and Maria Santos USD 180\.00 are scheduled/);
-    expect(autopilotMessage([], "1 minute", null)).toMatch(/Nothing new was ready/);
-    expect(autopilotMessage([rosa], "1 minute", maria)).toMatch(/^Maria Santos USD 180\.00 was paid over PayPal first/);
+    expect(autopilotMessage([rosa], "1 minute")).toMatch(/Rosa Villanueva USD 190\.00 is scheduled/);
+    expect(autopilotMessage([rosa, maria], "1 minute")).toMatch(/Rosa Villanueva USD 190\.00 and Maria Santos USD 180\.00 are scheduled/);
+    expect(autopilotMessage([], "1 minute")).toMatch(/Nothing new was ready/);
   });
 });
 
@@ -76,16 +75,25 @@ describe("step 5 when step 4 was skipped", () => {
     state.headers = new Headers({ [ACTOR_HEADER]: "daniel", [ROLE_HEADER]: "admin" });
   }, 60_000);
 
-  it("pays step 4's request first, so Autopilot never schedules the one with a possible-duplicate reading", async () => {
+  it("never pays or schedules step 4's request: it asks for step 4 first and changes nothing", async () => {
     const step4 = () => db.select().from(obligations).where(eq(obligations.sourceRef, "JOB-HG4D-0921")).get()!;
     expect(step4().state).toBe("approved");
+    const before = db.select().from(obligations).all().length;
+    const r = await tourAutopilotAction();
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/^Do step 4 first\. Maria Santos USD 180\.00/);
+    expect(step4().state).toBe("approved");
+    expect(step4().releaseAt).toBeNull();
+    expect(db.select().from(obligations).all().length).toBe(before); // Rosa not brought in either
+    expect(db.select().from(obligations).all().some((o) => o.releaseAt)).toBe(false);
+  }, 60_000);
+
+  it("after step 4, schedules Rosa and names her", async () => {
+    db.update(obligations).set({ state: "cancelled" }).where(eq(obligations.sourceRef, "JOB-HG4D-0921")).run(); // a person decided
     const r = await tourAutopilotAction();
     expect(r.ok).toBe(true);
-    expect(step4().state).toBe("settled");
-    expect(step4().releaseAt).toBeNull();
+    expect(r.message).toMatch(/Rosa Villanueva USD 190\.00 is scheduled/);
     const scheduled = db.select().from(obligations).all().filter((o) => o.releaseAt && o.state === "approved");
     expect(scheduled.map((o) => o.sourceRef)).toEqual(["JOB-CEB2D-1024"]);
-    expect(r.message).toMatch(/^Maria Santos USD 180\.00 was paid over PayPal first/);
-    expect(r.message).toMatch(/Rosa Villanueva USD 190\.00 is scheduled/);
   }, 60_000);
 });

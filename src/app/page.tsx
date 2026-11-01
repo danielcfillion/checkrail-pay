@@ -29,8 +29,10 @@ export default async function OverviewPage() {
   const all = listObligations({ limit: 1000 });
   const base = o.business?.baseCurrency ?? "USD";
   const points = listPaymentPoints(120);
-  const canReset = !viewer || viewer.can("reset_demo");
+  const mayResetShared = !viewer || viewer.can("reset_demo");
   const mine = Boolean(activeSandboxId());
+  // Start over touches only this visitor's own copy, so every demo person may use it.
+  const canReset = mayResetShared || mine;
   const tour = tourEnabled();
   const demo = Boolean(viewer?.personas) || mine;
   // The opening request of the demo story, for the banner's first button.

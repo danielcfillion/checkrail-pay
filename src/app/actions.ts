@@ -322,13 +322,15 @@ export async function resetDemoAction(): Promise<ActionResult> {
   try {
     // Resetting wipes obligations, payment attempts, settlements and the audit log. Never with real rails.
     if (isLiveRails()) return { ok: false, message: "Demo reset is disabled when RAIL_MODE=live." };
-    await act("reset_demo", "reset the demo");
-    // Sandbox mode: Start over replaces this browser's own copy with a fresh one. Nobody else's copy changes.
+    // Sandbox mode: Start over replaces this browser's own copy with a fresh one. Nobody else's copy changes, so
+    // anyone signed in may do it, whichever demo person they are acting as.
     if (sandboxActive()) {
+      await currentActor();
       if (!resetActiveSandbox()) return { ok: false, message: "No copy of the demo was found for this browser. Reload the page and try again." };
       done();
       return { ok: true, message: "Started over. Your copy has the four opening requests again: two are blocked, one is ready to pay over PayPal, one needs approval." };
     }
+    await act("reset_demo", "reset the demo");
     await seedDemo(getDb(), { history: true });
     done();
     return { ok: true, message: "Demo reset. Four requests are waiting: two are blocked, one is ready to pay over PayPal, one needs approval." };

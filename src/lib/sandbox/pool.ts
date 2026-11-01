@@ -15,7 +15,9 @@ import { SANDBOX_ID_RE } from "./settings";
  *    `protectMs` (30 minutes): a judge in the middle of the demo is never pushed out. Otherwise the pool is busy and
  *    dbFor throws SandboxBusyError; the server shows a calm "try again in a few minutes" page.
  *  - At most `newPerClient` new copies per client address in `newWindowMs` (5 in 10 minutes), so a script without a
- *    cookie jar cannot churn through the pool.
+ *    cookie jar cannot churn through the pool. Only new visitors count: a signed visitor whose copy was deleted (idle,
+ *    or past its life) gets a fresh one without using up the address's allowance.
+ *  - A copy is deleted `maxLifeMs` (4 hours) after it was made, even if a tab keeps refreshing it.
  *  - A copy idle for `ttlMs` is deleted (maintain(), from a timer, and throttled on use).
  *  - The seed dates everything relative to now, so maintain() seeds a new template once the current one is older than
  *    `templateMaxAgeMs`, at a quiet moment (no copy used for a minute), into a temp file swapped in with a rename.
@@ -33,6 +35,8 @@ export interface PoolOptions {
   protectMs?: number;
   newPerClient?: number;
   newWindowMs?: number;
+  /** A copy is deleted this long after it was made, used or not (4 hours): an open tab that refreshes itself cannot keep one forever. */
+  maxLifeMs?: number;
   templateMaxAgeMs?: number;
   quietMs?: number;
   retireDelayMs?: number;
@@ -63,6 +67,8 @@ export class SandboxPool {
   private readonly entries = new Map<string, Entry>();
   private readonly created = new Map<string, number[]>();
   private readonly retiring = new Set<Entry>();
+  /** Visitors who have had a copy (bounded): one coming back is not a new visitor. */
+  private readonly known = new Set<string>();
   private templateAt = 0;
   private templateGen = 0;
   private readOnlyDb: { gen: number; sqlite: Database.Database; db: Db } | null = null;
@@ -181,7 +187,7 @@ export class SandboxPool {
     this.lastSweep = t;
     const gone: string[] = [];
     for (const e of [...this.entries.values()]) {
-      if (t - e.lastUsed > this.o.ttlMs) {
+      if (t - e.lastUsed > this.o.ttlMs || t - e.createdAt > (this.o.maxLifeMs ?? 4 * 3600_000)) {
         this.entries.delete(e.id);
         this.retire(e);
         gone.push(e.id);
@@ -223,7 +229,7 @@ export class SandboxPool {
   }
 
   private open(id: string, t: number, client: string | null): Entry {
-    if (client !== null) {
+    if (client !== null && !this.known.has(id)) {
       const windowMs = this.o.newWindowMs ?? 600_000;
       const recent = (this.created.get(client) ?? []).filter((x) => t - x < windowMs);
       if (recent.length >= (this.o.newPerClient ?? 5)) throw new SandboxBusyError("rate");
@@ -233,6 +239,8 @@ export class SandboxPool {
     } else if (this.entries.size >= this.o.max) {
       this.evictIdle(t);
     }
+    this.known.add(id);
+    if (this.known.size > 10_000) this.known.delete(this.known.values().next().value!);
     const file = path.join(this.o.dir, `sbx-${id}-${++this.generation}.sqlite`);
     fs.copyFileSync(this.templatePath, file);
     const sqlite = new Database(file);
