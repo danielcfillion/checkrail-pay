@@ -128,6 +128,9 @@ function withdraw(db: Db, id: string, actor: string, reason: string): void {
   if (state && TRANSITIONS[state].includes("cancelled")) transition(db, id, "cancelled", actor, "api.request_withdrawn", { reason });
 }
 
+/** A key's binding before its request exists. Never shown: listing and lookups use only real request ids. */
+const PENDING = "pending:";
+
 const amountText = (minor: number, currency: string) => (ZERO_DECIMAL_CURRENCIES.has(currency) ? String(Math.round(minor / 100)) : (minor / 100).toFixed(2));
 
 export async function createRequest(db: Db, businessId: string, key: ApiKey, idemKey: string, body: unknown) {
@@ -138,7 +141,19 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
     const payee = payeeOf(db, businessId, a.payee, a.vendorId);
     // A key already bound to a request gets that request back, whatever happened to the stored answer: a retry after
     // an error that came after the request was created must never create a second one (review R1-6b).
-    const bound = db.select().from(apiRequests).where(and(eq(apiRequests.keyName, key.name), eq(apiRequests.idemKey, idemKey))).get();
+    let bound = db.select().from(apiRequests).where(and(eq(apiRequests.keyName, key.name), eq(apiRequests.idemKey, idemKey))).get();
+    if (bound?.obligationId.startsWith(PENDING)) {
+      // The key was bound and then the process stopped before the request id was written back (review R2-S2). The
+      // request, if ingest got that far, carries the binding's id in its header.
+      const made = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `[Integration request ${bound.id}]%`)).get();
+      if (made) {
+        db.update(apiRequests).set({ obligationId: made.id }).where(eq(apiRequests.id, bound.id)).run();
+        bound = { ...bound, obligationId: made.id };
+      } else {
+        db.delete(apiRequests).where(eq(apiRequests.id, bound.id)).run();
+        bound = undefined;
+      }
+    }
     if (bound) {
       const was = db.select().from(obligations).where(eq(obligations.id, bound.obligationId)).get();
       if (!was || (was.vendorId ?? null) !== (payee?.id ?? null) || was.amountMinor !== a.amountMinor || was.currency !== a.currency || (was.sourceRef ?? null) !== (a.reference ?? null)) {
@@ -168,6 +183,9 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
     const claim = newId("apr");
     const head = `[Integration request ${claim}] Pay ${formatMoney(a.amountMinor, a.currency, { code: true })} to ${payee?.name ?? a.payee}${a.reference ? ` for ${a.reference}` : ""}.`;
     const rawInput = a.description ? `${head} The request as the system sent it: "${a.description.replace(/\s+/g, " ").replace(/"/g, "'")}"` : head;
+    // The key is bound before ingest writes anything, so no crash can leave a request its key does not lead back to.
+    // The binding points at the request once it exists; until then it is pending, and the request's header names it.
+    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: `${PENDING}${claim}`, reference: a.reference, idemKey, createdAt: now() }).run();
     let id: string;
     try {
       id = await ingestObligation(db, {
@@ -185,10 +203,10 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
       const orphan = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `[Integration request ${claim}]%`)).get();
       if (orphan) withdraw(db, orphan.id, actor, "creating the request failed");
       discardUploads();
+      db.delete(apiRequests).where(eq(apiRequests.id, claim)).run();
       throw new ApiError(422, "request_refused", `Checkrail could not create the request: ${clean(e instanceof Error ? e.message : "an error")}. Nothing was paid.`);
     }
-    // Bound to the key before anything else can fail, so a retry finds it.
-    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: id, reference: a.reference, idemKey, createdAt: now() }).run();
+    db.update(apiRequests).set({ obligationId: id }).where(eq(apiRequests.id, claim)).run();
     // The request in the books must be exactly what was sent.
     const ob = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
     if ((ob.vendorId ?? null) !== (payee?.id ?? null) || ob.amountMinor !== a.amountMinor || ob.currency !== a.currency || (ob.sourceRef ?? null) !== (a.reference ?? null)) {
@@ -262,7 +280,6 @@ export function describeRequest(db: Db, id: string) {
     settlement,
     created_at: ob.createdAt,
     updated_at: ob.updatedAt,
-    review_path: `/obligations/${ob.id}`,
   };
 }
 
@@ -278,5 +295,5 @@ export function listOwnRequests(db: Db, key: ApiKey, reference: string | null, l
   if (reference !== null && (reference.length < 1 || reference.length > 64)) throw new ApiError(422, "validation_failed", "reference must be 1 to 64 characters", [{ field: "reference", message: "must be 1 to 64 characters" }]);
   const rows = db.select({ obligationId: apiRequests.obligationId, reference: apiRequests.reference }).from(apiRequests).where(eq(apiRequests.keyName, key.name)).orderBy(desc(apiRequests.createdAt)).all();
   const want = reference?.trim().toUpperCase() ?? null;
-  return rows.filter((r) => want === null || (r.reference ?? "").toUpperCase() === want).slice(0, limit).map((r) => describeRequest(db, r.obligationId));
+  return rows.filter((r) => !r.obligationId.startsWith(PENDING) && (want === null || (r.reference ?? "").toUpperCase() === want)).slice(0, limit).map((r) => describeRequest(db, r.obligationId));
 }

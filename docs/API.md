@@ -26,7 +26,7 @@ If the setting is malformed, every API call is refused with 401 until it is fixe
 
 ### Trust: what `requests:attest` changes
 
-Without it, the evidence a key sends is its own say-so, like a record a clerk types in. Policy treats it that way: a person approves the payment unless the business's own records (a departure with a rate card, a job sheet or booking from its own systems) already support it.
+Without it, the evidence rows a key sends are its own say-so, like a record a clerk types in, and a document it attaches is read and checked like a clerk's upload. A person approves the payment unless the business's own records (a departure with a rate card, a job sheet or booking from its own systems) already support it. Neither its rows nor its documents can record a bill total that later payments under the same reference are held to: only the business's own records can, which from the API means a key with `requests:attest`.
 
 With it, the key is treated as a system of record, like an agent key with `attest`: what it attaches counts as the business's own records, so a request that matches them can be approved by policy and, on Autopilot, scheduled inside the owner's caps. Give it only to the system that is the record (the booking platform itself, the ERP that holds the purchase orders), never to a tool that relays what someone told it. Even then, the autonomy setting, the per-payment and daily caps, the cancel window and the re-check at release all still apply, and the key still cannot approve or send.
 
@@ -53,7 +53,7 @@ Every call sends the key as a bearer token. Bodies are JSON. Examples use placeh
               {"vendor_id": "ven_linh", "unit": "guest_night", "quantity": 24}
             ]}]}'
 
-Departures are matched by `external_id`: sending one again replaces its dates, guests and services. A departure already on file with the same code (typed in, or from a manifest import) is taken over the first time the feed sends it. Up to 200 departures a call; one invalid departure and nothing is saved. Units: `day`, `vehicle_day`, `guest_night`, `room_night`, `guest`, `trip`. Afterwards Checkrail checks again the requests waiting on the suppliers the call touched, as it does after a manifest import.
+Departures are matched by `external_id`: sending one again replaces its dates, guests and services. A departure an approver imported from a manifest or typed in is never taken over or changed by the feed: sending its code answers 409 `departure_conflict`, and an approver changes it in Checkrail. That is because, with the rate card, a departure sets what a job may cost. Up to 200 departures a call; one invalid departure and nothing is saved. Units: `day`, `vehicle_day`, `guest_night`, `room_night`, `guest`, `trip`. Afterwards Checkrail checks again the requests waiting on the suppliers the call touched, as it does after a manifest import.
 
 Read them back, optionally from a start date:
 
@@ -77,7 +77,7 @@ Read them back, optionally from a start date:
 
     "documents": [{"name": "invoice.pdf", "content_type": "application/pdf", "kind": "invoice", "data": "<base64>"}]
 
-A document is read the way a clerk's upload is; a supplier's own invoice still goes to a person. Fields the endpoint does not know (`approve`, `paypal_email`, anything else) are refused, not ignored.
+A document is read and checked against the request the way a clerk's upload is, and a supplier's own invoice still goes to a person. Unlike a clerk's upload, a document from a key never sets a bill total (see Trust above). Fields the endpoint does not know (`approve`, `paypal_email`, anything else) are refused, not ignored.
 
 The answer (201) is the request after the checks. `status` is one of `blocked`, `waiting_for_evidence`, `waiting_for_approval`, `scheduled` (Autopilot sends it at `releases_at` unless a person cancels), `approved`, `sending`, `paid`, `returned`, `cancelled`, `failed`, `disputed`. `verdict` is what the rules say (`pay`, `hold` or `block`), `reasons` says why in plain words and `rules_failed` gives the rule ids. Payout details are never included.
 

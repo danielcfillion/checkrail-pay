@@ -19,6 +19,8 @@ import { DEMO_BUSINESS_ID, seedDemo } from "@/lib/demo/seed";
 import { setAutonomy } from "@/lib/engine/autopilot";
 import { authenticateApiKey, configuredApiKeys } from "@/lib/api/keys";
 import { resetApiThrottles } from "@/lib/api/http";
+import { textPdf } from "@/lib/api/testPdf";
+import { departures as departuresTable } from "@/lib/db/schema";
 import { API_V1_PATH, middleware } from "@/middleware";
 
 const S = (n: string) => `api-test-secret-${n}-0123456789abcdef`; // test-only placeholders
@@ -293,11 +295,10 @@ describe("the booking feed", () => {
     expect(listed.every((d) => (d.start_date as string) >= "2026-10-01")).toBe(true);
   });
 
-  it("takes over a departure already on file by code, and refuses a code another external id holds", async () => {
-    // HG-4D-0927 comes from the demo's manifest.
-    const r = await postDepartures({ departures: [dep("bokun-0927", "HG-4D-0927", [phuongVan(4)], ["2026-09-27", "2026-09-30"])] });
-    expect(r.json.departures).toEqual([expect.objectContaining({ result: "updated" })]);
-    const clash = await postDepartures({ departures: [dep("bokun-other", "HG-4D-0927", [phuongVan(40)], ["2026-09-27", "2026-09-30"]), dep("bokun-new", "CB-3D-1099", [])] });
+  it("refuses a code another external id holds, and saves nothing from that call", async () => {
+    const r = await postDepartures({ departures: [dep("bokun-1098", "CB-3D-1098", [phuongVan(4)])] });
+    expect(r.json.departures).toEqual([expect.objectContaining({ result: "created" })]);
+    const clash = await postDepartures({ departures: [dep("bokun-other", "CB-3D-1098", [phuongVan(40)]), dep("bokun-new", "CB-3D-1099", [])] });
     expect(clash.status).toBe(409);
     expect(clash.json.error?.code).toBe("departure_conflict");
     // All or nothing: the other departure in the batch was not saved either.
@@ -459,6 +460,49 @@ describe("review fixes, round 1", () => {
     const other = await postRequest({ ...body, amount: "450" }, "r1-6-bound-0001");
     expect(other.status).toBe(422);
     expect(other.json.error?.code).toBe("idempotency_conflict");
+  });
+});
+
+describe("review fixes, round 2", () => {
+  it("M1: a non-attest key's own PDF sets no bill ceiling, so the same job is not scheduled twice", async () => {
+    const { bills } = await import("@/lib/db/schema");
+    await seedDemo(getDb());
+    setAutonomy(getDb(), DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 0 });
+    const pdf = textPdf(["Invoice INV-ROSA-7777", "Rosa Villanueva", "Guiding, November", "Total USD 5,000.00", "Deposit 50%"]);
+    const deposit = await postRequest({
+      payee: "Rosa Villanueva", amount: "100", currency: "USD", reference: "INV-ROSA-7777",
+      description: "50% deposit USD 100 for Rosa Villanueva on invoice INV-ROSA-7777",
+      documents: [{ name: "INV-ROSA-7777.pdf", content_type: "application/pdf", kind: "invoice", data: pdf.toString("base64") }],
+    }, "m1-deposit-0001");
+    expect(deposit.status).toBe(201);
+    // The scenario is real: the PDF was read and its row counts as a document, not the key's typing.
+    expect(getDb().select().from(evidence).where(eq(evidence.obligationId, deposit.json.id as string)).all().map((e) => [e.provenance, e.amountMinor])).toEqual([["document", 500_000]]);
+    expect(getDb().select().from(bills).all().filter((b) => b.reference === "INV-ROSA-7777")).toEqual([]);
+    const job = { payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-7777", description: "Rosa Villanueva, 2 days guiding at USD 95, INV-ROSA-7777.", evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-7777", amount: "190", reference: "INV-ROSA-7777", excerpt: "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00." }] };
+    await postRequest(job, "m1-job-000001", "l");
+    const second = await postRequest(job, "m1-job-000002", "l");
+    expect(["scheduled", "approved"]).not.toContain(second.json.status);
+  });
+
+  it("S1: the feed cannot take over or change a departure an approver imported", async () => {
+    // HG-4D-0927 comes from the demo's manifest (source csv).
+    const before = (await getDepartures()).json.departures as Array<{ code: string; services: unknown[] }>;
+    const r = await postDepartures({ departures: [dep("bokun-0927", "HG-4D-0927", [phuongVan(40)], ["2026-09-27", "2026-09-30"])] });
+    expect(r.status).toBe(409);
+    expect(r.json.error?.code).toBe("departure_conflict");
+    expect(r.json.error?.message).toMatch(/HG-4D-0927.*approver/);
+    const after = (await getDepartures()).json.departures as Array<{ code: string; services: unknown[] }>;
+    expect(after.find((d) => d.code === "HG-4D-0927")).toEqual(before.find((d) => d.code === "HG-4D-0927"));
+    // Nor one the feed made itself once an approver's import has replaced it.
+    await postDepartures({ departures: [dep("bokun-1200", "CB-3D-1200", [phuongVan(3)])] });
+    getDb().update(departuresTable).set({ source: "csv" }).where(eq(departuresTable.code, "CB-3D-1200")).run();
+    expect((await postDepartures({ departures: [dep("bokun-1200", "CB-3D-1200", [phuongVan(30)])] })).status).toBe(409);
+  });
+
+  it("answers carry no internal review path", async () => {
+    const r = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7501" });
+    expect(r.json).not.toHaveProperty("review_path");
+    expect(JSON.stringify(r.json)).not.toMatch(/\/obligations\//);
   });
 });
 

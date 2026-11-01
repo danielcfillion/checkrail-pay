@@ -11,7 +11,8 @@ import { ApiError, Problems, isObject, onlyFields } from "./http";
  * The booking feed: a booking system sends its departures (tour code, dates, guests, who serves it) and Checkrail keeps
  * them as the job records its rules already read, exactly as an approver's manifest import does (src/lib/engine/rates.ts).
  * Departures are matched by the booking system's own id (external_id), so sending one again updates it and replaces
- * its services. A batch is all or nothing: one bad departure and nothing is written.
+ * its services. A departure an approver imported or typed in is never taken over or changed by the feed. A batch is
+ * all or nothing: one bad departure and nothing is written.
  *
  * Like the manifest import, the requests waiting on the suppliers it touches are checked again afterwards: a request
  * typed before the departure arrived is judged against it now. Policy and the autonomy setting decide what that
@@ -103,13 +104,19 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
       let id: string | null = ref?.departureId ?? null;
       if (id && byCode && byCode.id !== id) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} already belongs to another departure on file. Nothing in this call was saved.`);
       if (!id && byCode) {
-        // A departure typed in or imported from a manifest before the feed was connected: the feed takes it over,
-        // unless another external id already claims it.
+        // A code already on file under no external id. Another external id claiming it is a conflict; one an approver
+        // imported or typed in is refused just below.
         const claimed = tx.select().from(apiDepartureRefs).where(eq(apiDepartureRefs.departureId, byCode.id)).get();
         if (claimed) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} is already on file under external_id ${claimed.externalId}. Nothing in this call was saved.`);
         id = byCode.id;
       }
-      const existed = Boolean(id && tx.select({ id: departures.id }).from(departures).where(eq(departures.id, id)).get());
+      const current = id ? tx.select().from(departures).where(eq(departures.id, id)).get() : undefined;
+      // A departure an approver imported or typed in is theirs: with the rate card it sets what a job may cost, which
+      // only an approver or the owner may change. The feed neither takes it over nor overwrites it (review R2-S1).
+      if (current && current.source !== "booking_system") {
+        throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: departure ${current.code} was imported or entered by an approver in Checkrail, so the feed cannot change it. An approver updates it there. Nothing in this call was saved.`);
+      }
+      const existed = Boolean(current);
       if (id && existed) {
         tx.update(departures).set({ code: d.code, startDate: d.startDate, endDate: d.endDate, guests: d.guests, source: "booking_system" }).where(eq(departures.id, id)).run();
         for (const o of tx.select({ vendorId: departureServices.vendorId }).from(departureServices).where(eq(departureServices.departureId, id)).all()) touched.add(o.vendorId);

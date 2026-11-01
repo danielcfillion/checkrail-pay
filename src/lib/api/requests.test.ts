@@ -1,16 +1,18 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 
 // Switches for the two failures these tests need: ingest itself failing, and reading the request back failing after
 // ingest succeeded. Everything else is the real orchestrator.
-const ctl = vi.hoisted(() => ({ failIngest: false, failPreview: 0 }));
+const ctl = vi.hoisted(() => ({ failIngest: false, failPreview: 0, onIngest: null as null | (() => void) }));
 vi.mock("../engine/orchestrator", async (orig) => {
   const real = await orig<typeof import("../engine/orchestrator")>();
   return {
     ...real,
     ingestObligation: async (...a: Parameters<typeof real.ingestObligation>) => {
       if (ctl.failIngest) throw new Error("ingest is down");
-      return real.ingestObligation(...a);
+      const id = await real.ingestObligation(...a);
+      ctl.onIngest?.();
+      return id;
     },
     previewPolicy: (...a: Parameters<typeof real.previewPolicy>) => {
       if (ctl.failPreview > 0) {
@@ -34,6 +36,7 @@ let db: Db;
 beforeEach(async () => {
   ctl.failIngest = false;
   ctl.failPreview = 0;
+  ctl.onIngest = null;
   db = openTestDb();
   await seedDemo(db, { history: false });
 });
@@ -60,5 +63,37 @@ describe("payment requests when something fails", () => {
     const retry = await createRequest(db, DEMO_BUSINESS_ID, erp, "r1-6-post-0001", body);
     expect(retry.id).toBe(db.select().from(apiRequests).get()!.obligationId);
     expect(db.select().from(obligations).all().length).toBe(count + 1);
+  });
+
+  it("S2: the key is bound before the request is committed, so a crash in between cannot free it", async () => {
+    const body = { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7403" };
+    let boundAtCommit = 0;
+    ctl.onIngest = () => (boundAtCommit = db.select().from(apiRequests).all().length);
+    await createRequest(db, DEMO_BUSINESS_ID, erp, "s2-bound-00001", body);
+    expect(boundAtCommit).toBe(1);
+  });
+
+  it("S2: a retry after a crash right after ingest finds the request, and makes no second one", async () => {
+    const body = { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7404" };
+    // The process dies the moment ingest returns. Record the database as it is then; after the call unwinds, put it
+    // back, since in a real crash none of the cleanup would have run.
+    type Snapshot = { request: typeof obligations.$inferSelect; bound: Array<typeof apiRequests.$inferSelect> };
+    let atCrash: Snapshot | null = null;
+    ctl.onIngest = () => {
+      const request = db.select().from(obligations).all().at(-1)!;
+      atCrash = { request, bound: db.select().from(apiRequests).all() };
+      throw new Error("process died");
+    };
+    await createRequest(db, DEMO_BUSINESS_ID, erp, "s2-crash-00001", body).catch(() => undefined);
+    ctl.onIngest = null;
+    const crash = atCrash as unknown as Snapshot;
+    db.update(obligations).set(crash.request).where(eq(obligations.id, crash.request.id)).run();
+    db.delete(apiRequests).run();
+    for (const b of crash.bound) db.insert(apiRequests).values(b).run();
+
+    const count = db.select().from(obligations).all().length;
+    const retry = await createRequest(db, DEMO_BUSINESS_ID, erp, "s2-crash-00001", body);
+    expect(retry.id).toBe(crash.request.id);
+    expect(db.select().from(obligations).all().length).toBe(count);
   });
 });

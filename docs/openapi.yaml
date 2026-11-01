@@ -42,8 +42,8 @@ paths:
       summary: Send departures (upsert by external_id)
       description: >-
         Creates or updates departures by the booking system's own id. Sending a departure again replaces its dates,
-        guests and services. A departure already on file with the same code (typed in, or imported from a manifest)
-        is taken over by the first external_id that sends it. A call is all or nothing: one invalid departure and
+        guests and services. A departure an approver imported from a manifest or typed in is never taken over or
+        changed by the feed (409 departure_conflict); an approver changes it in Checkrail. A call is all or nothing: one invalid departure and
         nothing is saved. Afterwards the requests waiting on the suppliers it touched are checked again, as after a
         manifest import; policy decides what that means. With each supplier's rate card, a departure sets what a job
         should cost, so give departures:write only to the booking system itself.
@@ -131,8 +131,10 @@ paths:
 
         What the key attaches (evidence rows) is its own say-so, as a clerk's typed record is, so a person approves
         unless the business's own records already support the payment. With the requests:attest scope it counts as
-        the business's own records instead, as a booking platform's would. Documents attached as files are read the
-        way a clerk's upload is; a supplier's own invoice still goes to a person.
+        the business's own records instead, as a booking platform's would. Documents attached as files are read and
+        checked against the request the way a clerk's upload is; a supplier's own invoice still goes to a person. Only
+        the business's own records (an attest key's evidence rows) can record a bill total that later payments under
+        the same reference are held to; a key's typed rows and its documents never can.
 
 
         An Idempotency-Key header is required: a retry with the same key returns the first answer and never creates
@@ -741,9 +743,6 @@ components:
         updated_at:
           type: string
           format: date-time
-        review_path:
-          type: string
-          description: Where a person reviews it in Checkrail.
     Vendor:
       type: object
       required: [id, name, role, country, status, verified]
