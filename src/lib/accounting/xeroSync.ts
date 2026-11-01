@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, bills, businesses, obligations, xeroConnections, xeroRecords } from "../db/schema";
 import { config } from "../config";
@@ -11,7 +11,7 @@ import { xeroBillRows, type XeroBillGroup } from "./xeroBills";
 import { createXeroClient, XeroApiError, type XeroClient, type XeroRequest } from "./xeroClient";
 import { getXeroConnection, type XeroConnectionRow } from "./xeroAuth";
 import { parseChart, refreshXeroChart, type XeroChart } from "./xeroSettings";
-import { approvedAt, splitGroups } from "./xeroScope";
+import { billApprovedAt, splitGroups } from "./xeroScope";
 
 /**
  * The live push to Xero. It runs beside the payment path, never in it:
@@ -43,13 +43,16 @@ export interface XeroSyncResult {
   rateLimited: boolean;
 }
 
+/** The most settled payments one pass reads; the rest are read on the next pass. */
+const MAX_SETTLEMENTS_PER_PASS = 100;
 /** The most calls one pass makes; the rest wait for the next pass. Well under Xero's 60 a minute. */
 const MAX_CALLS_PER_PASS = 40;
 /** A pass holds the lease this long and renews it before every call; a crashed process loses it when it runs out. */
 export const LEASE_MS = 90_000;
 
 type RecordRow = typeof xeroRecords.$inferSelect;
-type Kind = "contact" | "bill" | "credit_note" | "payment" | "fee";
+/** "settlement" marks one accounting record as finished (payment and fee in Xero, or left to the files), so it is not read again. */
+type Kind = "contact" | "bill" | "credit_note" | "payment" | "fee" | "settlement";
 
 /** This pass has used its share of calls, or another process took over: stop quietly, the next pass carries on. */
 class PassPaused extends Error {}
@@ -114,7 +117,8 @@ export function resetXeroSyncState(db: Db, businessId: string): void {
   db.delete(xeroRecords).where(eq(xeroRecords.businessId, businessId)).run();
   const ts = new Date().toISOString();
   db.update(xeroConnections)
-    .set({ syncFrom: ts, lastPushAt: null, lastError: null, blockedUntil: null, leaseOwner: null, leaseUntil: null, rateWindowStart: null, rateWindowCalls: 0, chartAttempts: 0, chartRetryAt: null, updatedAt: ts })
+    // The lease is left alone: a pass running now finishes (or expires) on its own.
+    .set({ syncFrom: ts, lastPushAt: null, lastError: null, blockedUntil: null, rateWindowStart: null, rateWindowCalls: 0, chartAttempts: 0, chartRetryAt: null, updatedAt: ts })
     .where(eq(xeroConnections.businessId, businessId))
     .run();
 }
@@ -124,37 +128,48 @@ interface SettlementItem {
   payload: AccountingPayload;
 }
 
-/** Settled payments approved after the connection whose payment or fee is not yet in Xero. */
+/**
+ * Settled payments not yet finished, oldest first and at most MAX_SETTLEMENTS_PER_PASS: a record is finished once its
+ * payment and fee are in Xero, or once it is found to belong to the files, and is then never read again. A payment goes
+ * live only when its bill does: the bill's first approval (any part) must be after the connection, so a bill split
+ * across the connect time stays wholly in the files.
+ */
 function pendingSettlements(db: Db, conn: XeroConnectionRow): SettlementItem[] {
   const rows = db
     .select({ s: accountingSyncs })
     .from(accountingSyncs)
     .innerJoin(obligations, eq(obligations.id, accountingSyncs.obligationId))
-    .where(and(eq(obligations.businessId, conn.businessId), gte(accountingSyncs.createdAt, conn.syncFrom)))
+    .where(
+      and(
+        eq(obligations.businessId, conn.businessId),
+        gte(accountingSyncs.createdAt, conn.syncFrom),
+        sql`NOT EXISTS (SELECT 1 FROM xero_records r WHERE r.accounting_sync_id = ${accountingSyncs.id} AND r.kind = 'settlement' AND r.business_id = ${conn.businessId} AND r.tenant_id = ${conn.tenantId})`,
+      ),
+    )
+    .orderBy(asc(accountingSyncs.createdAt))
+    .limit(MAX_SETTLEMENTS_PER_PASS)
     .all()
     .map((r) => r.s);
   if (!rows.length) return [];
-  const when = approvedAt(db, rows.map((r) => r.obligationId));
-  const done = new Set(
-    db
-      .select({ kind: xeroRecords.kind, key: xeroRecords.localKey, status: xeroRecords.status })
-      .from(xeroRecords)
-      .where(and(eq(xeroRecords.businessId, conn.businessId), eq(xeroRecords.tenantId, conn.tenantId), inArray(xeroRecords.kind, ["payment", "fee"])))
-      .all()
-      .filter((r) => r.status === "pushed" || r.status === "skipped")
-      .map((r) => `${r.kind}:${r.key}`),
-  );
+  const when = billApprovedAt(db, rows.map((r) => r.obligationId));
   const out: SettlementItem[] = [];
   for (const sync of rows) {
-    if ((when.get(sync.obligationId) ?? "") < conn.syncFrom) continue;
     const payload = JSON.parse(sync.payloadJson ?? "{}") as AccountingPayload;
-    if (!payload.reference || !payload.vendorName) continue;
-    const key = paymentKey(payload);
-    const needsFee = hundredths(payload.feeAmount) > 0 && payload.rail !== "stellar";
-    if (done.has(`payment:${key}`) && (!needsFee || done.has(`fee:${key}`))) continue;
+    if ((when.get(sync.obligationId) ?? "") < conn.syncFrom || !payload.reference || !payload.vendorName) {
+      finishSettlement(db, conn, sync, "skipped", "Approved before Xero was connected: it stays in the bills file and the settlement CSV.");
+      continue;
+    }
     out.push({ sync, payload });
   }
   return out;
+}
+
+function finishSettlement(db: Db, conn: XeroConnectionRow, sync: typeof accountingSyncs.$inferSelect, status: "pushed" | "skipped", note: string | null): void {
+  const ts = new Date().toISOString();
+  db.insert(xeroRecords)
+    .values({ id: newId("xr"), businessId: conn.businessId, tenantId: conn.tenantId, kind: "settlement", localKey: sync.id, label: `Settlement ${sync.id}`, obligationId: sync.obligationId, accountingSyncId: sync.id, status, error: note, pushedAt: status === "pushed" ? ts : null, createdAt: ts, updatedAt: ts })
+    .onConflictDoNothing()
+    .run();
 }
 
 async function pass(db: Db, businessId: string, owner: string, force: boolean, now: () => number): Promise<XeroSyncResult> {
@@ -183,7 +198,8 @@ async function pass(db: Db, businessId: string, owner: string, force: boolean, n
       // The chart of accounts is needed to post anything. A failure here waits and backs off like any other.
       if (!force && conn.chartRetryAt && Date.parse(conn.chartRetryAt) > now()) return { ...result, skipped: "chart_wait", errors: [conn.lastError ?? "Waiting to read the chart of accounts again."] };
       try {
-        await refreshXeroChart(db, businessId);
+        // Through this pass's client: the same lease renewal and call budget as every other call.
+        await refreshXeroChart(db, businessId, client);
         db.update(xeroConnections).set({ chartAttempts: 0, chartRetryAt: null }).where(eq(xeroConnections.businessId, businessId)).run();
       } catch (e) {
         const attempts = conn.chartAttempts + 1;
@@ -366,8 +382,9 @@ function tracking(ctx: Ctx, name: unknown, option: unknown): Array<{ Name: strin
 async function findContact(ctx: Ctx, name: string): Promise<string | null> {
   const known = findRecord(ctx, "contact", name.trim().toLowerCase());
   if (known?.status === "pushed" && known.xeroId) return known.xeroId;
-  const res = await ctx.client.request<{ Contacts: Array<{ ContactID: string; Name: string }> }>({ method: "GET", path: "/Contacts", query: { where: `Name=="${q(name)}"` } });
-  return res.Contacts?.find((c) => c.Name.trim().toLowerCase() === name.trim().toLowerCase())?.ContactID ?? null;
+  const res = await ctx.client.request<{ Contacts: Array<{ ContactID: string; Name: string; ContactStatus?: string }> }>({ method: "GET", path: "/Contacts", query: { where: `Name=="${q(name)}"` } });
+  // An archived contact cannot take a new bill; it is passed over and a live one used or created.
+  return res.Contacts?.find((c) => c.ContactStatus !== "ARCHIVED" && c.Name.trim().toLowerCase() === name.trim().toLowerCase())?.ContactID ?? null;
 }
 
 /** Find a contact by name, else create it. One record per name, so a vendor is looked up once. */
@@ -425,8 +442,11 @@ async function pushBillGroup(ctx: Ctx, g: XeroBillGroup): Promise<void> {
       const existing = kind === "credit_note" ? await findCreditNote(ctx, number, contact) : await findBill(ctx, number, contact);
       if (existing) return existing;
       const terms = taxTerms(ctx);
+      const withholdingCode = process.env.XERO_WITHHOLDING_ACCOUNT || "825";
       const lines = g.rows.map((row) => {
         const amount = Number(row["*UnitAmount"]);
+        // Tax kept back for the tax office is not a purchase: never a tax rate on that line.
+        const isWithholding = kind === "bill" && amount < 0 && String(row["*AccountCode"]) === withholdingCode;
         const trk = tracking(ctx, row.TrackingName1, row.TrackingOption1);
         return {
           Description: String(row.Description ?? number),
@@ -434,7 +454,7 @@ async function pushBillGroup(ctx: Ctx, g: XeroBillGroup): Promise<void> {
           // A credit note is entered positive in the API; the file carries it negative.
           UnitAmount: kind === "credit_note" ? Math.abs(amount) : amount,
           AccountCode: lineAccount(ctx, String(row["*AccountCode"])),
-          ...(terms.taxType ? { TaxType: terms.taxType } : {}),
+          ...(terms.taxType ? { TaxType: isWithholding ? exemptTaxType(ctx) : terms.taxType } : {}),
           ...(trk ? { Tracking: trk } : {}),
         };
       });
@@ -506,14 +526,15 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
       checkCurrency(ctx, p.grossCurrency);
       const bank = bankFor(ctx, p.rail, p.grossCurrency);
       const invoiceId = await billForPayment(ctx, p);
-      // Always look at the bill's payments first. Ours (same reference) is used. Otherwise, if Xero holds more payments
-      // of this amount on this bill than Checkrail has sent, one of them is this payment (sent before a demo reset, or
-      // entered by hand): it is used, not paid twice.
-      const inv = await ctx.client.request<{ Invoices: Array<{ Payments?: Array<{ PaymentID: string; Amount: number; Reference?: string }> }> }>({ method: "GET", path: `/Invoices/${encodeURIComponent(invoiceId)}` });
-      const payments = inv.Invoices?.[0]?.Payments ?? [];
+      // First our own payment, by its reference (rail and provider transaction id).
       const reference = toXeroPayment(p, bank).Reference;
-      const mine = payments.find((x) => x.Reference === reference);
+      const byRef = await ctx.client.request<{ Payments: Array<{ PaymentID: string; Status?: string; Reference?: string; Invoice?: { InvoiceID?: string } }> }>({ method: "GET", path: "/Payments", query: { where: `Reference=="${q(reference)}"` } });
+      const mine = (byRef.Payments ?? []).find((x) => x.Status !== "DELETED" && x.Reference === reference && (!x.Invoice?.InvoiceID || x.Invoice.InvoiceID === invoiceId));
       if (mine) return mine.PaymentID;
+      // Last resort: if Xero holds more payments of this amount on this bill than Checkrail has sent, one of them is this
+      // payment (sent before a demo reset, or entered by hand): it is used, not paid twice, and its fee is not booked.
+      const inv = await ctx.client.request<{ Invoices: Array<{ Payments?: Array<{ PaymentID: string; Amount: number }> }> }>({ method: "GET", path: `/Invoices/${encodeURIComponent(invoiceId)}` });
+      const payments = inv.Invoices?.[0]?.Payments ?? [];
       const ours = ctx.db
         .select({ xeroId: xeroRecords.xeroId })
         .from(xeroRecords)
@@ -535,7 +556,7 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
     if (adoptedByAmount && needsFee) {
       // The payment was already in Xero, so its fee is taken to be there too; it is not booked a second time.
       const fee = recordFor(ctx, "fee", key, feeLabel, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: key });
-      ctx.db.update(xeroRecords).set({ status: "skipped", error: "The payment was already in Xero, so its fee was not sent again.", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, fee.id)).run();
+      ctx.db.update(xeroRecords).set({ status: "skipped", error: "Skipped fee: a payment of this amount was already on the bill in Xero, so it was used and its fee was not sent again.", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, fee.id)).run();
     }
   }
 
@@ -575,6 +596,13 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
   const paymentId = findRecord(ctx, "payment", key)?.xeroId;
   const ts = new Date(ctx.now()).toISOString();
   ctx.db.update(accountingSyncs).set({ status: "synced", externalRef: `xero:${paymentId}`, updatedAt: ts }).where(and(eq(accountingSyncs.id, sync.id), eq(accountingSyncs.status, "pending"))).run();
+  finishSettlement(ctx.db, ctx.conn, sync, "pushed", null);
   audit(ctx.db, { obligationId: sync.obligationId, actor: "system", action: "accounting.xero_payment_pushed", detail: { reference: p.reference, fee: needsFee } });
+}
+
+/** The organisation's no-tax rate, for lines that carry no tax whatever rate the bill uses. */
+function exemptTaxType(ctx: Ctx): string {
+  const rates = ctx.chart?.taxRates ?? [];
+  return (rates.find((t) => t.type === "NONE") ?? rates.find((t) => /exempt|no tax|no vat|no gst/i.test(t.name)))?.type ?? "NONE";
 }
 

@@ -3,8 +3,8 @@ import type { Db } from "../db";
 import { xeroConnections, xeroRecords } from "../db/schema";
 import { config } from "../config";
 import { audit } from "../domain/stateMachine";
-import { createXeroClient, XeroApiError } from "./xeroClient";
-import { getXeroConnection, xeroConfigured, xeroRedirectUri, type XeroConnectionRow } from "./xeroAuth";
+import { createXeroClient, XeroApiError, type XeroClient } from "./xeroClient";
+import { getXeroConnection, xeroConfigured, xeroDataKeyMissing, xeroRedirectUri, type XeroConnectionRow } from "./xeroAuth";
 import { xeroBillRows } from "./xeroBills";
 import { splitGroups } from "./xeroScope";
 
@@ -48,10 +48,10 @@ interface RawAccount {
 }
 
 /** Read the chart of accounts, tax rates, currencies and tracking categories (five calls), and fill any unset mapping with a sensible default. */
-export async function refreshXeroChart(db: Db, businessId: string): Promise<XeroChart> {
+export async function refreshXeroChart(db: Db, businessId: string, via?: XeroClient): Promise<XeroChart> {
   const conn = getXeroConnection(db, businessId);
   if (!conn) throw new XeroApiError("Xero is not connected.", "auth");
-  const client = createXeroClient(db, businessId, conn.tenantId);
+  const client = via ?? createXeroClient(db, businessId, conn.tenantId);
   const acc = await client.request<{ Accounts: RawAccount[] }>({ method: "GET", path: "/Accounts" });
   const tax = await client.request<{ TaxRates: Array<{ TaxType: string; Name: string; Status?: string; CanApplyToExpenses?: boolean }> }>({ method: "GET", path: "/TaxRates" });
   const cur = await client.request<{ Currencies: Array<{ Code: string }> }>({ method: "GET", path: "/Currencies" });
@@ -144,6 +144,8 @@ export function saveXeroMapping(db: Db, businessId: string, actor: string, input
 /** What the Xero card shows. Everything here is safe for the browser: no token, no secret, no tenant credential. */
 export interface XeroCardView {
   configured: boolean;
+  /** No real CHECKRAIL_DATA_KEY: Xero tokens cannot be stored, so Connect is off. */
+  dataKeyMissing: boolean;
   destination: "csv" | "xero";
   redirectUri: string;
   connected: boolean;
@@ -163,6 +165,8 @@ export interface XeroCardView {
   failures: Array<{ id: string; label: string; error: string; attempts: number; nextAttemptAt: string | null }>;
   /** Bills approved before Xero was connected: they stay in the bills file and the settlement CSV. */
   earlierBills: number;
+  /** Fees not sent because their payment was already on the bill in Xero (used, not paid twice). */
+  skippedFees: number;
 }
 
 export function xeroCardView(db: Db, businessId: string): XeroCardView {
@@ -176,6 +180,7 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
     : [];
   return {
     configured: xeroConfigured(),
+    dataKeyMissing: xeroDataKeyMissing(),
     destination: config.accounting.destination,
     redirectUri: xeroRedirectUri(),
     connected: Boolean(conn),
@@ -200,6 +205,7 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
     pushed: counts.filter((c) => c.status === "pushed").length,
     waiting: counts.filter((c) => c.status === "pending").length,
     failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.error ?? "Not sent", attempts: f.attempts, nextAttemptAt: f.nextAttemptAt })),
+    skippedFees: conn ? db.select({ id: xeroRecords.id }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), eq(xeroRecords.kind, "fee"), eq(xeroRecords.status, "skipped"))).all().length : 0,
     earlierBills: conn ? splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true }).groups, conn.syncFrom).earlier.length : 0,
   };
 }

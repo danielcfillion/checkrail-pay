@@ -14,6 +14,7 @@ const OUTCOME: Record<string, { ok: boolean; text: string }> = {
   invalid_state: { ok: false, text: "That Xero sign-in could not be matched to you. Press Connect to Xero again." },
   failed: { ok: false, text: "Xero did not finish the connection. Try again, and check the client id, secret and redirect URI." },
   not_configured: { ok: false, text: "Xero is not set up on this server yet." },
+  no_data_key: { ok: false, text: "Set CHECKRAIL_DATA_KEY on the server before connecting Xero." },
 };
 
 type Result = { ok: boolean; message: string };
@@ -76,9 +77,15 @@ export function XeroConnectionControls({ view, owner, mayPush }: { view: XeroCar
       {!view.connected || view.needsReconnect ? (
         owner ? (
           <div className="flex flex-wrap items-center gap-3">
-            <a href="/api/xero/connect" className="btn btn-primary">
-              {view.needsReconnect ? "Connect to Xero again" : "Connect to Xero"}
-            </a>
+            {view.dataKeyMissing ? (
+              <button type="button" className="btn btn-primary" disabled>
+                Connect to Xero
+              </button>
+            ) : (
+              <a href="/api/xero/connect" className="btn btn-primary">
+                {view.needsReconnect ? "Connect to Xero again" : "Connect to Xero"}
+              </a>
+            )}
             <span className="text-sm text-ink-soft">You sign in at Xero and pick the organisation. Checkrail never sees your Xero password.</span>
           </div>
         ) : (

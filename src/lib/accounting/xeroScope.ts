@@ -26,6 +26,28 @@ export function approvedAt(db: Db, obligationIds: string[]): Map<string, string>
   return out;
 }
 
+/**
+ * For each obligation, when its bill was first approved: the earliest approval of any part of the same bill, or the
+ * obligation's own approval when it has no bill. A payment goes live only when its bill did.
+ */
+export function billApprovedAt(db: Db, obligationIds: string[]): Map<string, string> {
+  const own = db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(inArray(obligations.id, obligationIds.length ? obligationIds : [""])).all();
+  const billIds = [...new Set(own.map((o) => o.billId).filter((b): b is string => Boolean(b)))];
+  const siblings = billIds.length ? db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(inArray(obligations.billId, billIds)).all() : [];
+  const when = approvedAt(db, [...new Set([...obligationIds, ...siblings.map((s) => s.id)])]);
+  const firstOfBill = new Map<string, string>();
+  for (const s of siblings) {
+    const at = when.get(s.id);
+    if (at && (!firstOfBill.has(s.billId!) || at < firstOfBill.get(s.billId!)!)) firstOfBill.set(s.billId!, at);
+  }
+  const out = new Map<string, string>();
+  for (const o of own) {
+    const at = o.billId ? firstOfBill.get(o.billId) : when.get(o.id);
+    if (at) out.set(o.id, at);
+  }
+  return out;
+}
+
 /** A bill goes to Xero live when its first part was approved after the connection; a credit note when it was recorded after it. */
 export function splitGroups(db: Db, groups: XeroBillGroup[], syncFrom: string): { live: XeroBillGroup[]; earlier: XeroBillGroup[] } {
   const when = approvedAt(db, groups.flatMap((g) => g.obligationIds));

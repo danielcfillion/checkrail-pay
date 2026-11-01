@@ -46,12 +46,18 @@ export async function XeroConnection() {
                 <span className="font-medium">{v.tenantName ?? "Your Xero organisation"}</span>
                 <span className="text-ink-soft">
                   {" "}
-                  connected <RelativeTime iso={v.connectedAt} />. Last push: <RelativeTime iso={v.lastPushAt} />. {v.pushed} sent, {v.failures.length ? `${v.failures.length} could not be sent` : "nothing failed"}.
+                  connected <RelativeTime iso={v.connectedAt} />. Last push: <RelativeTime iso={v.lastPushAt} />. {v.pushed} sent, {v.failures.length ? `${v.failures.length} could not be sent` : "nothing failed"}
+                  {v.skippedFees ? `, ${v.skippedFees} skipped ${v.skippedFees === 1 ? "fee" : "fees"} (the payment was already on the bill in Xero, so its fee was not booked again)` : ""}.
                 </span>
               </p>
             ) : (
               <p className="mb-3 max-w-2xl text-ink-soft">Connect your Xero organisation and Checkrail sends each approved bill to Xero, then its payment and fee when the payment settles. Nothing about a payment waits for Xero.</p>
             )}
+            {v.dataKeyMissing && !v.connected ? (
+              <p className="mb-3 rounded border border-attention bg-attention-soft px-3 py-2 text-sm text-ink" role="status">
+                Set CHECKRAIL_DATA_KEY on the server first (generate one with: openssl rand -base64 32) and restart. Xero&apos;s sign-in tokens are stored encrypted with it, and the built-in development key is not used for them.
+              </p>
+            ) : null}
             {v.connected && v.destination !== "xero" ? (
               <p className="mb-3 rounded border border-attention bg-attention-soft px-3 py-2 text-sm text-ink" role="status">
                 ACCOUNTING_DESTINATION is csv, so nothing is sent yet. Set it to xero on the server and restart.
@@ -72,5 +78,22 @@ export async function XeroConnection() {
         )}
       </Panel>
     </div>
+  );
+}
+
+/**
+ * One line for the Accounting page: what went to Xero, what could not, and fees skipped because their payment was
+ * already on the bill in Xero. Nothing when Xero is not connected.
+ */
+export async function XeroPushSummary() {
+  const biz = getBusiness();
+  if (!biz) return null;
+  const v = xeroCardView(getDb(), biz.id);
+  if (!v.connected) return null;
+  return (
+    <p className="mb-5 max-w-3xl text-sm text-ink-soft">
+      Xero ({v.tenantName ?? "connected"}): {v.pushed} sent, {v.failures.length} could not be sent, {v.skippedFees} skipped {v.skippedFees === 1 ? "fee" : "fees"}
+      {v.earlierBills ? `, ${v.earlierBills} earlier ${v.earlierBills === 1 ? "bill stays" : "bills stay"} in the files` : ""}. Details on Settings, Xero.
+    </p>
   );
 }

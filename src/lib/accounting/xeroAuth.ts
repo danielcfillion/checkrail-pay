@@ -3,7 +3,7 @@ import { and, eq, lt } from "drizzle-orm";
 import type { Db } from "../db";
 import { xeroConnections, xeroOauthStates } from "../db/schema";
 import { config } from "../config";
-import { decryptField, encryptField } from "../crypto/dataKey";
+import { decryptField, encryptField, usingDevKey } from "../crypto/dataKey";
 import { audit } from "../domain/stateMachine";
 
 /**
@@ -169,6 +169,7 @@ export function pickTenant(tenants: XeroTenant[], authEventId: string | null): X
 
 /** Finish the callback: exchange the code, find the organisation, store the tokens encrypted. Returns the tenant name. */
 export async function completeXeroConnect(db: Db, opts: { businessId: string; actor: string; code: string; nowMs?: number }): Promise<{ tenantName: string | null }> {
+  if (xeroDataKeyMissing()) throw new XeroAuthError("Set CHECKRAIL_DATA_KEY before connecting Xero: its tokens are stored encrypted with it.");
   const tok = await exchangeXeroCode(opts.code);
   if (!tok.refresh_token) throw new XeroAuthError("Xero did not return a refresh token. The app must ask for offline_access.");
   const tenant = pickTenant(await fetchXeroConnections(tok.access_token), authEventIdOf(tok.access_token));
@@ -218,8 +219,18 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
 
 export type XeroConnectionRow = typeof xeroConnections.$inferSelect;
 
+/** The live connection (connected, or needing a new sign-in). A disconnected row only remembers where the push had got to. */
 export function getXeroConnection(db: Db, businessId: string): XeroConnectionRow | null {
-  return db.select().from(xeroConnections).where(eq(xeroConnections.businessId, businessId)).get() ?? null;
+  const row = db.select().from(xeroConnections).where(eq(xeroConnections.businessId, businessId)).get();
+  return row && row.status !== "disconnected" ? row : null;
+}
+
+/**
+ * Xero tokens are stored only under a real CHECKRAIL_DATA_KEY, demo personas or not: the public development key that
+ * protects demo bank numbers is not good enough for a live sign-in to someone's books.
+ */
+export function xeroDataKeyMissing(): boolean {
+  return usingDevKey();
 }
 
 /** One refresh at a time per business in this process; the stored token is also compared and swapped, for other processes. */
@@ -309,7 +320,12 @@ export async function disconnectXero(db: Db, businessId: string, actor: string):
       remote = "failed";
     }
   }
-  db.delete(xeroConnections).where(eq(xeroConnections.businessId, businessId)).run();
+  // The tokens and the sign-in go. What stays is where the push had got to (the organisation, its starting point and
+  // account mapping, and the records of what was sent), so reconnecting the same organisation carries on from there.
+  db.update(xeroConnections)
+    .set({ status: "disconnected", accessTokenEnc: "", refreshTokenEnc: "", accessExpiresAt: new Date(0).toISOString(), connectionId: null, leaseOwner: null, leaseUntil: null, blockedUntil: null, lastError: null, updatedAt: new Date().toISOString() })
+    .where(eq(xeroConnections.businessId, businessId))
+    .run();
   db.delete(xeroOauthStates).where(eq(xeroOauthStates.businessId, businessId)).run();
   audit(db, { obligationId: null, actor, action: "xero.disconnected", detail: { tenant: conn.tenantName ?? conn.tenantId, remote } });
   return { remote };

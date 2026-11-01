@@ -1,6 +1,3 @@
-import { eq } from "drizzle-orm";
-import type { Db } from "../db";
-import { accountingSyncs } from "../db/schema";
 import type { AccountingPayload } from "./record";
 
 /**
@@ -72,22 +69,4 @@ export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: stri
     Reference: xeroFeeReference(r),
     LineItems: [{ Description: `Payment fee for ${r.reference}`, Quantity: 1, UnitAmount: Number(r.feeAmount), AccountCode: feeAccountCode }],
   };
-}
-
-/** The adapter for one connected organisation: sends the settled record whose obligation this is (bill first if needed, then payment and fee). */
-export class XeroAdapter implements AccountingAdapter {
-  readonly destination = "xero" as const;
-  constructor(
-    private readonly db: Db,
-    private readonly businessId: string,
-  ) {}
-
-  async push(r: AccountingPayload): Promise<{ externalRef: string }> {
-    // Loaded on use: xeroSync imports the mapping above, and a module cycle at load time helps nobody.
-    const { runXeroSync } = await import("./xeroSync");
-    const res = await runXeroSync(this.db, { businessId: this.businessId, force: true });
-    const sync = this.db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, r.obligationId)).get();
-    if (sync?.status === "synced" && sync.externalRef) return { externalRef: sync.externalRef };
-    throw new Error(res.errors[0] ?? "Not sent to Xero yet");
-  }
 }

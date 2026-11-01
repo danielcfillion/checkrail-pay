@@ -15,7 +15,7 @@ Nothing about a payment waits for Xero. The push runs beside the payment path, o
         ACCOUNTING_DESTINATION=xero
         XERO_CLIENT_ID=...
         XERO_CLIENT_SECRET=...
-        CHECKRAIL_DATA_KEY=<32 bytes, base64>   # encrypts the Xero tokens at rest; required on any production server
+        CHECKRAIL_DATA_KEY=<32 bytes, base64>   # encrypts the Xero tokens at rest; required for Xero everywhere, demo included
 
    Restart the server.
 4. **Scopes.** Nothing to set in the Xero app: Checkrail asks for them when you connect. Xero moved web apps to granular scopes in March 2026, so the default request is
@@ -36,15 +36,15 @@ Nothing about a payment waits for Xero. The push runs beside the payment path, o
 
 ## What goes to Xero, and when
 
-Only what is approved after you connect. Bills approved before that stay in the bills file and the settlement CSV, with their payments; the Xero card says how many. Reconnecting the same organisation keeps that starting point.
+Only what is approved after you first connect. A bill whose first part was approved before that stays in the bills file and the settlement CSV, with all its payments (a deposit before and a balance after included); the Xero card says how many. Disconnecting and reconnecting the same organisation keeps that starting point and the record of what was sent, so payments for bills already sent still go.
 
 | Checkrail | Xero | When |
 | --- | --- | --- |
 | Vendor | Contact, found by exact name, else created | with its first bill |
-| Bill (one per invoice; a deposit and its balance are one bill, with the tax withheld on every part) | Bill (ACCPAY, Authorised), with a Departure tracking option when Xero has that option | when the request is approved |
+| Bill (one per invoice; a deposit and its balance are one bill, with the tax withheld on the whole invoice, worked out from its total when only the deposit exists yet; the withholding line never carries a tax rate) | Bill (ACCPAY, Authorised), with a Departure tracking option when Xero has that option | when the request is approved |
 | Credit note | Credit note (ACCPAYCREDIT) | when it is recorded |
 | Settled payment | Payment against that vendor's bill, from the rail's bank account, for the amount sent | when the payment settles |
-| Fee (PayPal, Wise, bank file) | Spend money on the same bank account, to the fee account, referenced `fee <invoice> <payment id>` | with the payment |
+| Fee (PayPal, Wise, bank file) | Spend money on the same bank account, to the fee account, referenced `fee <invoice> <obligation id>` | with the payment |
 
 A Stellar fee is taken out of the amount in transit, so no separate fee is booked.
 
@@ -52,7 +52,7 @@ A Stellar fee is taken out of the amount in transit, so no separate fee is booke
 
 - Each bill, payment and fee sent is recorded here with Xero's id, keyed on the contact and invoice number (bills) or on the payment and the provider's transaction id (payments and fees). A recorded one is not sent again.
 - Before a bill is created, Xero is searched for a bill with the same number for the same contact; if there is one, it is used. A bill for a different contact with the same number is never used.
-- Before a payment is created, the bill's payments in Xero are read: one with the same reference is used; failing that, if Xero holds more payments of that amount on the bill than Checkrail has recorded, one of them is taken as this payment (and its fee is not booked again). This is what keeps a demo reset from paying the same demo bill twice.
+- Before a payment is created, Xero's payments are searched for its reference (the rail and the provider's transaction id); one found is used. As a last resort, if the bill in Xero holds more payments of that amount than Checkrail has recorded, one of them is taken as this payment and its fee is not booked again; the card and the Accounting page count these as skipped fees. This is what keeps a demo reset from paying the same demo bill twice.
 - Each create call carries an Idempotency-Key, and the record is marked "sending" with that key in the database before the call. If the answer is lost, or the server stops before saving it, the next pass looks the item up in Xero before creating it. Xero keeps an idempotency key for only six minutes, so this look-up is what covers a longer gap.
 
 These cover the cases above. Something deleted or edited by hand in Xero is not detected.
@@ -65,4 +65,4 @@ Xero allows 60 calls a minute per organisation (1,000 a day on a new app's start
 
 ## Disconnecting
 
-Disconnect Xero on the card removes the connection at Xero, revokes the refresh token and deletes the tokens here. What is already in Xero stays there. If Xero cannot be reached, or the sign-in had already expired, the tokens are still deleted and the card tells you to remove Checkrail Pay under Connected apps in Xero as well.
+Disconnect Xero on the card removes the connection at Xero, revokes the refresh token and deletes the tokens here. What is already in Xero stays there, and Checkrail keeps its record of what it sent. If Xero cannot be reached, or the sign-in had already expired, the tokens are still deleted and the card tells you to remove Checkrail Pay under Connected apps in Xero as well.

@@ -7,6 +7,8 @@ import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { audit } from "../domain/stateMachine";
 import { now } from "../domain/ids";
+import { DEFAULT_POLICY, type ApprovalPolicy } from "../domain/types";
+import { withholdingFor } from "../engine/taxes";
 
 /**
  * Bills for Xero at approval, not at payment: the liability belongs in the books the day the business agrees it
@@ -48,7 +50,9 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     .all();
   // Xero refuses (or misplaces) a bill dated in a closed month. A late invoice keeps its own date in the description
   // and is posted on the first open day.
-  const lock = db.select({ l: businesses.lockedThrough }).from(businesses).where(eq(businesses.id, businessId)).get()?.l ?? null;
+  const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get();
+  const lock = biz?.lockedThrough ?? null;
+  const policy = (): ApprovalPolicy => ({ ...DEFAULT_POLICY, ...(JSON.parse(biz?.policyJson ?? "{}") as Partial<ApprovalPolicy>) });
   const posting = (d: string) => (lock && d <= lock ? new Date(Date.parse(`${lock}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : d);
   const late = (d: string) => (lock && d <= lock ? ` (invoice dated ${d})` : "");
   const rows: Row[] = [];
@@ -78,8 +82,13 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
       rows.push(main);
       // Tax kept back on every part of this invoice (a deposit and its balance each withhold), not only the part that
       // happened to be agreed first. A cancelled part was never paid, so nothing was kept back from it.
-      const parts = db.select({ withheld: obligations.withheldMinor, note: obligations.withholdingNote, state: obligations.state }).from(obligations).where(eq(obligations.billId, b.id)).all().filter((p) => p.state !== "cancelled");
-      const withheldAll = parts.reduce((sum, p) => sum + (p.withheld ?? 0), 0);
+      // The bill goes once, often while only the deposit exists, so the tax on parts not yet raised is worked out from
+      // the invoice total with the vendor's own rule. When every part exists, their own withholding is used as it is.
+      const parts = db.select({ amount: obligations.amountMinor, withheld: obligations.withheldMinor, note: obligations.withholdingNote, state: obligations.state }).from(obligations).where(eq(obligations.billId, b.id)).all().filter((p) => p.state !== "cancelled");
+      const withheldParts = parts.reduce((sum, p) => sum + (p.withheld ?? 0), 0);
+      const covered = parts.reduce((sum, p) => sum + (p.amount ?? 0), 0) >= b.totalMinor;
+      const rule = withheldParts > 0 && !covered ? withholdingFor(policy(), biz?.country ?? "US", v, b.totalMinor, b.currency) : null;
+      const withheldAll = rule ? rule.withheldMinor : withheldParts;
       const w = withholdingLine(b.reference, date, due, withheldAll, b.currency, o.withholdingNote ?? parts.find((p) => p.note)?.note ?? null);
       if (w) rows.push(w);
       groups.set(b.id, { kind: "bill", billId: b.id, obligationIds: [o.id], rows: w ? [main, w] : [main] });

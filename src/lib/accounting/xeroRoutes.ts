@@ -4,7 +4,7 @@ import { isRole, type Permission } from "../auth/roles";
 import { actorCan, resolveActor, type Actor } from "../engine/users";
 import { getBusiness } from "../queries";
 import { config } from "../config";
-import { beginXeroConnect, completeXeroConnect, consumeXeroState, disconnectXero, getXeroConnection, xeroConfigured, XeroAuthError } from "./xeroAuth";
+import { beginXeroConnect, completeXeroConnect, consumeXeroState, disconnectXero, getXeroConnection, xeroConfigured, xeroDataKeyMissing, XeroAuthError } from "./xeroAuth";
 import { refreshXeroChart, saveXeroMapping, type XeroMappingInput } from "./xeroSettings";
 import { runXeroSync } from "./xeroSync";
 import { XeroApiError } from "./xeroClient";
@@ -57,6 +57,7 @@ export function handleXeroConnect(req: Request, db: Db): Response {
   const who = allowed(req, db, "settings");
   if (who instanceof Response) return who;
   if (!xeroConfigured()) return backToSettings(req, "not_configured");
+  if (xeroDataKeyMissing()) return backToSettings(req, "no_data_key");
   const { url } = beginXeroConnect(db, { businessId: who.businessId, login: who.login, actor: who.actor.id });
   return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store" } });
 }

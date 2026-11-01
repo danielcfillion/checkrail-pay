@@ -42,7 +42,7 @@ function fakeXero() {
   const state = {
     access: jwt({ authentication_event_id: "evt-1", n: 1 }),
     refresh: "rt-1",
-    contacts: [{ ContactID: "c-maria", Name: "Maria Santos" }] as Array<{ ContactID: string; Name: string }>,
+    contacts: [{ ContactID: "c-maria", Name: "Maria Santos", ContactStatus: "ACTIVE" }, { ContactID: "c-ana-old", Name: "Ana Reyes", ContactStatus: "ARCHIVED" }] as Array<{ ContactID: string; Name: string; ContactStatus?: string }>,
     invoices: [] as Array<Record<string, unknown>>,
     payments: [] as Array<Record<string, unknown>>,
     bankTx: [] as Array<Record<string, unknown>>,
@@ -137,7 +137,7 @@ function fakeXero() {
     }
     if (method === "PUT" && api === "/Contacts") {
       const body = JSON.parse(c.body) as { Contacts: Array<{ Name: string }> };
-      const made = { ContactID: `c-${state.contacts.length + 1}`, Name: body.Contacts[0].Name };
+      const made = { ContactID: `c-${state.contacts.length + 1}`, Name: body.Contacts[0].Name, ContactStatus: "ACTIVE" };
       state.contacts.push(made);
       return { status: 200, body: { Contacts: [made] } };
     }
@@ -145,7 +145,8 @@ function fakeXero() {
     if (method === "GET" && one) {
       const inv = state.invoices.find((i) => i.InvoiceID === decodeURIComponent(one[1]));
       if (!inv) return { status: 404, body: { Title: "Not found" } };
-      const pays = state.payments.filter((x) => (x.Invoice as { InvoiceID: string }).InvoiceID === inv.InvoiceID).map((x) => ({ PaymentID: x.PaymentID, Amount: x.Amount, Reference: x.Reference }));
+      // As Xero documents it: an invoice's Payments list carries id, date and amount, not the payment's reference.
+      const pays = state.payments.filter((x) => (x.Invoice as { InvoiceID: string }).InvoiceID === inv.InvoiceID).map((x) => ({ PaymentID: x.PaymentID, Date: x.Date, Amount: x.Amount }));
       return { status: 200, body: { Invoices: [{ ...inv, Payments: pays }] } };
     }
     if (method === "GET" && api === "/Invoices") {
@@ -166,6 +167,7 @@ function fakeXero() {
       state.creditNotes.push(cn);
       return { status: 200, body: { CreditNotes: [cn] } };
     }
+    if (method === "GET" && api === "/Payments") return { status: 200, body: { Payments: state.payments.filter((x) => x.Reference === quoted("Reference")) } };
     if (method === "PUT" && api === "/Payments") {
       const body = JSON.parse(c.body) as { Payments: Array<Record<string, unknown>> };
       const pay = { ...body.Payments[0], PaymentID: `pay-${state.payments.length + 1}`, Status: "AUTHORISED" };
@@ -261,6 +263,8 @@ beforeEach(async () => {
   delete process.env.NEXT_PUBLIC_SITE_URL;
   delete process.env.RENDER_EXTERNAL_URL;
   delete process.env.XERO_SCOPES;
+  // A fixed test key (not a secret): Xero tokens are only stored under a real data key.
+  process.env.CHECKRAIL_DATA_KEY = Buffer.from("checkrail xero tests 32 byte key").toString("base64");
   xero = fakeXero();
   vi.stubGlobal("fetch", xero.fetch);
   db = openTestDb();
@@ -269,6 +273,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  delete process.env.CHECKRAIL_DATA_KEY;
+  delete process.env.CHECKRAIL_DEMO_PERSONAS;
   acc.destination = saved.destination;
   acc.xero.clientId = saved.clientId;
   acc.xero.clientSecret = saved.clientSecret;
@@ -441,7 +447,7 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     const r1 = await runXeroSync(db);
     expect(r1.failed).toBe(0);
     // Maria Santos is already a contact in Xero: found, not created. The fee's contact (PayPal) is created once.
-    expect(xero.state.contacts.map((c) => c.Name)).toEqual(["Maria Santos", "PayPal"]);
+    expect(xero.state.contacts.map((c) => c.Name)).toEqual(["Maria Santos", "Ana Reyes", "PayPal"]);
     const bill = xero.state.invoices.find((i) => i.InvoiceNumber === "JOB-HG4D-0921")!;
     expect(bill).toMatchObject({ Type: "ACCPAY", Contact: { ContactID: "c-maria" }, CurrencyCode: "USD", Status: "AUTHORISED", LineAmountTypes: "NoTax" });
     const line = (bill.LineItems as Array<Record<string, unknown>>)[0];
@@ -462,7 +468,7 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
 
     // Writes carry an Idempotency-Key, and the key was written to the record before the call.
     for (const c of xero.calls.filter((c) => c.method === "PUT")) expect(c.headers.get("idempotency-key")).toMatch(/^checkrail-xr_[0-9a-f]+-\d+$/);
-    for (const r of records()) expect(r.idemKey ?? "").toMatch(r.kind === "contact" && r.label.includes("Maria") ? /^$/ : /^checkrail-/);
+    for (const r of records().filter((x) => x.kind !== "settlement")) expect(r.idemKey ?? "").toMatch(r.kind === "contact" && r.label.includes("Maria") ? /^$/ : /^checkrail-/);
     expect(db.select().from(accountingSyncs).where(eq(accountingSyncs.id, sync.id)).get()).toMatchObject({ status: "synced", externalRef: `xero:${pay.PaymentID}` });
     expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: true }).rows.map((r) => r["*InvoiceNumber"])).not.toContain("JOB-HG4D-0921");
     expect(records("bill").every((r) => r.status === "pushed" && r.xeroId)).toBe(true);
@@ -482,7 +488,10 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     await settle(story.stellar);
     await runXeroSync(db);
     const bill = xero.state.invoices.find((i) => i.InvoiceNumber === "JOB-PAL3D-0927")!;
-    expect(xero.state.contacts.find((c) => c.Name === "Ana Reyes")).toBeTruthy();
+    // The archived Ana Reyes is passed over: a live contact is created and the bill goes to it.
+    const ana = xero.state.contacts.filter((c) => c.Name === "Ana Reyes");
+    expect(ana.map((c) => c.ContactStatus)).toEqual(["ARCHIVED", "ACTIVE"]);
+    expect(bill.Contact).toEqual({ ContactID: ana[1].ContactID });
     expect(xero.state.payments.find((p) => (p.Invoice as { InvoiceID: string }).InvoiceID === bill.InvoiceID)).toMatchObject({ Amount: 750, Account: { Code: "091" } });
     expect(xero.state.bankTx).toHaveLength(0);
   });
@@ -501,6 +510,9 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     await runXeroSync(db, { force: true });
     expect(xero.state.payments).toHaveLength(1);
     expect(records("payment")[0]).toMatchObject({ status: "pushed", xeroId: xero.state.payments[0].PaymentID });
+    // Found by its own reference, so it is ours: its fee is booked, not skipped.
+    expect(xero.state.bankTx).toHaveLength(1);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).skippedFees).toBe(0);
   });
 
   it("a repeated request with the same Idempotency-Key gets Xero's first answer, not a second bill", async () => {
@@ -669,6 +681,8 @@ describe("Review round 1", () => {
     expect(xero.state.bankTx).toHaveLength(1);
     expect(records("payment")[0]).toMatchObject({ status: "pushed", xeroId: xero.state.payments[0].PaymentID, localKey: expect.stringContaining(`${story.paypal}|paypal|`) });
     expect(records("fee")[0]).toMatchObject({ status: "skipped" });
+    expect(records("fee")[0].error).toMatch(/^Skipped fee/);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).skippedFees).toBe(1);
   });
 
   it("2b. a deposit and a balance of the same amount on one bill are both paid", async () => {
@@ -842,6 +856,110 @@ describe("Review round 1", () => {
   });
 });
 
+describe("Review round 2", () => {
+  it("M1. deposit now, balance later: the bill carries the tax withheld on the whole invoice, in the file and in Xero", async () => {
+    await connect();
+    db.update(vendors).set({ taxForm: null }).where(eq(vendors.id, "ven_jake")).run();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_jake", { kind: "invoice", reference: "INV-JM-3001", totalMinor: 45_000, currency: "USD" });
+    const dep = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 22_500);
+    approveObligation(db, dep, "user:daniel");
+    // Only the deposit exists: 24% of the invoice total is still what is kept back.
+    const file = xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows.filter((r) => r["*InvoiceNumber"] === "INV-JM-3001");
+    expect(file.map((r) => r["*UnitAmount"])).toEqual(["450.00", "-108.00"]);
+    await runXeroSync(db);
+    const live = xero.state.invoices.find((i) => i.InvoiceNumber === "INV-JM-3001")!;
+    const lines = live.LineItems as Array<{ UnitAmount: number }>;
+    expect(lines.map((l) => l.UnitAmount)).toEqual([450, -108]);
+    // The balance arrives later; both parts settle, and the payments clear the bill exactly.
+    const bal = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 22_500);
+    approveObligation(db, bal, "user:daniel");
+    for (const id of [dep, bal]) {
+      await executeObligation(db, id, { actor: "user:daniel" });
+      await confirmSettlement(db, id);
+    }
+    await runXeroSync(db);
+    const paid = xero.state.payments.filter((x) => (x.Invoice as { InvoiceID: string }).InvoiceID === live.InvoiceID).reduce((sum, x) => sum + Number(x.Amount), 0);
+    expect(paid).toBe(lines.reduce((sum, l) => sum + l.UnitAmount, 0));
+  });
+
+  it("S1. a bill split across the connect time stays wholly in the files, balance payment included", async () => {
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9001", totalMinor: 40_000, currency: "USD" });
+    const dep = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 20_000);
+    approveObligation(db, dep, "user:minh");
+    await connect();
+    const bal = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 20_000);
+    approveObligation(db, bal, "user:minh");
+    await executeObligation(db, bal, { actor: "user:minh" });
+    await confirmSettlement(db, bal);
+    await runXeroSync(db);
+    expect(xero.state.invoices.filter((i) => i.InvoiceNumber === "INV-MS-9001")).toHaveLength(0);
+    expect(records("payment")).toHaveLength(0);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures).toHaveLength(0);
+    // Marked as left to the files, so it is not read again on every pass.
+    const sync = db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, bal)).get()!;
+    expect(records("settlement").find((r) => r.accountingSyncId === sync.id)).toMatchObject({ status: "skipped" });
+  });
+
+  it("S2. disconnect and reconnect to the same organisation keeps the starting point and what was sent; the payment still goes", async () => {
+    await connect();
+    const from = conn()!.syncFrom;
+    approveObligation(db, story.stellar, "user:minh");
+    await runXeroSync(db);
+    expect(xero.state.invoices.map((i) => i.InvoiceNumber)).toEqual(["JOB-PAL3D-0927"]);
+    await handleXeroDisconnect(req("DELETE", "/api/xero/connection", OWNER), db);
+    await settle(story.stellar);
+    xero.state.refresh = "rt-1";
+    await connect();
+    expect(conn()!.syncFrom).toBe(from);
+    expect(conn()).toMatchObject({ status: "connected", stellarAccountCode: "091" });
+    await runXeroSync(db);
+    expect(xero.state.invoices).toHaveLength(1);
+    expect(xero.state.payments).toHaveLength(1);
+    expect(xero.state.payments[0]).toMatchObject({ Invoice: { InvoiceID: xero.state.invoices[0].InvoiceID }, Amount: 750 });
+  });
+
+  it("S3. the Accounting page summary counts a skipped fee", async () => {
+    await connect();
+    connectedEarlier();
+    await settle(story.paypal);
+    await runXeroSync(db);
+    ({ story } = (await seedDemo(db, { history: false })) as { story: typeof story });
+    connectedEarlier();
+    await settle(story.paypal);
+    await runXeroSync(db);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID)).toMatchObject({ skippedFees: 1, connected: true });
+  });
+
+  it("S4. without a real CHECKRAIL_DATA_KEY, Xero cannot be connected even with demo personas on; the card says why", async () => {
+    delete process.env.CHECKRAIL_DATA_KEY;
+    process.env.CHECKRAIL_DEMO_PERSONAS = "1";
+    const r = handleXeroConnect(req("GET", "/api/xero/connect", OWNER), db);
+    expect(r.headers.get("location")).toContain("xero=no_data_key");
+    expect(xeroCardView(db, DEMO_BUSINESS_ID)).toMatchObject({ configured: true, dataKeyMissing: true, connected: false });
+    // A callback that somehow arrives stores nothing.
+    const s = beginXeroConnect(db, { businessId: DEMO_BUSINESS_ID, login: "daniel", actor: "user:daniel" }).state;
+    const back = await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${s}`, OWNER), db);
+    expect(back.headers.get("location")).toContain("xero=failed");
+    expect(conn()).toBeUndefined();
+    expect(xero.calls.filter((c) => c.url.host === "identity.xero.com")).toHaveLength(0);
+  });
+
+  it("S5. the withholding line never carries a tax rate, whatever rate the bill uses", async () => {
+    await connect();
+    await handleXeroMapping(req("POST", "/api/xero/mapping", OWNER, { expenseAccountCode: "429", paypalAccountCode: "090", stellarAccountCode: "091", bankAccountCode: "092", feeAccountCode: "404", taxType: "INPUT" }), db);
+    db.update(vendors).set({ taxForm: null }).where(eq(vendors.id, "ven_jake")).run();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_jake", { kind: "invoice", reference: "INV-JM-4001", totalMinor: 45_000, currency: "USD" });
+    approveObligation(db, await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 45_000), "user:daniel");
+    await runXeroSync(db);
+    const live = xero.state.invoices.find((i) => i.InvoiceNumber === "INV-JM-4001")!;
+    expect(live.LineAmountTypes).toBe("Inclusive");
+    expect((live.LineItems as Array<Record<string, unknown>>).map((l) => [l.UnitAmount, l.TaxType])).toEqual([
+      [450, "INPUT"],
+      [-108, "NONE"],
+    ]);
+  });
+});
+
 describe("Mapping and disconnect", () => {
   it("saves a mapping only with accounts of the right kind from this organisation", async () => {
     await connect();
@@ -861,7 +979,7 @@ describe("Mapping and disconnect", () => {
     expect(r.status).toBe(200);
     expect(xero.state.deletedConnections).toEqual(["conn-1"]);
     expect(xero.state.revokedTokens).toEqual(["rt-1"]);
-    expect(conn()).toBeUndefined();
+    expect(conn()).toMatchObject({ status: "disconnected", accessTokenEnc: "", refreshTokenEnc: "" });
     expect((await runXeroSync(db)).skipped).toBe("not_connected");
     expect(xeroCardView(db, DEMO_BUSINESS_ID).connected).toBe(false);
   });
@@ -871,7 +989,7 @@ describe("Mapping and disconnect", () => {
     xero.injections.push({ when: (c) => c.method === "DELETE", times: 1, respond: () => "network" });
     const r = await handleXeroDisconnect(req("DELETE", "/api/xero/connection", OWNER), db);
     expect(((await r.json()) as { message: string }).message).toMatch(/Connected apps in Xero/);
-    expect(conn()).toBeUndefined();
+    expect(conn()).toMatchObject({ status: "disconnected", accessTokenEnc: "", refreshTokenEnc: "" });
   });
 
   it("disconnect after the sign-in expired says what happened", async () => {
@@ -881,7 +999,7 @@ describe("Mapping and disconnect", () => {
     const r = await handleXeroDisconnect(req("DELETE", "/api/xero/connection", OWNER), db);
     expect(((await r.json()) as { message: string }).message).toBe("Disconnected here. The Xero sign-in had already expired, so Xero could not be told: remove Checkrail Pay under Connected apps in Xero.");
     expect(xero.calls.length).toBe(n);
-    expect(conn()).toBeUndefined();
+    expect(conn()).toMatchObject({ status: "disconnected", accessTokenEnc: "", refreshTokenEnc: "" });
   });
 
   it("the card view carries no token or secret", async () => {
