@@ -40,7 +40,7 @@ describe("parts of one bill from people", () => {
     expect(ob(second).state).toBe(ob(first).state);
     expect(ob(second).policyDecision).toBe(ob(first).policyDecision);
     expect(previewPolicy(db, second).rules.find((r) => r.ruleId === "no_duplicate")?.passed).toBe(true);
-    expect(repeatRule(second)).toMatchObject({ severity: "info", message: expect.stringMatching(/^Same amount as an earlier part of bill INV-ROSA-9001 \(USD 300\.00, /) });
+    expect(repeatRule(second)).toMatchObject({ severity: "info", message: "Bill INV-ROSA-9001 already has another part (USD 300.00). A person confirms this is a separate payment." });
   });
 
   it("a deposit and a balance of equal amounts from the bill page both go through", async () => {
@@ -58,8 +58,9 @@ describe("parts of one bill from people", () => {
     const ids = [await payBill(db, DEMO_BUSINESS_ID, lan(), bill, 30_000), await payBill(db, DEMO_BUSINESS_ID, lan(), bill, 30_000), await payBill(db, DEMO_BUSINESS_ID, lan(), bill, 30_000)];
     expect(ids.map((id) => ob(id).state)).not.toContain("blocked");
     expect(new Set(ids.map((id) => ob(id).policyDecision)).size).toBe(1);
-    expect(partRule(ids[0])?.message).toBe("Part 1 of bill INV-ROSA-9003; earlier parts: none");
-    expect(partRule(ids[2])?.message).toMatch(/^Part 3 of bill INV-ROSA-9003; earlier parts: USD 300\.00, [a-z ]+ \d{1,2} [A-Z][a-z]{2}; USD 300\.00, /);
+    // Part 1 was read before the others existed; read now, it lists them.
+    expect(partRule(ids[0])?.message).toMatch(/^Part 1 of bill INV-ROSA-9003; other parts: USD 300\.00, /);
+    expect(partRule(ids[2])?.message).toMatch(/^Part 3 of bill INV-ROSA-9003; other parts: USD 300\.00, [a-z ]+ \d{1,2} [A-Z][a-z]{2}; USD 300\.00, /);
     // An approver sees it among the reasons.
     expect(JSON.parse(ob(ids[2]).policyReasonsJson ?? "[]").join(" ")).toMatch(/Part 3 of bill INV-ROSA-9003/);
   });

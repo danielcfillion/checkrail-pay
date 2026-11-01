@@ -20,7 +20,8 @@ import { setAutonomy } from "@/lib/engine/autopilot";
 import { authenticateApiKey, configuredApiKeys } from "@/lib/api/keys";
 import { resetApiThrottles } from "@/lib/api/http";
 import { textPdf } from "@/lib/api/testPdf";
-import { createBill } from "@/lib/engine/bills";
+import { createBill, payBill } from "@/lib/engine/bills";
+import { approveObligation, previewPolicy, recheckObligation, retryFailed } from "@/lib/engine/orchestrator";
 import { resolveActor } from "@/lib/engine/users";
 import { departures as departuresTable } from "@/lib/db/schema";
 import { API_V1_PATH, middleware } from "@/middleware";
@@ -335,7 +336,7 @@ describe("payment requests", () => {
     expect(inflated.json.verdict).toBe("block");
     expect(inflated.json.status).toBe("blocked");
     expect(inflated.json.rules_failed).toContain("expected_amount");
-    expect((inflated.json.reasons as string[]).join(" ")).toMatch(/CB-3D-1013 say USD 600\.00 \(3 vehicle-days x USD 200\.00\)/);
+    expect(inflated.json.reasons).toContain("The amount does not match the rate card and departure on file.");
   });
 
   it("are checked again when the departure arrives after the request", async () => {
@@ -531,7 +532,7 @@ describe("review fixes, round 3", () => {
     // Round 4: held for a person, never scheduled by Autopilot.
     expect(second.json.status).toBe("waiting_for_approval");
     expect(second.json.rules_failed).toContain("bill_part_repeat");
-    expect((second.json.reasons as string[])[0]).toMatch(/^Same amount as an earlier part of bill INV-ROSA-7777 \(USD 190\.00\)\. A person confirms this is a different job\.$/);
+    expect((second.json.reasons as string[])[0]).toBe("This bill already has another part; a person confirms this is a separate payment.");
   });
 
   it("M1: a second 'remaining balance' that is not what is open is an ordinary part, and held", async () => {
@@ -546,25 +547,123 @@ describe("review fixes, round 3", () => {
     expect(second.json.rules_failed).toContain("bill_part_repeat");
   });
 
-  it("M1: from a key without attest, the approver is told it looks like an earlier part", async () => {
+  it("M1: from a key without attest, it is held because the bill has another part", async () => {
     await autopilot();
     personBill("INV-ROSA-7777", 500_000);
     await postRequest(job, "r3-plain-0001");
     const second = await postRequest(job, "r3-plain-0002");
     expect(["scheduled", "approved"]).not.toContain(second.json.status);
-    expect((second.json.reasons as string[]).join(" ")).toMatch(/earlier part of bill INV-ROSA-7777/);
+    expect(second.json.rules_failed).toContain("bill_part_repeat");
+    expect((second.json.reasons as string[]).join(" ")).toMatch(/already has another part/);
   });
 
-  it("M1: a deposit and a balance of the same amount on one bill both still go through", async () => {
+  // The ledger key's own purchase order: a record of the business, so Autopilot may pay against it.
+  const invoice8800 = [{ kind: "purchase_order", label: "Purchase order INV-ROSA-8800", amount: "380", reference: "INV-ROSA-8800", excerpt: "Rosa Villanueva. Guiding, 4 days. Total USD 380.00. 50% deposit, balance after the trip." }];
+  const deposit8800 = { payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "50% deposit USD 190 for Rosa Villanueva on invoice INV-ROSA-8800, total USD 380.", evidence: invoice8800 };
+  const balance8800 = { payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "Balance USD 190 for Rosa Villanueva after the deposit, invoice INV-ROSA-8800, total USD 380.", evidence: invoice8800 };
+
+  it("R5: an outside balance while the deposit is only scheduled by Autopilot waits for a person", async () => {
     await autopilot();
     personBill("INV-ROSA-8800", 38_000);
-    const invoice = [{ kind: "invoice", label: "Invoice INV-ROSA-8800", amount: "380", reference: "INV-ROSA-8800", excerpt: "Rosa Villanueva. Guiding, 4 days. Total USD 380.00. 50% deposit." }];
-    const deposit = await postRequest({ payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "50% deposit USD 190 for Rosa Villanueva on invoice INV-ROSA-8800, total USD 380.", evidence: invoice }, "r3-dep-000001", "l");
-    const balance = await postRequest({ payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "Balance USD 190 for Rosa Villanueva after the deposit, invoice INV-ROSA-8800, total USD 380.", evidence: invoice }, "r3-bal-000001", "l");
-    expect(deposit.json.rules_failed).not.toContain("no_duplicate");
+    const deposit = await postRequest(deposit8800, "r3-dep-000001", "l");
+    expect(deposit.json.status).toBe("scheduled");
+    const balance = await postRequest(balance8800, "r3-bal-000001", "l");
     expect(balance.json.rules_failed).not.toContain("no_duplicate");
+    expect(balance.json.status).toBe("waiting_for_approval");
+    expect(balance.json.rules_failed).toContain("bill_part_repeat");
+  });
+
+  it("R5: an outside deposit, then an outside exact balance with the deposit already paid, goes through", async () => {
+    await autopilot();
+    personBill("INV-ROSA-8800", 38_000);
+    const deposit = await postRequest(deposit8800, "r5-dep-000001", "l");
+    getDb().update(obligations).set({ state: "settled", releaseAt: null }).where(eq(obligations.id, deposit.json.id as string)).run();
+    const balance = await postRequest(balance8800, "r5-bal-000001", "l");
     expect(balance.json.rules_failed).not.toContain("bill_part_repeat");
-    expect(balance.json.status).not.toBe("blocked");
+    expect(balance.json.status).toBe("scheduled");
+  });
+
+  describe("round 5: an outside part of a bill that has another part never pays without a person", () => {
+    const part = (amount: string, description = `Rosa Villanueva, guiding, USD ${amount}, invoice INV-ROSA-7777.`) => ({ payee: "Rosa Villanueva", amount, currency: "USD", reference: "INV-ROSA-7777", description, evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-7777", amount, reference: "INV-ROSA-7777", excerpt: `Guide: Rosa Villanueva. Total USD ${amount}.` }] });
+    const state = (id: unknown) => getDb().select().from(obligations).where(eq(obligations.id, id as string)).get()!.state;
+
+    it("190 then 191, naming only the bill's reference", async () => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 500_000);
+      expect((await postRequest(part("190"), "r5-a-0000001", "l")).json.status).toBe("scheduled");
+      const second = await postRequest(part("191"), "r5-b-0000001", "l");
+      expect(second.json.status).toBe("waiting_for_approval");
+      expect(second.json.rules_failed).toContain("bill_part_repeat");
+    });
+
+    it("the decoy-shrink: 190 scheduled, a 190 decoy held, then a 'remaining balance' of 190 is held too", async () => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 57_000);
+      expect((await postRequest(part("190"), "r5-ds-000001", "l")).json.status).toBe("scheduled");
+      expect((await postRequest(part("190"), "r5-ds-000002", "l")).json.status).toBe("waiting_for_approval");
+      const balance = await postRequest(part("190", "Please pay the remaining balance USD 190 to Rosa Villanueva on invoice INV-ROSA-7777."), "r5-ds-000003", "l");
+      expect(balance.json.status).toBe("waiting_for_approval");
+      expect(balance.json.rules_failed).toContain("bill_part_repeat");
+    });
+
+    it("fail, re-send, then retry part 1: neither is left to pay without a person", async () => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 500_000);
+      const first = await postRequest(part("190"), "r5-fr-000001", "l");
+      getDb().update(obligations).set({ state: "failed", releaseAt: null }).where(eq(obligations.id, first.json.id as string)).run();
+      const resent = await postRequest(part("190"), "r5-fr-000002", "l");
+      expect(resent.json.status).toBe("waiting_for_approval");
+      retryFailed(getDb(), first.json.id as string, "user:minh");
+      expect(state(first.json.id)).toBe("awaiting_approval");
+      expect(previewPolicy(getDb(), first.json.id as string).decision).toBe("require_approval");
+    });
+
+    it("blocked, then checked again once fixed: held, not scheduled", async () => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 500_000);
+      expect((await postRequest(part("190"), "r5-bl-000001", "l")).json.status).toBe("scheduled");
+      const verifiedAt = getDb().select().from(vendors).where(eq(vendors.id, "ven_rosa")).get()!.verifiedAt;
+      getDb().update(vendors).set({ verifiedAt: null }).where(eq(vendors.id, "ven_rosa")).run();
+      const second = await postRequest(part("191"), "r5-bl-000002", "l");
+      expect(second.json.status).toBe("blocked");
+      getDb().update(vendors).set({ verifiedAt }).where(eq(vendors.id, "ven_rosa")).run();
+      await recheckObligation(getDb(), second.json.id as string, "user:minh");
+      expect(state(second.json.id)).toBe("awaiting_approval");
+    });
+
+    it("an approval given before another part arrived does not count, and the scheduled part is not released", async () => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 500_000);
+      const first = await postRequest(part("190"), "r5-ap-000001");
+      expect(first.json.status).toBe("waiting_for_approval");
+      approveObligation(getDb(), first.json.id as string, "user:minh", "Checked the trip sheet", previewPolicy(getDb(), first.json.id as string).rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => `${r.ruleId}|${r.key ?? r.message}`));
+      await postRequest(part("250"), "r5-ap-000002");
+      expect(previewPolicy(getDb(), first.json.id as string).decision).toBe("require_approval");
+      expect(previewPolicy(getDb(), first.json.id as string).rules.some((r) => r.ruleId === "bill_part_repeat" && r.severity === "warn")).toBe(true);
+    });
+
+    it("M3: the ERP key never sees another part's state or date, in any line", async () => {
+      await autopilot();
+      const bill = personBill("INV-ROSA-7777", 500_000);
+      const lan = resolveActor(getDb(), DEMO_BUSINESS_ID, "lan", "clerk");
+      const theirs = await payBill(getDb(), DEMO_BUSINESS_ID, lan, bill, 19_000);
+      approveObligation(getDb(), theirs, "user:minh", "ok", previewPolicy(getDb(), theirs).rules.filter((r) => r.severity === "warn" && !r.passed).map((r) => `${r.ruleId}|${r.key ?? r.message}`));
+      const mine = await postRequest(part("190"), "r5-m3-000001");
+      // Everything but this request's own state, status and settlement.
+      const own = ({ state: _s, status: _t, settlement: _p, ...rest }: Json) => (void _s, void _t, void _p, rest);
+      const listed = ((await listRequests("?reference=INV-ROSA-7777")).json.requests as Json[]).map(own);
+      const read = JSON.stringify([own(mine.json), own((await getRequest(mine.json.id as string)).json), listed]);
+      const leak = read.match(/.{0,60}(?:approved|settled|scheduled|awaiting|in flight|disputed|\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{4}-\d{2}-\d{2}(?!T)).{0,20}/);
+      expect(leak?.[0]).toBeUndefined();
+      expect(mine.json.rules_failed).toContain("bill_part_repeat");
+    });
+
+    it("S2: a key without requests:read gets only the id, the status and its own key back", async () => {
+      vi.stubEnv("CHECKRAIL_API_KEYS", `${KEYS},writer:${S("w")}:requests:write`);
+      const r = await postRequest(part("190"), "r5-s2-000001", "w");
+      expect(r.status).toBe(201);
+      expect(r.json).toEqual({ id: expect.any(String), status: expect.any(String), idempotency_key: "r5-s2-000001" });
+    });
   });
 
   describe("round 4: the same job on a bill from an attest key is never paid twice by Autopilot", () => {
@@ -588,7 +687,7 @@ describe("review fixes, round 3", () => {
     it("an amended amount, 190 then 195, for the same trip sheet", async () => {
       const { second } = await twice(sheet("190", "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00."), { ...sheet("195", "Guide: Rosa Villanueva. 2 days at USD 95, plus USD 5 parking. Total USD 195.00."), description: "Rosa Villanueva, 2 days guiding, USD 195 with parking, INV-ROSA-7777." });
       expect(second.json.status).toBe("waiting_for_approval");
-      expect((second.json.reasons as string[])[0]).toMatch(/^Same job as an earlier part of bill INV-ROSA-7777/);
+      expect(second.json.rules_failed).toContain("bill_part_repeat");
     });
 
     it("a repeat relabelled deposit, then balance", async () => {
