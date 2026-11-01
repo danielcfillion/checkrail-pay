@@ -35,6 +35,7 @@ CREATE TABLE `api_requests` (
 	`obligation_id` text NOT NULL,
 	`reference` text,
 	`idem_key` text NOT NULL,
+	`body_sha256` text,
 	`created_at` text NOT NULL
 );
 --> statement-breakpoint

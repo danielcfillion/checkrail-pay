@@ -1,4 +1,5 @@
-import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { apiRequests, attachments, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { newId, now } from "../domain/ids";
@@ -12,7 +13,7 @@ import { formatMoney } from "../format";
 import { AgentInputError, clean, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
 import { otherNames, reasonForIntegration } from "./redact";
-import { ApiError, Problems, isObject, onlyFields } from "./http";
+import { ApiError, Problems, isObject, onlyFields, stable } from "./http";
 
 /**
  * Payment requests from a system of record (an ERP, an accounting tool, a dispatch system). A request goes through the
@@ -131,12 +132,19 @@ function withdraw(db: Db, id: string, actor: string, reason: string): void {
 /** A key's binding before its request exists. Never shown: listing and lookups use only real request ids. */
 const PENDING = "pending:";
 
+/** The request created under a binding, found by the exact header it starts with (no LIKE: the id contains "_"). */
+function madeUnder(db: Db, claim: string) {
+  const head = `[Integration request ${claim}]`;
+  return db.select({ id: obligations.id }).from(obligations).where(sql`substr(${obligations.rawInput}, 1, ${head.length}) = ${head}`).get();
+}
+
 const amountText = (minor: number, currency: string) => (ZERO_DECIMAL_CURRENCIES.has(currency) ? String(Math.round(minor / 100)) : (minor / 100).toFixed(2));
 
 export async function createRequest(db: Db, businessId: string, key: ApiKey, idemKey: string, body: unknown) {
   const a = validateRequest(db, businessId, body);
   const actor = `api:${key.name}`;
   const attest = hasScope(key, "requests:attest");
+  const bodyHash = createHash("sha256").update(stable(body)).digest("hex");
   return oneAtATime(businessId, async () => {
     const payee = payeeOf(db, businessId, a.payee, a.vendorId);
     // A key already bound to a request gets that request back, whatever happened to the stored answer: a retry after
@@ -145,7 +153,7 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
     if (bound?.obligationId.startsWith(PENDING)) {
       // The key was bound and then the process stopped before the request id was written back (review R2-S2). The
       // request, if ingest got that far, carries the binding's id in its header.
-      const made = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `[Integration request ${bound.id}]%`)).get();
+      const made = madeUnder(db, bound.id);
       if (made) {
         db.update(apiRequests).set({ obligationId: made.id }).where(eq(apiRequests.id, bound.id)).run();
         bound = { ...bound, obligationId: made.id };
@@ -156,7 +164,8 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
     }
     if (bound) {
       const was = db.select().from(obligations).where(eq(obligations.id, bound.obligationId)).get();
-      if (!was || (was.vendorId ?? null) !== (payee?.id ?? null) || was.amountMinor !== a.amountMinor || was.currency !== a.currency || (was.sourceRef ?? null) !== (a.reference ?? null)) {
+      // The whole request must match, description and evidence included, not only the fields that were paid on.
+      if (!was || (bound.bodySha256 !== null && bound.bodySha256 !== bodyHash) || (was.vendorId ?? null) !== (payee?.id ?? null) || was.amountMinor !== a.amountMinor || was.currency !== a.currency || (was.sourceRef ?? null) !== (a.reference ?? null)) {
         throw new ApiError(422, "idempotency_conflict", "This Idempotency-Key was already used with a different request. Use a new key for a new call.");
       }
       return describeRequest(db, bound.obligationId);
@@ -185,7 +194,7 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
     const rawInput = a.description ? `${head} The request as the system sent it: "${a.description.replace(/\s+/g, " ").replace(/"/g, "'")}"` : head;
     // The key is bound before ingest writes anything, so no crash can leave a request its key does not lead back to.
     // The binding points at the request once it exists; until then it is pending, and the request's header names it.
-    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: `${PENDING}${claim}`, reference: a.reference, idemKey, createdAt: now() }).run();
+    db.insert(apiRequests).values({ id: claim, businessId, keyName: key.name, obligationId: `${PENDING}${claim}`, reference: a.reference, idemKey, bodySha256: bodyHash, createdAt: now() }).run();
     let id: string;
     try {
       id = await ingestObligation(db, {
@@ -200,7 +209,7 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
       });
     } catch (e) {
       // Nothing half-made stays behind.
-      const orphan = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `[Integration request ${claim}]%`)).get();
+      const orphan = madeUnder(db, claim);
       if (orphan) withdraw(db, orphan.id, actor, "creating the request failed");
       discardUploads();
       db.delete(apiRequests).where(eq(apiRequests.id, claim)).run();

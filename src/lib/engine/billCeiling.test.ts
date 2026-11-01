@@ -1,9 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { bills, evidence } from "../db/schema";
+import { bills, evidence, obligations } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
-import { ingestObligation } from "./orchestrator";
+import { addEvidence, ingestObligation, repayRefunded } from "./orchestrator";
 import { uploadDocument } from "./attachments";
 import { textPdf } from "../api/testPdf";
 
@@ -51,6 +51,31 @@ describe("who may set a bill total", () => {
       evidenceProvenance: ["vendor"],
     });
     expect(rosaBill()).toEqual([]);
+  });
+
+  it("S1 (round 3): a supplier's invoice added to a clerk's deposit sets no bill total", async () => {
+    const id = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "operator_instruction", rawInput: "50% deposit USD 100 for Rosa Villanueva on invoice INV-ROSA-7777", actor: "user:lan" });
+    expect(rosaBill()).toEqual([]);
+    await addEvidence(db, id, "vendor:ven_rosa", { kind: "invoice", label: "Invoice INV-ROSA-7777 (from the vendor)", amountMinor: 500_000, currency: "USD", reference: "INV-ROSA-7777", excerpt: "Rosa Villanueva. Guiding, November. Total USD 5,000.00. Deposit 50%.", provenance: "vendor" }, null);
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, id)).all().map((e) => e.provenance)).toEqual(["vendor"]);
+    expect(rosaBill()).toEqual([]);
+  });
+
+  it("S2 (round 3): paying again a returned integration request does not turn its document into a bill total", async () => {
+    const first = await depositWithPdf("api:erp");
+    expect(rosaBill()).toEqual([]);
+    db.update(obligations).set({ state: "refunded" }).where(eq(obligations.id, first)).run();
+    const again = await repayRefunded(db, first, "user:minh");
+    expect(db.select().from(evidence).where(eq(evidence.obligationId, again)).all().map((e) => e.provenance)).toEqual(["document"]);
+    expect(rosaBill()).toEqual([]);
+  });
+
+  it("a person's own uploaded invoice paid again still records the bill, as before", async () => {
+    const first = await depositWithPdf("user:lan");
+    db.delete(bills).run();
+    db.update(obligations).set({ state: "refunded", billId: null }).where(eq(obligations.id, first)).run();
+    await repayRefunded(db, first, "user:minh");
+    expect(rosaBill().map((b) => b.totalMinor)).toEqual([500_000]);
   });
 
   it("the business's own records from an attest integration still do", async () => {

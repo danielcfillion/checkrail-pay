@@ -65,6 +65,15 @@ describe("payment requests when something fails", () => {
     expect(db.select().from(obligations).all().length).toBe(count + 1);
   });
 
+  it("R3 nit: a pending binding finds its request by the exact header, not a pattern (the id holds an underscore)", async () => {
+    const { ingestObligation } = await import("../engine/orchestrator");
+    // A request whose header differs from the binding's only where "_" would match any character in a LIKE pattern.
+    const lookalike = await ingestObligation(db, { businessId: DEMO_BUSINESS_ID, sourceType: "invoice", rawInput: "[Integration request aprZbound01] Pay USD 45.00 to Maria Santos for INV-MS-7405.", actor: "user:lan" });
+    db.insert(apiRequests).values({ id: "apr_bound01", businessId: DEMO_BUSINESS_ID, keyName: "erp", obligationId: "pending:apr_bound01", reference: "INV-MS-7405", idemKey: "r3-like-00001", bodySha256: null, createdAt: new Date().toISOString() }).run();
+    const r = await createRequest(db, DEMO_BUSINESS_ID, erp, "r3-like-00001", { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7405" });
+    expect(r.id).not.toBe(lookalike);
+  });
+
   it("S2: the key is bound before the request is committed, so a crash in between cannot free it", async () => {
     const body = { payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7403" };
     let boundAtCommit = 0;

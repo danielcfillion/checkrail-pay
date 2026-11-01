@@ -672,6 +672,7 @@ export const apiRequests = sqliteTable(
     obligationId: text("obligation_id").notNull(),
     reference: text("reference"),
     idemKey: text("idem_key").notNull(),
+    bodySha256: text("body_sha256"), // the request as sent, so a retry under the same key must match it in full
     createdAt: text("created_at").notNull(),
   },
   (t) => [uniqueIndex("api_requests_obligation").on(t.obligationId), index("api_requests_key_reference").on(t.keyName, t.reference), uniqueIndex("api_requests_key_idem").on(t.keyName, t.idemKey)]

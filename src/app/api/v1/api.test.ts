@@ -20,6 +20,8 @@ import { setAutonomy } from "@/lib/engine/autopilot";
 import { authenticateApiKey, configuredApiKeys } from "@/lib/api/keys";
 import { resetApiThrottles } from "@/lib/api/http";
 import { textPdf } from "@/lib/api/testPdf";
+import { createBill } from "@/lib/engine/bills";
+import { resolveActor } from "@/lib/engine/users";
 import { departures as departuresTable } from "@/lib/db/schema";
 import { API_V1_PATH, middleware } from "@/middleware";
 
@@ -503,6 +505,74 @@ describe("review fixes, round 2", () => {
     const r = await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7501" });
     expect(r.json).not.toHaveProperty("review_path");
     expect(JSON.stringify(r.json)).not.toMatch(/\/obligations\//);
+  });
+});
+
+describe("review fixes, round 3", () => {
+  const job = { payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-7777", description: "Rosa Villanueva, 2 days guiding at USD 95, INV-ROSA-7777.", evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-7777", amount: "190", reference: "INV-ROSA-7777", excerpt: "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00." }] };
+  const personBill = (reference: string, totalMinor: number) =>
+    createBill(getDb(), DEMO_BUSINESS_ID, resolveActor(getDb(), DEMO_BUSINESS_ID, "lan", "clerk"), "ven_rosa", { kind: "invoice", reference, totalMinor, currency: "USD", billDate: null, dueDate: null, note: "Recorded by a person" });
+  const autopilot = async () => {
+    await seedDemo(getDb());
+    setAutonomy(getDb(), DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 0 });
+  };
+
+  it("M1 control: without a bill, the same job twice is scheduled once and blocked once", async () => {
+    await autopilot();
+    expect((await postRequest(job, "r3-ctl-000001", "l")).json.status).toBe("scheduled");
+    expect((await postRequest(job, "r3-ctl-000002", "l")).json.status).toBe("blocked");
+  });
+
+  it("M1: a bill a person recorded does not let the same job through twice", async () => {
+    await autopilot();
+    personBill("INV-ROSA-7777", 500_000);
+    await postRequest(job, "r3-bill-00001", "l");
+    const second = await postRequest(job, "r3-bill-00002", "l");
+    expect(second.json.status).toBe("blocked");
+    expect(second.json.rules_failed).toContain("no_duplicate");
+  });
+
+  it("M1: two identical balance payments, both linked to the bill, are still caught as the same job", async () => {
+    await autopilot();
+    personBill("INV-ROSA-7777", 500_000);
+    const balance = { ...job, description: "Please pay the remaining balance USD 190 to Rosa Villanueva on invoice INV-ROSA-7777, 2 days guiding at USD 95." };
+    const first = await postRequest(balance, "r3-bal2-00001", "l");
+    const second = await postRequest(balance, "r3-bal2-00002", "l");
+    const linked = getDb().select({ id: obligations.id, billId: obligations.billId, kind: obligations.paymentKind }).from(obligations).all().filter((o) => o.id === first.json.id || o.id === second.json.id);
+    expect(linked.every((o) => o.billId && o.kind === "balance")).toBe(true);
+    expect(second.json.status).toBe("blocked");
+    expect(second.json.rules_failed).toContain("no_duplicate");
+  });
+
+  it("M1: from a key without attest, the approver is told the second is the same job", async () => {
+    await autopilot();
+    personBill("INV-ROSA-7777", 500_000);
+    await postRequest(job, "r3-plain-0001");
+    const second = await postRequest(job, "r3-plain-0002");
+    expect(["scheduled", "approved"]).not.toContain(second.json.status);
+    expect((second.json.reasons as string[]).join(" ")).toMatch(/same job/i);
+  });
+
+  it("M1: a deposit and a balance of the same amount on one bill both still go through", async () => {
+    await autopilot();
+    personBill("INV-ROSA-8800", 38_000);
+    const invoice = [{ kind: "invoice", label: "Invoice INV-ROSA-8800", amount: "380", reference: "INV-ROSA-8800", excerpt: "Rosa Villanueva. Guiding, 4 days. Total USD 380.00. 50% deposit." }];
+    const deposit = await postRequest({ payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "50% deposit USD 190 for Rosa Villanueva on invoice INV-ROSA-8800, total USD 380.", evidence: invoice }, "r3-dep-000001", "l");
+    const balance = await postRequest({ payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "Balance USD 190 for Rosa Villanueva after the deposit, invoice INV-ROSA-8800, total USD 380.", evidence: invoice }, "r3-bal-000001", "l");
+    expect(deposit.json.rules_failed).not.toContain("no_duplicate");
+    expect(balance.json.rules_failed).not.toContain("no_duplicate");
+    expect(balance.json.status).not.toBe("blocked");
+  });
+
+  it("nit: a retry whose stored answer is gone must match the description and evidence too", async () => {
+    const first = await postRequest(job, "r3-nit-000001");
+    expect(first.status).toBe(201);
+    getDb().delete(apiIdempotency).run();
+    const other = await postRequest({ ...job, description: "Something else entirely" }, "r3-nit-000001");
+    expect(other.status).toBe(422);
+    expect(other.json.error?.code).toBe("idempotency_conflict");
+    expect((await postRequest({ ...job, evidence: [] }, "r3-nit-000001")).status).toBe(422);
+    expect((await postRequest(job, "r3-nit-000001")).json.id).toBe(first.json.id);
   });
 });
 
