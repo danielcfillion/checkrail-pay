@@ -9,7 +9,9 @@
  *                                       nothing points at real money.
  *   CHECKRAIL_SANDBOX_MAX               most copies at once (default 50); when full, the one idle longest goes.
  *   CHECKRAIL_SANDBOX_TTL_MINUTES       a copy nobody has used for this long is deleted (default 120).
- *   CHECKRAIL_SANDBOX_SECRET            signs the cookie. Without it a key is derived from the login settings.
+ *   CHECKRAIL_SANDBOX_SECRET            signs the cookie (at least 16 characters). Required in production: without it
+ *                                       sandbox mode is refused. In development the server makes a random one per
+ *                                       process at start (server.ts) when it is not set.
  */
 import { realMoneyEnv } from "../basicAuth";
 import { base64url, hmacSha256 } from "./hmac";
@@ -18,8 +20,9 @@ export const SANDBOX_COOKIE = "checkrail_sandbox";
 /** Set by the middleware on every request it handles (any client copy is replaced), read by the database seam. */
 export const SANDBOX_HEADER = "x-checkrail-sandbox";
 export const SANDBOX_ID_RE = /^[a-f0-9]{32}$/;
-/** How long the browser keeps the cookie. A copy deleted for being idle is made again, fresh, on the next visit. */
+/** How long the browser keeps the cookie, and how long the token inside it is valid. */
 export const SANDBOX_COOKIE_MAX_AGE = 24 * 3600;
+export const MIN_SANDBOX_SECRET = 16;
 
 export const DEFAULT_SANDBOX_MAX = 50;
 export const DEFAULT_SANDBOX_TTL_MINUTES = 120;
@@ -56,22 +59,19 @@ export function sandboxSetting(env: Env): SandboxSetting {
     if ((env.RAIL_MODE || "mock") !== "mock") refused = "RAIL_MODE is not mock";
     else if (env.AI_MODE === "live") refused = "AI_MODE is live";
     else if (realMoneyEnv(env)) refused = "PAYPAL_ENV=live, STELLAR_NETWORK=public or WISE_ENV=live is set";
+    else if (env.NODE_ENV === "production" && !sandboxKeyMaterial(env)) refused = `CHECKRAIL_SANDBOX_SECRET is not set (at least ${MIN_SANDBOX_SECRET} characters), which production requires`;
   }
   return { requested, on: requested && refused === null, refused, max, ttlMinutes };
 }
 
-/**
- * The signing key. A set secret wins; otherwise one is derived from settings the hosted demo already keeps secret
- * (the logins and the data key), so the edge and the Node server agree without sharing state.
- */
-export function sandboxKeyMaterial(env: Env): string {
+/** The signing key: CHECKRAIL_SANDBOX_SECRET, or null when it is missing or too short. Never derived from other settings. */
+export function sandboxKeyMaterial(env: Env): string | null {
   const set = env.CHECKRAIL_SANDBOX_SECRET?.trim();
-  if (set) return set;
-  return ["derived", env.CHECKRAIL_USERS ?? "", env.CHECKRAIL_BASIC_AUTH ?? "", env.DUELINE_BASIC_AUTH ?? "", env.CHECKRAIL_DATA_KEY ?? ""].join("|");
+  return set && set.length >= MIN_SANDBOX_SECRET ? set : null;
 }
 
-/** The message that is signed for a sandbox id. */
-export const signedMessage = (id: string) => `checkrail-sandbox:${id}`;
+/** The message that is signed: the id and when the token expires. */
+export const signedMessage = (id: string, exp: string) => `checkrail-sandbox:${id}.${exp}`;
 
 /** A new random sandbox id: 16 bytes as hex. */
 export function newSandboxId(): string {
@@ -81,24 +81,28 @@ export function newSandboxId(): string {
 }
 
 const enc = new TextEncoder();
+const sign = (id: string, exp: string, material: string) => base64url(hmacSha256(enc.encode(material), enc.encode(signedMessage(id, exp))));
 
-/** "<id>.<signature>": HMAC-SHA256 of the id under the key, base64url. */
-export function signSandboxId(id: string, material: string): string {
-  return `${id}.${base64url(hmacSha256(enc.encode(material), enc.encode(signedMessage(id))))}`;
+/** "<id>.<expiry, seconds since 1970 in base 36>.<signature>": HMAC-SHA256 under the key, base64url. */
+export function signSandboxId(id: string, material: string, nowMs: number = Date.now()): string {
+  const exp = Math.floor(nowMs / 1000 + SANDBOX_COOKIE_MAX_AGE).toString(36);
+  return `${id}.${exp}.${sign(id, exp, material)}`;
 }
 
-/** The id inside a token, or null when the token is malformed or not signed with this key. */
-export function verifySandboxToken(token: string | null | undefined, material: string): string | null {
-  const id = idOf(token);
-  if (!id) return null;
-  return sameText(signSandboxId(id, material), token!) ? id : null;
+/** The id inside a token, or null when the token is malformed, expired or not signed with this key. */
+export function verifySandboxToken(token: string | null | undefined, material: string | null, nowMs: number = Date.now()): string | null {
+  if (!material || !token || token.length > 120) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [id, exp, sig] = parts;
+  if (!SANDBOX_ID_RE.test(id) || !/^[a-z0-9]{1,10}$/.test(exp)) return null;
+  if (parseInt(exp, 36) * 1000 <= nowMs) return null;
+  return sameText(sign(id, exp, material), sig) ? id : null;
 }
 
 /** The id part of a well-formed token, unverified. */
 export function idOf(token: string | null | undefined): string | null {
-  if (!token || token.length > 100) return null;
-  const dot = token.indexOf(".");
-  const id = dot > 0 ? token.slice(0, dot) : "";
+  const id = token?.split(".")[0] ?? "";
   return SANDBOX_ID_RE.test(id) ? id : null;
 }
 
@@ -111,10 +115,12 @@ export function sameText(a: string, b: string): boolean {
 
 /**
  * The middleware's half: keep this browser's sandbox when its cookie is valid, otherwise start a new one. `fresh`
- * means the response must set the cookie.
+ * means the response must set the cookie. Null when there is no key to sign with (the server then refuses, see
+ * server.ts, rather than falling back to the shared database).
  */
-export function sandboxForRequest(cookie: string | undefined, env: Env): { token: string; fresh: boolean } {
+export function sandboxForRequest(cookie: string | undefined, env: Env, nowMs: number = Date.now()): { token: string; fresh: boolean } | null {
   const material = sandboxKeyMaterial(env);
-  if (cookie && verifySandboxToken(cookie, material)) return { token: cookie, fresh: false };
-  return { token: signSandboxId(newSandboxId(), material), fresh: true };
+  if (!material) return null;
+  if (cookie && verifySandboxToken(cookie, material, nowMs)) return { token: cookie, fresh: false };
+  return { token: signSandboxId(newSandboxId(), material, nowMs), fresh: true };
 }

@@ -4,18 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { businesses, obligations } from "@/lib/db/schema";
+import { businesses, obligations, vendors } from "@/lib/db/schema";
 import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER } from "@/lib/basicAuth";
 import { isRole } from "@/lib/auth/roles";
 import { requirePermission, resolveActor, type Actor } from "@/lib/engine/users";
 import { runAs } from "@/lib/engine/requestContext";
 import { uploadDocument } from "@/lib/engine/attachments";
-import { ingestObligation } from "@/lib/engine/orchestrator";
+import { confirmSettlement, executeObligation, ingestObligation } from "@/lib/engine/orchestrator";
 import { runAutopilot, setAutonomy } from "@/lib/engine/autopilot";
 import { handleMcp } from "@/lib/agent/mcp";
-import { sandboxActive } from "@/lib/sandbox/server";
+import { activeSandboxId } from "@/lib/sandbox/server";
+import { autopilotMessage, type NamedPayment } from "./messages";
 import { tourEnabled } from "./enabled";
 import type { Permission } from "@/lib/auth/roles";
 import pkg from "../../../package.json";
@@ -23,7 +24,9 @@ import pkg from "../../../package.json";
 /**
  * The two things the judge tour does from its own card, through the same code paths as the product:
  *  - step 5 turns Autopilot on (setAutonomy, then an autopilot pass, as Settings does), first bringing in Rosa's trip
- *    completion sheet the way New request does if it is not there yet, so there is a payment to schedule;
+ *    completion sheet the way New request does if it is not there yet, so there is a payment to schedule. If step 4
+ *    was skipped, Maria's JOB-HG4D-0921 is paid over PayPal first exactly as step 4's button does, so the shortened
+ *    window never shows Autopilot sending the request whose recorded reading raised a possible duplicate;
  *  - step 6 has a demo agent ask check_payment through the MCP handler itself, so a judge without an MCP client sees
  *    a real check land on the Agents page.
  * Demo only: refused with live rails or real money, and unless sandbox mode or the demo personas are on.
@@ -36,6 +39,8 @@ const SANDBOX_WINDOW_SECONDS = 20;
 const SHARED_WINDOW_SECONDS = 60;
 const ROSA_REF = "JOB-CEB2D-1024";
 const ROSA_FILE = "tripsheet-ceb2d-1024.pdf";
+/** Step 4's request: the clean one paid over PayPal by hand. */
+const STEP4_REF = "JOB-HG4D-0921";
 const DEMO_AGENT = { name: "demo-agent (tour)", scopes: ["check" as const], digest: Buffer.alloc(32) };
 
 const tourAllowed = tourEnabled;
@@ -53,6 +58,16 @@ async function who(): Promise<{ actor: Actor; login: string; businessId: string 
   return { actor: runAs(login, () => resolveActor(getDb(), biz.id, username, role, h.get(PERSONA_HEADER) ?? undefined)), login, businessId: biz.id };
 }
 
+/** Who and how much, for the requests with these ids, in the order given. */
+function named(db: ReturnType<typeof getDb>, ids: string[]): NamedPayment[] {
+  if (!ids.length) return [];
+  const rows = db.select({ id: obligations.id, vendorName: vendors.name, amountMinor: obligations.amountMinor, currency: obligations.currency }).from(obligations).leftJoin(vendors, eq(vendors.id, obligations.vendorId)).where(inArray(obligations.id, ids)).all();
+  return ids.flatMap((id) => {
+    const r = rows.find((x) => x.id === id);
+    return r ? [{ vendorName: r.vendorName, amountMinor: r.amountMinor ?? 0, currency: r.currency ?? "USD" }] : [];
+  });
+}
+
 function may(actor: Actor, p: Permission, what: string): void {
   requirePermission(actor, p, what);
 }
@@ -65,6 +80,15 @@ export async function tourAutopilotAction(): Promise<TourActionResult> {
     may(actor, "ingest", "create payment requests");
     return await runAs(login, async () => {
       const db = getDb();
+      // Step 4 skipped: do what its button does (pay over PayPal, then confirm), so Autopilot does not send it.
+      let paidFirst: NamedPayment | null = null;
+      const step4 = db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.businessId, businessId), eq(obligations.sourceRef, STEP4_REF), eq(obligations.state, "approved"))).get();
+      if (step4) {
+        may(actor, "pay", "send payments");
+        const r = await executeObligation(db, step4.id, { actor: actor.id, rail: "paypal" });
+        if (r.status === "submitted") await confirmSettlement(db, step4.id, "post-execute");
+        paidFirst = named(db, [step4.id])[0] ?? null;
+      }
       // Rosa's trip sheet, as New request brings it in: the PDF is read, its figures become the evidence.
       const open = db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.businessId, businessId), eq(obligations.sourceRef, ROSA_REF), notInArray(obligations.state, ["blocked", "cancelled"]))).get();
       if (!open) {
@@ -72,18 +96,12 @@ export async function tourAutopilotAction(): Promise<TourActionResult> {
         const up = await uploadDocument(db, { businessId, name: ROSA_FILE, mimeType: "application/pdf", bytes, actor: actor.id });
         await ingestObligation(db, { businessId, sourceType: "invoice", rawInput: "Trip sheet attached for Rosa, please pay.", evidence: up.proposed.map((p) => ({ ...p, attachmentId: up.attachmentId })), actor: actor.id, evidenceSource: "operator" });
       }
-      const seconds = sandboxActive() ? SANDBOX_WINDOW_SECONDS : SHARED_WINDOW_SECONDS;
+      const seconds = activeSandboxId() ? SANDBOX_WINDOW_SECONDS : SHARED_WINDOW_SECONDS;
       setAutonomy(db, businessId, actor.id, { autonomy: "autopilot", autopilotCancelWindowSeconds: seconds });
       const pass = await runAutopilot(db, { businessId });
       for (const p of ["/", "/obligations", "/settings", "/close", "/demo"]) revalidatePath(p);
       const window = seconds === SANDBOX_WINDOW_SECONDS ? `${seconds} seconds (shortened for this demo; the default is 10 minutes)` : "1 minute (the shortest Settings allows)";
-      return {
-        ok: true,
-        message:
-          pass.scheduled.length === 1 ? `Autopilot is on. Rosa's USD 190 is scheduled with a cancel window of ${window}.`
-          : pass.scheduled.length > 1 ? `Autopilot is on. ${pass.scheduled.length} payments the rules passed are scheduled, each with a cancel window of ${window}.`
-          : `Autopilot is on with a cancel window of ${window}. Nothing new was ready to schedule.`,
-      };
+      return { ok: true, message: autopilotMessage(named(db, pass.scheduled), window, paidFirst) };
     });
   } catch (e) {
     return { ok: false, message: (e as Error).message };

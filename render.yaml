@@ -33,7 +33,7 @@ services:
         value: VCB 0071000000000 Ridgeline Vietnam (demo)
       # A private copy of the demo per visitor (docs/JUDGES.md): each browser gets its own copy of the seeded
       # database, so two judges at once never see each other's clicks. Simulated rails only; refused otherwise.
-      # At most 50 copies, each deleted after 120 minutes idle (when full, the one idle longest goes). The copies
+      # At most 50 copies, each deleted after 120 minutes idle (when full, only a copy idle for 30 minutes makes room; otherwise a new visitor sees a busy page). The copies
       # live in ./data/sandboxes, which the free plan's disk loses on restart, as it should.
       - key: CHECKRAIL_SANDBOX
         value: "1"

@@ -26,8 +26,10 @@ import { ACTOR_HEADER, ROLE_HEADER } from "@/lib/basicAuth";
 import { amendAction, resetDemoAction } from "@/app/actions";
 import { POST as mcpPost } from "@/app/api/mcp/route";
 import { middleware } from "@/middleware";
-import { SandboxPool } from "./pool";
-import { activeSandboxId, installSandboxPool, startSandboxes, uninstallSandboxPool } from "./server";
+import { runAutopilot, setAutonomy } from "@/lib/engine/autopilot";
+import { DEMO_BUSINESS_ID } from "@/lib/demo/seed";
+import { SandboxBusyError, SandboxPool, isSandboxBusy } from "./pool";
+import { activeCopiedAt, activeSandboxId, installSandboxPool, sandboxBusy, startSandboxes, uninstallSandboxPool } from "./server";
 import { hmacSha256, sha256 } from "./hmac";
 import { SANDBOX_COOKIE, SANDBOX_HEADER, newSandboxId, sandboxForRequest, sandboxKeyMaterial, sandboxSetting, signSandboxId, verifySandboxToken } from "./settings";
 
@@ -37,12 +39,12 @@ const seed = async (db: Db) => void (await seedDemo(db, { history: true }));
 const phuongOf = (db: Db) => db.select().from(obligations).where(eq(obligations.sourceRef, "INV-2026-0152")).get()!;
 
 /** Run `fn` inside a Next request store, as the server does for every page, action and route handler. */
-function inRequest<T>(token: string | null, fn: () => T, via: "header" | "cookie" = "header"): T {
-  const h = new Headers({ [ACTOR_HEADER]: "daniel", [ROLE_HEADER]: "admin", "content-type": "application/json" });
+function inRequest<T>(token: string | null, fn: () => T, via: "header" | "cookie" = "header", pathname = "/", ip = "198.51.100.7"): T {
+  const h = new Headers({ [ACTOR_HEADER]: "daniel", [ROLE_HEADER]: "admin", "content-type": "application/json", "x-forwarded-for": ip });
   if (token && via === "header") h.set(SANDBOX_HEADER, token);
   state.headers = h;
   const cookies = { get: (n: string) => (token && via === "cookie" && n === SANDBOX_COOKIE ? { name: n, value: token } : undefined) };
-  return workUnitAsyncStorage.run({ type: "request", headers: h, cookies } as never, fn);
+  return workUnitAsyncStorage.run({ type: "request", headers: h, cookies, url: { pathname, search: "" } } as never, fn);
 }
 
 describe("sandbox setting", () => {
@@ -52,6 +54,29 @@ describe("sandbox setting", () => {
     expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", RAIL_MODE: "mock", CHECKRAIL_SANDBOX_MAX: "3", CHECKRAIL_SANDBOX_TTL_MINUTES: "5" })).toMatchObject({ on: true, max: 3, ttlMinutes: 5 });
     expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", CHECKRAIL_SANDBOX_MAX: "zero" }).max).toBe(50);
   });
+
+  it("requires CHECKRAIL_SANDBOX_SECRET in production, and never derives one from the logins or the data key", () => {
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", NODE_ENV: "production" })).toMatchObject({ on: false, refused: expect.stringMatching(/CHECKRAIL_SANDBOX_SECRET/) });
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", NODE_ENV: "production", CHECKRAIL_SANDBOX_SECRET: "short" }).on).toBe(false);
+    expect(sandboxSetting({ CHECKRAIL_SANDBOX: "1", NODE_ENV: "production", CHECKRAIL_SANDBOX_SECRET: MATERIAL }).on).toBe(true);
+    expect(sandboxKeyMaterial({ CHECKRAIL_USERS: "judge:a-long-password:admin", CHECKRAIL_DATA_KEY: "x".repeat(44) })).toBeNull();
+    expect(sandboxForRequest(undefined, {})).toBeNull();
+  });
+
+  it("makes up a random secret for a development server that has none", async () => {
+    const env: Record<string, string | undefined> = { CHECKRAIL_SANDBOX: "1" };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await startSandboxes(env, tmp())).toBe(true);
+      expect(env.CHECKRAIL_SANDBOX_SECRET?.length).toBeGreaterThanOrEqual(32);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/random one/));
+    } finally {
+      uninstallSandboxPool();
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  }, 60_000);
 
   it("is refused with a live rail, live AI or anything pointing at real money", () => {
     for (const env of [{ RAIL_MODE: "live" }, { AI_MODE: "live" }, { PAYPAL_ENV: "live" }, { STELLAR_NETWORK: "public" }, { WISE_ENV: "live" }]) {
@@ -88,21 +113,31 @@ describe("the signed cookie", () => {
     expect(id).toMatch(/^[a-f0-9]{32}$/);
     const token = signSandboxId(id, MATERIAL);
     expect(verifySandboxToken(token, MATERIAL)).toBe(id);
-    expect(verifySandboxToken(token, "another key")).toBeNull();
-    expect(verifySandboxToken(`${newSandboxId()}.${token.split(".")[1]}`, MATERIAL)).toBeNull();
-    expect(verifySandboxToken(`../../etc.${token.split(".")[1]}`, MATERIAL)).toBeNull();
+    expect(verifySandboxToken(token, "another key that is long")).toBeNull();
+    const [, exp, sig] = token.split(".");
+    expect(verifySandboxToken(`${newSandboxId()}.${exp}.${sig}`, MATERIAL)).toBeNull();
+    expect(verifySandboxToken(`../../etc.${exp}.${sig}`, MATERIAL)).toBeNull();
+    expect(verifySandboxToken(`${id}.${(parseInt(exp, 36) + 1000).toString(36)}.${sig}`, MATERIAL)).toBeNull(); // a later expiry is not signed
     expect(verifySandboxToken(id, MATERIAL)).toBeNull();
     expect(verifySandboxToken(null, MATERIAL)).toBeNull();
+  });
+
+  it("carries an expiry: a day after it was signed it is refused", () => {
+    const t0 = Date.UTC(2026, 10, 1);
+    const token = signSandboxId(newSandboxId(), MATERIAL, t0);
+    expect(verifySandboxToken(token, MATERIAL, t0 + 23 * 3600_000)).toBeTruthy();
+    expect(verifySandboxToken(token, MATERIAL, t0 + 25 * 3600_000)).toBeNull();
+    const env = { CHECKRAIL_SANDBOX_SECRET: MATERIAL };
+    expect(sandboxForRequest(token, env, t0 + 25 * 3600_000)?.fresh).toBe(true);
   });
 
   it("keeps a valid cookie and replaces a forged one", () => {
     const env = { CHECKRAIL_SANDBOX_SECRET: MATERIAL };
     const mine = signSandboxId(newSandboxId(), MATERIAL);
     expect(sandboxForRequest(mine, env)).toEqual({ token: mine, fresh: false });
-    const forged = sandboxForRequest(`${newSandboxId()}.forged`, env);
+    const forged = sandboxForRequest(`${newSandboxId()}.forged`, env)!;
     expect(forged.fresh).toBe(true);
     expect(verifySandboxToken(forged.token, MATERIAL)).toBeTruthy();
-    expect(sandboxKeyMaterial({})).not.toBe(sandboxKeyMaterial({ CHECKRAIL_USERS: "judge:pw:admin" }));
   });
 
   it("the middleware sets an httpOnly, SameSite=Lax cookie once and forwards the token, replacing any sent by the client", () => {
@@ -125,6 +160,14 @@ describe("the signed cookie", () => {
       const hook = middleware(new NextRequest("http://checkrail.test/api/webhooks/paypal", { method: "POST" }));
       expect(hook.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBeNull();
       expect(hook.headers.get("set-cookie")).toBeNull();
+      // A vendor link without this browser's cookie gets a plain page, never a new copy.
+      const link = "http://checkrail.test/onboard/abcdefghijklmnopqrstuvwxyz012345";
+      const stranger = middleware(new NextRequest(link));
+      expect(stranger.headers.get("set-cookie")).toBeNull();
+      expect(stranger.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBeNull();
+      expect(stranger.headers.get("content-type")).toMatch(/text\/html/);
+      const owner = middleware(new NextRequest(link, { headers: { cookie: `${SANDBOX_COOKIE}=${forwarded}` } }));
+      expect(owner.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBe(forwarded);
       vi.stubEnv("CHECKRAIL_SANDBOX", "");
       const off = middleware(new NextRequest("http://checkrail.test/", { headers: { [SANDBOX_HEADER]: forwarded } }));
       expect(off.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBeNull();
@@ -141,7 +184,7 @@ describe("the pool", () => {
   let pool: SandboxPool;
   beforeAll(async () => {
     dir = tmp();
-    pool = new SandboxPool({ dir, max: 3, ttlMs: 60_000, seed, now: () => clock, retireDelayMs: 0 });
+    pool = new SandboxPool({ dir, max: 3, ttlMs: 60_000, seed, now: () => clock, retireDelayMs: 0, protectMs: 0, newPerClient: 100 });
     await pool.init();
   }, 30_000);
   afterAll(() => pool.close());
@@ -164,7 +207,7 @@ describe("the pool", () => {
     expect(() => pool.dbFor("../template")).toThrow();
   });
 
-  it("evicts the copy idle longest when full", () => {
+  it("evicts the copy idle longest when full (with no protection window)", () => {
     const ids = pool.ids();
     clock += 1000;
     pool.dbFor(ids[1]); // the second one is now the most recent
@@ -219,10 +262,15 @@ describe("one request, one visitor's copy", () => {
   afterAll(() => uninstallSandboxPool());
   afterEach(() => vi.unstubAllEnvs());
 
-  it("outside a request, and in a request without a valid token, getDb() is the shared database", () => {
-    expect(getDb()).toBe(shared);
-    expect(inRequest(null, () => getDb())).toBe(shared);
-    expect(inRequest(signSandboxId(newSandboxId(), "wrong key"), () => getDb())).toBe(shared);
+  it("fails closed: no request, no token or an unknown store never gets the shared database", () => {
+    expect(() => getDb()).toThrow(/no request/);
+    expect(() => inRequest(null, () => getDb())).toThrow(/carries no copy/);
+    expect(() => inRequest(signSandboxId(newSandboxId(), "a wrong key, long enough"), () => getDb())).toThrow(/carries no copy/);
+    // The internal store changed shape (a Next upgrade): no type, or headers that are not Headers.
+    expect(() => workUnitAsyncStorage.run({ kind: "request", headers: new Headers({ [SANDBOX_HEADER]: a }) } as never, () => getDb())).toThrow();
+    expect(() => workUnitAsyncStorage.run({ type: "request", headers: { [SANDBOX_HEADER]: a }, url: { pathname: "/" } } as never, () => getDb())).toThrow();
+    // Only the paths that are no visitor may use the shared database without a token.
+    for (const p of ["/api/mcp", "/api/webhooks/paypal", "/api/autopilot/tick"]) expect(inRequest(null, () => getDb(), "header", p)).toBe(shared);
     const viaHeader = inRequest(a, () => getDb());
     expect(viaHeader).not.toBe(shared);
     expect(inRequest(a, () => getDb(), "cookie")).toBe(viaHeader);
@@ -251,13 +299,136 @@ describe("one request, one visitor's copy", () => {
     expect(shared.select().from(agentChecks).all()).toEqual([]);
   });
 
-  it("Start over resets only the visitor's copy", async () => {
+  it("Start over resets only the visitor's copy, and gives it a new copy time", async () => {
     expect(inRequest(a, () => activeSandboxId())).toBe(a.split(".")[0]);
+    const before = inRequest(a, () => activeCopiedAt());
+    await new Promise((r) => setTimeout(r, 5));
     const r = await inRequest(a, () => resetDemoAction());
     expect(r).toMatchObject({ ok: true, message: expect.stringMatching(/Started over/) });
     expect(inRequest(a, () => phuongOf(getDb()).state)).toBe("blocked");
+    expect(inRequest(a, () => activeCopiedAt())).not.toBe(before);
     expect(inRequest(b, () => getDb().select().from(agentChecks).all())).toHaveLength(1);
     // The shared database was never touched by any of it.
     expect(shared.select().from(auditEntries).all()).toHaveLength(sharedAudit);
   });
+});
+
+describe("a busy pool never pushes out a judge in the middle of the demo", () => {
+  let clock = 5_000_000;
+  let pool: SandboxPool;
+  beforeAll(async () => {
+    pool = new SandboxPool({ dir: tmp(), max: 3, ttlMs: 3 * 3600_000, seed, now: () => clock, retireDelayMs: 0 });
+    await pool.init();
+  }, 30_000);
+  afterAll(() => pool.close());
+
+  it("allows five new copies per address in ten minutes", () => {
+    const big = new SandboxPool({ dir: tmp(), max: 50, ttlMs: 3600_000, seed, now: () => clock, retireDelayMs: 0 });
+    (big as unknown as { templateAt: number }).templateAt = clock;
+    fs.copyFileSync(pool.templatePath, big.templatePath);
+    for (let i = 0; i < 5; i++) big.dbFor(newSandboxId(), { client: "203.0.113.9" });
+    expect(() => big.dbFor(newSandboxId(), { client: "203.0.113.9" })).toThrow(SandboxBusyError);
+    expect(() => big.dbFor(newSandboxId(), { client: "203.0.113.10" })).not.toThrow();
+    clock += 11 * 60_000;
+    expect(() => big.dbFor(newSandboxId(), { client: "203.0.113.9" })).not.toThrow();
+    big.close();
+  });
+
+  it("when full, evicts only a copy idle for 30 minutes; otherwise the newcomer is told the demo is busy", () => {
+    const judges = [newSandboxId(), newSandboxId(), newSandboxId()];
+    judges.forEach((id, i) => pool.dbFor(id, { client: `10.0.0.${i}` }));
+    clock += 60_000;
+    // Anonymous newcomers with a full pool of copies used a minute ago: nobody is pushed out.
+    for (let i = 0; i < 4; i++) expect(() => pool.dbFor(newSandboxId(), { client: `192.0.2.${i}` })).toThrow(SandboxBusyError);
+    expect(judges.every((id) => pool.has(id))).toBe(true);
+    // Half an hour later, judge 0 has gone quiet while 1 and 2 kept going: only judge 0's copy makes room.
+    clock += 31 * 60_000;
+    pool.dbFor(judges[1]);
+    pool.dbFor(judges[2]);
+    const late = newSandboxId();
+    pool.dbFor(late, { client: "192.0.2.99" });
+    expect(pool.has(judges[0])).toBe(false);
+    expect(pool.has(judges[1]) && pool.has(judges[2]) && pool.has(late)).toBe(true);
+  });
+
+  it("closes replaced copies promptly, so open files cannot pile up", () => {
+    const slow = new SandboxPool({ dir: tmp(), max: 10, ttlMs: 3600_000, seed, now: () => clock, retireDelayMs: 60_000 });
+    fs.copyFileSync(pool.templatePath, slow.templatePath);
+    const id = newSandboxId();
+    slow.dbFor(id);
+    for (let i = 0; i < 10; i++) slow.reset(id);
+    expect(slow.waitingToClose).toBeLessThanOrEqual(4);
+    slow.close();
+    expect(slow.waitingToClose).toBe(0);
+  });
+
+  it("reseeds the template from housekeeping at a quiet moment, never on a request", async () => {
+    const built = pool.templateBuiltAt;
+    clock += 4 * 3600_000; // older than the three hours allowed
+    pool.dbFor(pool.ids()[0]);
+    expect(pool.templateBuiltAt).toBe(built); // a request never starts it
+    expect(pool.maintain(clock)).toBeNull(); // used a moment ago: not quiet yet
+    clock += 2 * 60_000;
+    const refresh = pool.maintain(clock);
+    expect(refresh).not.toBeNull();
+    await refresh;
+    expect(pool.templateBuiltAt).toBe(clock);
+  }, 60_000);
+});
+
+describe("a busy visitor sees the busy page, not someone else's copy", () => {
+  let pool: SandboxPool;
+  beforeAll(async () => {
+    pool = new SandboxPool({ dir: tmp(), max: 1, ttlMs: 3600_000, seed, retireDelayMs: 0 });
+    await pool.init();
+    installSandboxPool(pool, MATERIAL);
+  }, 30_000);
+  afterAll(() => uninstallSandboxPool());
+
+  it("recognises a busy error from another copy of the module (a production build bundles it more than once)", () => {
+    class ForeignBusy extends Error {
+      readonly sandboxBusy = true;
+    }
+    expect(new ForeignBusy("x") instanceof SandboxBusyError).toBe(false);
+    expect(isSandboxBusy(new ForeignBusy("x"))).toBe(true);
+    expect(isSandboxBusy(new Error("x"))).toBe(false);
+  });
+
+  it("reads the template read-only and is flagged busy", () => {
+    const first = signSandboxId(newSandboxId(), MATERIAL);
+    const second = signSandboxId(newSandboxId(), MATERIAL);
+    expect(inRequest(first, () => sandboxBusy())).toBe(false);
+    const own = inRequest(first, () => getDb());
+    expect(inRequest(second, () => sandboxBusy())).toBe(true);
+    const shown = inRequest(second, () => getDb());
+    expect(shown).not.toBe(own);
+    expect(phuongOf(shown).state).toBe("blocked");
+    expect(() => shown.update(obligations).set({ state: "cancelled" }).run()).toThrow(/readonly/);
+    expect(pool.size).toBe(1);
+  });
+});
+
+describe("autopilot passes on two copies at once", () => {
+  it("each copy gets its own pass, its own result and its own scheduled rows", async () => {
+    const pool = new SandboxPool({ dir: tmp(), max: 5, ttlMs: 3600_000, seed, retireDelayMs: 0 });
+    await pool.init();
+    try {
+      const [a, b] = [pool.dbFor(newSandboxId()), pool.dbFor(newSandboxId())];
+      for (const db of [a, b]) setAutonomy(db, DEMO_BUSINESS_ID, "user:daniel", { autonomy: "autopilot", autopilotCancelWindowSeconds: 60 });
+      // Make B's copy differ: its clean request is cancelled, so B has nothing to schedule.
+      const clean = (db: Db) => db.select().from(obligations).where(eq(obligations.sourceRef, "JOB-HG4D-0921")).get()!;
+      b.update(obligations).set({ state: "cancelled" }).where(eq(obligations.id, clean(b).id)).run();
+      const [ra, rb] = await Promise.all([runAutopilot(a), runAutopilot(b)]);
+      expect(ra.scheduled).toEqual([clean(a).id]);
+      expect(rb.scheduled).toEqual([]);
+      expect(clean(a).releaseAt).not.toBeNull();
+      expect(clean(b).releaseAt).toBeNull();
+      // And the other way round: B's pass runs even while A's is in flight.
+      b.update(obligations).set({ state: "approved" }).where(eq(obligations.id, clean(b).id)).run();
+      const [, rb2] = await Promise.all([runAutopilot(a), runAutopilot(b)]);
+      expect(rb2.scheduled).toEqual([clean(b).id]);
+    } finally {
+      pool.close();
+    }
+  }, 60_000);
 });

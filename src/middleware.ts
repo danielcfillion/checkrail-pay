@@ -40,6 +40,9 @@ function tooMany(retryMs: number) {
   return new NextResponse("Too many attempts. Wait a few minutes and try again.", { status: 429, headers: { "Retry-After": String(Math.ceil(retryMs / 1000)) } });
 }
 
+/** What a vendor link opened outside the demo browser shows in sandbox mode. */
+const SANDBOX_LINK_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Open this link from the demo</title><style>:root{color-scheme:light dark}body{margin:0;font:15px/22px system-ui,sans-serif;background:#f4f6f9;color:#0a1628}main{max-width:32rem;margin:15vh auto;padding:0 16px}@media (prefers-color-scheme:dark){body{background:#0b111b;color:#e8edf3}}</style></head><body><main><h1 style="font-size:22px">Open this link from the demo</h1><p>Each visitor to this demo has a private copy of it, and this link belongs to one of them. Open it in the same browser where you are using the demo.</p></main></body></html>`;
+
 /*
  * Sandbox mode (CHECKRAIL_SANDBOX=1, simulated rails only; src/lib/sandbox/settings.ts): each browser gets a signed,
  * httpOnly cookie naming its own copy of the demo database, and every request it makes carries that token on to the
@@ -69,6 +72,9 @@ export function middleware(req: NextRequest) {
   if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return pass();
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
     if (overLimit(tokenHits, ip, TOKEN_LIMIT, TOKEN_WINDOW_MS)) return tooMany(TOKEN_WINDOW_MS);
+    // Sandbox mode: a vendor link belongs to the copy it was made in. It opens in the browser that has that copy; a
+    // browser without one gets a plain page instead of a new copy, so these unauthenticated paths can never fill the pool.
+    if (sandbox?.fresh) return new NextResponse(SANDBOX_LINK_HTML, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     headers.set(PUBLIC_HEADER, "1");
     return pass();
   }

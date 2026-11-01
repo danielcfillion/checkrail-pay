@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cancelWindowText } from "@/components/cancel-window";
 import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getViewer } from "@/lib/viewer";
 import { getDb } from "@/lib/db";
@@ -298,7 +299,7 @@ function changeText(detail: Record<string, unknown>, cur: string): string {
   if (from.autonomy !== to.autonomy) parts.push(`${String(from.autonomy ?? "assist")} to ${String(to.autonomy)}`);
   if (from.perPaymentCap !== to.perPaymentCap) parts.push(`per-payment cap ${formatMoneySymbol(Number(to.perPaymentCap), cur)}`);
   if (from.dailyCap !== to.dailyCap) parts.push(`daily cap ${formatMoneySymbol(Number(to.dailyCap), cur)}`);
-  if (from.windowSeconds !== to.windowSeconds) parts.push(`cancel window ${Math.round(Number(to.windowSeconds) / 60)} min`);
+  if (from.windowSeconds !== to.windowSeconds) parts.push(`cancel window ${cancelWindowText(Number(to.windowSeconds))}`);
   return parts.length ? `: ${parts.join(", ")}` : "";
 }
 

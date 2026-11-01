@@ -3,17 +3,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { tourAutopilotAction, tourDemoAgentAction, type TourActionResult } from "./actions";
-import { setTourState, useTourState } from "./store";
+import { setTourState, takeFocusRequest, useTourState } from "./store";
 import styles from "./Tour.module.css";
-import { TOUR_STEPS, TOUR_TOTAL, finale, move, nextLabel, progressLabel, resolvePath, stepOnPage, type TourIds, type TourState, type TourTarget } from "./steps";
+import { TOUR_STEPS, TOUR_TOTAL, finale, move, nextLabel, outlivedCopy, progressLabel, resolvePath, stepOnPage, type TourIds, type TourState, type TourTarget } from "./steps";
 
 /**
  * The judge tour: a small card (bottom right on a desktop, a bottom sheet above the phone navigation) that walks the
  * eight steps, with a soft ring around what to look at. Next and Back go to the step's page. Progress is a cookie
- * (store.ts). Escape folds the card to a chip; the chip opens it again. The step text is announced politely and focus
- * moves to the step title when the visitor moves through the tour from the card.
+ * (store.ts), tied to the copy of the demo it was taken in (`copy`): a tour that outlives its copy offers to start
+ * again. Escape, from anywhere, folds the card to a chip and focus goes to the chip; the chip opens it again. Each
+ * step is announced once, by moving focus to its title when the visitor starts or moves through the tour (no live
+ * region as well, which would read it twice).
  */
-export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourIds; sandbox: boolean }) {
+export function Tour({ initial, ids, sandbox, copy }: { initial: TourState; ids: TourIds; sandbox: boolean; copy: string | null }) {
   const state = useTourState(initial);
   const pathname = usePathname() ?? "/";
   const router = useRouter();
@@ -23,6 +25,8 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
   const heading = useRef<HTMLHeadingElement>(null);
   const card = useRef<HTMLElement>(null);
   const moved = useRef(false);
+  const chip = useRef<HTMLButtonElement>(null);
+  const foldedByUser = useRef(false);
   // A page the card itself is taking the visitor to, and the page they were on: while that navigation is under way
   // the card already shows the next step, instead of "on another page".
   const [arriving, setArriving] = useState<{ to: string; from: string } | null>(null);
@@ -32,8 +36,34 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
   const here = step ? stepOnPage(step, pathname, ids) : null;
   const stepPath = step ? resolvePath(step.path, ids) : null;
 
-  // Focus the step title after the visitor moved through the tour from the card (not on a page load).
+  // A tour started without a copy stamp (Take the tour) takes the current copy's.
   useEffect(() => {
+    if (state.status === "on" && !state.copy && copy) setTourState({ ...state, copy });
+  }, [state, copy]);
+
+  // Escape folds the card from anywhere on the page, unless something else already used the key.
+  useEffect(() => {
+    if (state.status === "off" || folded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      foldedByUser.current = true;
+      setFolded(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state.status, folded]);
+
+  // Folding moves focus to the chip; opening it again moves focus back to the step title.
+  useEffect(() => {
+    if (!foldedByUser.current) return;
+    foldedByUser.current = false;
+    if (folded) chip.current?.focus();
+    else heading.current?.focus();
+  }, [folded]);
+
+  // Focus the step title after the visitor started the tour or moved through it from the card (not on a page load).
+  useEffect(() => {
+    if (takeFocusRequest()) moved.current = true;
     if (!moved.current) return;
     if (step && stepPath && stepPath !== pathname.replace(/(.)\/+$/, "$1")) return; // still navigating
     moved.current = false;
@@ -71,7 +101,16 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
 
   if (folded) {
     return (
-      <button type="button" className="btn btn-sm fixed bottom-[calc(76px+env(safe-area-inset-bottom))] right-4 z-[45] shadow-md md:bottom-6 md:right-6" onClick={() => setFolded(false)} aria-label="Open the tour again">
+      <button
+        ref={chip}
+        type="button"
+        className="btn btn-sm fixed bottom-[calc(76px+env(safe-area-inset-bottom))] right-4 z-[45] shadow-md md:bottom-6 md:right-6"
+        onClick={() => {
+          foldedByUser.current = true;
+          setFolded(false);
+        }}
+        aria-label="Open the tour again"
+      >
         Tour{step ? `, ${progressLabel(index).toLowerCase()}` : ""}
       </button>
     );
@@ -82,12 +121,6 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
       ref={card}
       role="region"
       aria-label={label}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.stopPropagation();
-          setFolded(true);
-        }
-      }}
       className={`panel ${styles.sheet} fixed inset-x-0 bottom-[calc(57px+env(safe-area-inset-bottom))] z-[45] max-h-[60vh] overflow-y-auto px-4 pb-4 pt-3 md:inset-x-auto md:bottom-6 md:right-6 md:max-h-[calc(100vh-48px)] md:w-[380px] md:px-5 md:pt-4`}
     >
       {children}
@@ -99,12 +132,10 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
     return shell(
       <>
         <p className="dense text-settled">Tour complete</p>
-        <div aria-live="polite">
-          <h2 ref={heading} tabIndex={-1} className="mt-1 text-base font-semibold outline-none">
-            {f.title}
-          </h2>
-          <p className="mt-1 text-ink-soft">{f.body}</p>
-        </div>
+        <h2 ref={heading} tabIndex={-1} className="mt-1 text-base font-semibold outline-none">
+          {f.title}
+        </h2>
+        <p className="mt-1 text-ink-soft">{f.body}</p>
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <button type="button" className="btn btn-sm" onClick={() => go({ status: "on", index: TOUR_TOTAL - 1 })}>
             Back
@@ -119,6 +150,26 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
   }
 
   if (!step) return null;
+  if (outlivedCopy(state, copy)) {
+    return shell(
+      <>
+        <p className="dense text-ink-soft">{progressLabel(index)}</p>
+        <h2 ref={heading} tabIndex={-1} className="mt-1 text-base font-semibold outline-none">
+          This is a fresh copy of the demo
+        </h2>
+        <p className="mt-1 text-ink-soft">{sandbox ? "Your copy was replaced (Start over, or it was deleted after a while without use), so what you did in the earlier steps is gone." : "The demo was reset, so what you did in the earlier steps is gone."} Start the tour again from step 1.</p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <button type="button" className="link text-sm text-ink-soft" onClick={() => setTourState({ status: "off" })}>
+            Skip tour
+          </button>
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => go(copy ? { status: "on", index: 0, copy } : { status: "on", index: 0 })}>
+            Start the tour again
+          </button>
+        </div>
+      </>,
+      "Guided tour",
+    );
+  }
   const done = result?.index === index && result.r.ok;
   const shown = here ?? (arriving && arriving.to === stepPath && arriving.from === pathname ? {} : null);
   const actionPrimary = Boolean(step.action && shown && !done);
@@ -129,7 +180,15 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
         <>
           <div className="flex items-center justify-between gap-3">
             <p className="dense text-ink-soft">{progressLabel(index)}</p>
-            <button type="button" className="link dense text-ink-soft" onClick={() => setFolded(true)} aria-label="Fold the tour away (Escape)">
+            <button
+              type="button"
+              className="link dense text-ink-soft"
+              onClick={() => {
+                foldedByUser.current = true;
+                setFolded(true);
+              }}
+              aria-label="Fold the tour away (Escape)"
+            >
               Hide
             </button>
           </div>
@@ -138,12 +197,10 @@ export function Tour({ initial, ids, sandbox }: { initial: TourState; ids: TourI
               <span key={s.id} className="h-1 flex-1 rounded-full" style={{ background: i <= index ? "var(--action)" : "var(--rule)" }} />
             ))}
           </div>
-          <div aria-live="polite">
-            <h2 ref={heading} tabIndex={-1} className="mt-3 text-base font-semibold outline-none">
-              {step.title}
-            </h2>
-            {shown ? <p className="mt-1 text-ink-soft">{step.body}</p> : <p className="mt-1 text-ink-soft">{stepPath ? "This step is on another page." : "This step needs the demo story, which is not loaded. Start over on the Demo guide to load it."}</p>}
-          </div>
+          <h2 ref={heading} tabIndex={-1} className="mt-3 text-base font-semibold outline-none">
+            {step.title}
+          </h2>
+          {shown ? <p className="mt-1 text-ink-soft">{step.body}</p> : <p className="mt-1 text-ink-soft">{stepPath ? "This step is on another page." : "This step needs the demo story, which is not loaded. Start over on the Demo guide to load it."}</p>}
           {shown ? (
             <p className="mt-3 rounded-lg bg-action-soft px-3 py-2">
               <span className="font-medium">Do: </span>
@@ -222,7 +279,6 @@ const reduceMotion = () => typeof window !== "undefined" && window.matchMedia("(
 function Ring({ target, avoid }: { target: TourTarget; avoid: React.RefObject<HTMLElement | null> }) {
   const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const el = useRef<HTMLElement | null>(null);
-  const lastHeight = useRef(0);
 
   useLayoutEffect(() => {
     let stopped = false;
@@ -249,13 +305,8 @@ function Ring({ target, avoid }: { target: TourTarget; avoid: React.RefObject<HT
         checksLeft = Math.max(0, checksLeft - 1);
         nextCheck = now + 700;
       }
+      // Only follows it from here: the page is not scrolled again when the target grows.
       const r = node.getBoundingClientRect();
-      // It grew (a countdown appeared, a row landed): check once more that it is not under the card.
-      if (lastHeight.current && Math.abs(r.height - lastHeight.current) > 20) {
-        checksLeft = 2;
-        nextCheck = now;
-      }
-      lastHeight.current = r.height;
       setBox((b) => (b && b.top === r.top && b.left === r.left && b.width === r.width && b.height === r.height ? b : { top: r.top, left: r.left, width: r.width, height: r.height }));
     };
     update();

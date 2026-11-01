@@ -17,7 +17,7 @@ import { CountUp } from "@/components/motion/CountUp";
 import { DemoVisit } from "@/components/DemoProgress";
 import { waitingLine } from "@/components/waiting-line";
 import { tourEnabled } from "@/components/tour/enabled";
-import { sandboxActive } from "@/lib/sandbox/server";
+import { activeSandboxId } from "@/lib/sandbox/server";
 
 export const dynamic = "force-dynamic";
 // The root segment does not get the layout's title template, so spell it out.
@@ -30,7 +30,7 @@ export default async function OverviewPage() {
   const base = o.business?.baseCurrency ?? "USD";
   const points = listPaymentPoints(120);
   const canReset = !viewer || viewer.can("reset_demo");
-  const mine = sandboxActive();
+  const mine = Boolean(activeSandboxId());
   const tour = tourEnabled();
   const demo = Boolean(viewer?.personas) || mine;
   // The opening request of the demo story, for the banner's first button.

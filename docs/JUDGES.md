@@ -8,7 +8,7 @@ The hosted demo gives every visitor a private copy of the demo business, Ridgeli
 2. On the overview, press **Take the tour**. It is also on the Demo guide (`/demo`).
 3. A small card opens at the bottom right (a sheet at the bottom on a phone). Each step says what you are looking at, what to press, and rings the part of the page it is about. **Next** takes you to the next step's page; **Back** goes back. **Hide** (or Escape) folds the card to a small button that opens it again. **Skip tour** closes it; Take the tour starts it again from step 1.
 
-The tour remembers your step in this browser, so a reload or a wander through the app picks up where you were. It takes about five minutes.
+The tour remembers your step in this browser, so a reload, a second tab or a wander through the app picks up where you were. If your copy of the demo was replaced since (Start over, or it was deleted after a while idle), the tour says so and offers to start again from step 1. It takes about five minutes.
 
 ## The eight steps
 
@@ -29,10 +29,11 @@ Then: now explore on your own. The Demo guide has the longer ten-step story and 
 
 - **Private.** The first page you open gives your browser a signed, httpOnly cookie that names your copy. Every page, button, download and agent check in that browser uses your copy. Another browser, a private window or another judge gets a different one.
 - **Start over.** On the overview banner and on the Demo guide, Start over replaces your copy with a fresh one: the four opening requests and three months of history. Nobody else is affected.
-- **Limits.** At most 50 copies run at once (`CHECKRAIL_SANDBOX_MAX`). A copy nobody has used for 120 minutes is deleted (`CHECKRAIL_SANDBOX_TTL_MINUTES`); if you come back later you start fresh. When all 50 are in use, the copy idle longest is deleted to make room. A server restart deletes them all.
+- **Limits.** At most 50 copies run at once (`CHECKRAIL_SANDBOX_MAX`). A copy nobody has used for 120 minutes is deleted (`CHECKRAIL_SANDBOX_TTL_MINUTES`); if you come back later you start fresh. When all 50 are in use, the copy idle longest makes room only if nobody has used it for 30 minutes; otherwise a new visitor sees "The demo is busy, try again in a few minutes" and nobody's copy is touched. One address can start at most 5 new copies in 10 minutes.
+- **Restarts and sleep.** On Render's free plan the server sleeps after about 15 minutes without visitors (the next visit takes up to a minute to wake it), and a restart or wake-up deletes every copy. You then start from the four opening requests, and the tour offers to start again.
 - **Autopilot** runs on your copy while you use it: whenever your browser loads a page (at most every ten seconds) and when a countdown reaches zero. A copy you are not looking at does nothing until you come back.
 - **Shortened cancel window.** The tour turns Autopilot on with a 20-second cancel window so you can watch it run out. The product's default is 10 minutes, and Settings does not allow less than one minute.
-- **Vendor links** (onboarding, evidence and remittance pages for a vendor) open in your copy only in the same browser.
+- **Vendor links** (onboarding, evidence and remittance pages for a vendor) open in your copy only in the same browser. Opened anywhere else they show a short page saying so; they never start a new copy.
 - **An agent connected from outside** (an MCP client pointed at `/api/mcp`) has no cookie, so its checks go to the one shared demo database, not to your copy. The demo agent on step 6 asks inside your copy.
 
 ## What is simulated
@@ -44,4 +45,4 @@ Then: now explore on your own. The Demo guide has the longer ten-step story and 
 
 ## For the operator
 
-Set `CHECKRAIL_SANDBOX=1` with simulated rails (`RAIL_MODE=mock`, `AI_MODE=mock`). `render.yaml` does this, with a generated `CHECKRAIL_SANDBOX_SECRET` to sign the cookie. At start the server seeds the demo once into a template file (`data/sandboxes/template.sqlite`) and copies it for each new browser; the template is seeded again every three hours so dates stay current. The heartbeat then only deletes idle copies; the shared database's idle reset (`DEMO_AUTO_RESET_MINUTES`) is not used. Without the setting, everything works as before: one shared database.
+Set `CHECKRAIL_SANDBOX=1` with simulated rails (`RAIL_MODE=mock`, `AI_MODE=mock`). `render.yaml` does this, with a generated `CHECKRAIL_SANDBOX_SECRET` to sign the cookie. At start the server seeds the demo once into a template file (`data/sandboxes/template.sqlite`) and copies it for each new browser; the template is seeded again every three hours so dates stay current. A housekeeping timer deletes idle copies and reseeds the template at a quiet moment, never during a request; there is no heartbeat over the shared database and its idle reset (`DEMO_AUTO_RESET_MINUTES`) is not used. In production `CHECKRAIL_SANDBOX_SECRET` (at least 16 characters) is required, or sandbox mode is refused; tokens expire after a day. The server fails closed: a request that should carry a copy and does not gets an error, never the shared database. Without the setting, everything works as before: one shared database.

@@ -133,31 +133,52 @@ export function stepOnPage(step: TourStep, pathname: string, ids: TourIds): { ta
   return null;
 }
 
-/** Progress, kept in a cookie per visitor: not started or skipped, at a step, or finished. */
-export type TourState = { status: "off" } | { status: "on"; index: number } | { status: "done" };
+/**
+ * Progress, kept in a cookie per visitor: not started or skipped, at a step, or finished. A step carries the copy of
+ * the demo it was taken in (`copy`, see copyStamp), so a tour that outlives its copy (Start over, or a copy deleted
+ * after a while idle) is noticed instead of continuing into steps whose earlier clicks are gone.
+ */
+export type TourState = { status: "off" } | { status: "on"; index: number; copy?: string } | { status: "done" };
 
 export const TOUR_COOKIE = "checkrail_tour";
 
+/** A short cookie-safe stamp for one copy of the demo: when it was made, and when the demo inside it was seeded. */
+export function copyStamp(copiedAtMs: number | null, seededAtIso: string | null | undefined): string | null {
+  const seeded = seededAtIso ? Date.parse(seededAtIso) : NaN;
+  const parts = [copiedAtMs, Number.isFinite(seeded) ? seeded : null].filter((x): x is number => typeof x === "number" && x > 0);
+  return parts.length ? parts.map((x) => Math.floor(x).toString(36)).join("") : null;
+}
+
 export function parseTourCookie(value: string | null | undefined): TourState {
   if (value === "done") return { status: "done" };
-  if (value && /^\d{1,2}$/.test(value)) {
-    const index = Number(value);
-    if (index >= 0 && index < TOUR_TOTAL) return { status: "on", index };
+  const m = value ? /^(\d{1,2})(?:\.([a-z0-9]{1,30}))?$/.exec(value) : null;
+  if (m) {
+    const index = Number(m[1]);
+    if (index < TOUR_TOTAL) return m[2] ? { status: "on", index, copy: m[2] } : { status: "on", index };
     if (index === TOUR_TOTAL) return { status: "done" };
   }
   return { status: "off" };
 }
 
 export function tourCookieValue(state: TourState): string {
-  return state.status === "on" ? String(state.index) : state.status;
+  if (state.status !== "on") return state.status;
+  return state.copy ? `${state.index}.${state.copy}` : String(state.index);
 }
 
-/** Next from the last step finishes the tour; Back from the first stays put. */
+/** Next from the last step finishes the tour; Back from the first stays put. The copy goes along. */
 export function move(state: TourState, delta: 1 | -1): TourState {
   if (state.status !== "on") return state;
   const index = state.index + delta;
   if (index >= TOUR_TOTAL) return { status: "done" };
-  return { status: "on", index: Math.max(0, index) };
+  return { ...state, index: Math.max(0, index) };
+}
+
+/**
+ * The tour is past step 1 but its copy of the demo is not the one in use now: the earlier steps' clicks are gone,
+ * so it offers to start again rather than carry on.
+ */
+export function outlivedCopy(state: TourState, current: string | null): boolean {
+  return state.status === "on" && state.index > 0 && Boolean(state.copy) && Boolean(current) && state.copy !== current;
 }
 
 export function progressLabel(index: number): string {

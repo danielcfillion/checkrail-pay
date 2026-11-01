@@ -15,7 +15,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { EmptyState, Money, PageHeader, RailTag, StatePill } from "@/components/ui";
 import { TakeTourButton } from "@/components/tour/TakeTourButton";
 import { tourEnabled } from "@/components/tour/enabled";
-import { sandboxActive } from "@/lib/sandbox/server";
+import { activeSandboxId } from "@/lib/sandbox/server";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Demo guide" };
@@ -183,7 +183,7 @@ export default function DemoPage() {
   ];
 
   const storyMissing = !phuong && !dupe && !maria && !ana;
-  const mine = sandboxActive();
+  const mine = Boolean(activeSandboxId());
   const tour = tourEnabled();
 
   return (
