@@ -56,6 +56,8 @@ export interface IngestInput {
    * sent (agent guard review AG2-1). `flags` are the caller's own concerns, each a hold. Never from a form.
    */
   stated?: StatedFields;
+  /** Internal: who asked for the payment this one asks for again (repayRefunded). Never from a form. */
+  originActor?: string;
 }
 
 export interface StatedFields {
@@ -142,7 +144,7 @@ export async function ingestObligation(db: Db, rawInput: IngestInput): Promise<s
         updatedAt: ts,
       })
       .run();
-    audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType } });
+    audit(tx as unknown as Db, { obligationId: id, actor: input.actor ?? "system", action: "obligation.created", toState: "drafted", detail: { sourceType: input.sourceType, ...(rawInput.originActor ? { originActor: rawInput.originActor } : {}) } });
     if (rawInput.stated) {
       const s = rawInput.stated;
       if (!isValidAmountMinor(s.amountMinor) || !SUPPORTED_CURRENCIES.includes(s.currency)) throw new Error("Stated amount or currency is invalid");
@@ -413,6 +415,9 @@ export async function repayRefunded(db: Db, obligationId: string, actor: string)
     actor,
     // A request whose fields were stated keeps them, as paid, with the caller's own concerns (AG3-7).
     stated: statedAgain(db, ob),
+    // And its records keep the weight of whoever first sent them: a person paying again does not make an outside
+    // caller's records the business's own when a bill total is decided (API review R3-S2).
+    originActor: originOf(db, ob.id),
   });
   // The bill is already in Xero from the first time: the same invoice is not a second bill.
   if (ob.xeroBillExportedAt) db.update(obligations).set({ xeroBillExportedAt: ob.xeroBillExportedAt }).where(eq(obligations.id, id)).run();
@@ -559,6 +564,23 @@ function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>)
   ];
 }
 
+/**
+ * Prints of the records a request carries, for telling the same job sent twice (API review R3-M1): each evidence row
+ * by its kind, amount, reference and wording, and each document by its file hash. A row with no wording prints nothing.
+ */
+function recordPrints(ev: Array<{ kind: string; amountMinor: number | null; reference: string | null; label: string | null; excerpt: string | null }>, files: Array<{ sha256: string | null }>): string[] {
+  const words = (s: string | null) => (s ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+  return [
+    ...ev.map((e) => (words(e.excerpt) || words(e.label) ? `ev|${e.kind}|${e.amountMinor ?? ""}|${(e.reference ?? "").toUpperCase()}|${words(e.excerpt) || words(e.label)}` : "")).filter(Boolean),
+    ...files.map((f) => (f.sha256 ? `file|${f.sha256}` : "")).filter(Boolean),
+  ];
+}
+
+/** Every form a reference is compared in; none for a missing reference or a date. */
+function refFormsOf(ref: string | null): string[] {
+  return ref && !isDateLike(ref) ? sourceRefKeys(ref) : [];
+}
+
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
   const texts = [ob.sourceRef, ob.rawInput, ob.description, ...jobTexts(ev), ...docTexts.map((d) => d.text?.slice(0, 4000))];
@@ -669,17 +691,17 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, paymentKind: obligations.paymentKind, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
         .map((p) => {
           // Identity of the underlying job comes from everything that names it, including the document text:
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
-          const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
-          const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
+          const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt, amountMinor: evidenceTable.amountMinor }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
+          const texts = db.select({ text: attachments.extractedText, sha256: attachments.sha256 }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
           const all = [p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))];
-          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
+          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])], ev, files: texts };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
@@ -740,6 +762,33 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
+  // The same job sent twice (API review R3-M1). Two requests are the same job when they carry the same record (the same
+  // evidence row, or the same document file) or name the same job in their records beyond the bill's own reference.
+  const myBill = ob.billId ? db.select({ reference: bills.reference, totalMinor: bills.totalMinor }).from(bills).where(eq(bills.id, ob.billId)).get() : undefined;
+  const billRefForms = new Set(refFormsOf(myBill?.reference ?? null));
+  // The bill's own record (its reference at its total), which every part of the bill carries by design, says nothing
+  // about which part this is, so it never makes two parts the same job.
+  const notTheBill = (e: { reference: string | null; amountMinor: number | null }) => !(myBill && e.amountMinor === myBill.totalMinor && refFormsOf(e.reference).some((k) => billRefForms.has(k)));
+  const myFiles = db.select({ sha256: attachments.sha256 }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
+  const myRecords = recordPrints(myEvidence, myFiles);
+  const myPartRecords = recordPrints(myEvidence.filter(notTheBill), myFiles);
+  const myRecordRefs = new Set(myEvidence.flatMap((e) => refFormsOf(e.reference)).filter((k) => !billRefForms.has(k)));
+  const sameRecord = (p: (typeof prior)[number]) => recordPrints(p.ev, p.files).some((r) => myRecords.includes(r));
+  const explicitParts = (a: string | null, b: string | null) => (a === "deposit" || a === "balance") && (b === "deposit" || b === "balance") && a !== b;
+  // Parts of one bill are not each other's duplicates, which is how a deposit and its balance both get paid. But a
+  // part that is the same job as another part is a duplicate like any other, and policy sees it without the bill
+  // link: the same kind of part for the same amount with the same record, or records naming the same job beyond the
+  // bill's own reference. An explicit deposit and balance stay two parts even when they cite the same invoice.
+  const sameJobOnBill = (p: (typeof prior)[number]) =>
+    Boolean(ob.billId) && p.billId === ob.billId && !explicitParts(ob.paymentKind, p.paymentKind) &&
+    ((p.paymentKind === ob.paymentKind && p.amountMinor === ob.amountMinor && recordPrints(p.ev.filter(notTheBill), p.files).some((r) => myPartRecords.includes(r))) ||
+      p.ev.flatMap((e) => refFormsOf(e.reference)).some((k) => myRecordRefs.has(k)));
+  // An untrusted caller's open request does not stop another (AG3-3), but when this request is not a system of
+  // record's and repeats it (same amount, same record), the approver is told so.
+  const myTrusted = (JSON.parse(db.select({ d: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get()?.d ?? "{}") as StatedFields).trusted === true;
+  const isEarlier = (p: (typeof prior)[number]) => p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.obligationId < ob.id);
+  const repeatsOpen = !myTrusted && prior.some((p) => untrustedOpen.has(p.obligationId) && isEarlier(p) && p.amountMinor === ob.amountMinor && p.currency === ob.currency && sameRecord(p));
+  if (ai && repeatsOpen) ai.flags = [...ai.flags, "Same job as an earlier request still waiting for a person: the same amount and the same record. Confirm this is not the same payment twice"];
   const outcome = evaluatePolicy(policy, {
     obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId, createdAt: ob.createdAt },
     vendor,
@@ -748,7 +797,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.filter((p) => !untrustedOpen.has(p.obligationId)).map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
+    priorSourceRefs: prior.filter((p) => !untrustedOpen.has(p.obligationId)).map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: sameJobOnBill(p) ? null : p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
     invoiceDate: ob.invoiceDate,
@@ -779,18 +828,40 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
  * record the invoice as a bill and link this payment to it as the deposit; a later "pay the balance" links to the
  * same bill. The agent only files the record: policy then checks the payment against what is open on it.
  */
+/** The actor who first asked for this payment: the creator, or the creator of the payment it asks for again. */
+function originOf(db: Db, obligationId: string): string {
+  const row = db.select({ actor: auditEntries.actor, detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
+  if (!row) return "";
+  const origin = (JSON.parse(row.detail ?? "{}") as { originActor?: unknown }).originActor;
+  return typeof origin === "string" ? origin : row.actor;
+}
+
 function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: EvidenceItem[]): void {
   const ob = mustGet(db, obligationId);
   if (ob.billId || !ob.vendorId || !ob.currency || !ob.amountMinor || !ob.sourceRef) return;
   // Any payment naming a bill this vendor already has is a payment against it, whatever the request calls itself.
   const existing = findBill(db, ob.vendorId, ob.sourceRef);
   let billId = existing && existing.status !== "void" ? existing.id : null;
+  // Who asked for this payment in the first place: for one asked again after it came back, the original asker, so a
+  // person's "pay again" carries an outside caller's records at their original weight (API review R3-S2).
+  const outside = /^(mcp|api):/.test(originOf(db, obligationId));
+  // A request from an outside agent (mcp:) or an integration (api:) joins an existing bill only as what the reader
+  // found it to be, a deposit or a balance, and only when it fits what is open. Anything else under the bill's
+  // reference is checked as a payment of its own, so a repeated job is caught as a duplicate (API review R3-M1).
+  if (billId && existing && outside) {
+    const bal = billBalance(db, existing.id, obligationId);
+    const open = existing.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
+    const part = ai.paymentPart?.kind;
+    if (!(part === "deposit" || part === "balance") || existing.currency !== ob.currency || ob.amountMinor > open) billId = null;
+  }
   if (!billId && ai.paymentPart?.kind === "deposit") {
-    // For a request from an outside agent (mcp:) or an integration (api:), only the business's own records (provenance
-    // "system", an attest key) may set a bill total. Its own typing, its own PDF and a supplier's record are its say-so
-    // and set no ceiling (agent guard review AG-5, API reviews R1-2 and R2-M1). Requests from people are unchanged.
-    const byOutsideAgent = /^(mcp|api):/.test(db.select({ actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get()?.actor ?? "");
-    const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor! && !(byOutsideAgent && e.provenance !== "system"));
+    // Which records may set a bill total is decided by where they came from (API review R3-S1). A supplier's own record
+    // (a vendor link upload) never does, whoever asked. For a request from an outside agent or an integration, only the
+    // business's own records (provenance "system", an attest key) do: its typing, its PDF and anything a person added
+    // to it are not the business's record of the invoice (agent guard review AG-5, API reviews R1-2, R2-M1). For a
+    // request from a person, what a person typed or uploaded still does.
+    const mayTotal = (e: EvidenceItem) => e.provenance !== "vendor" && (!outside || e.provenance === "system");
+    const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor! && mayTotal(e));
     // The bill's total becomes the ceiling for every later payment against it, so it comes from a record the business
     // holds (evidence naming this reference), never from the reader's number alone. A reader total that disagrees with
     // the record creates no bill; the deposit is then checked like any other payment.
