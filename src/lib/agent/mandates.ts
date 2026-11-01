@@ -230,21 +230,40 @@ export type MandateRow = typeof agentMandates.$inferSelect;
 
 /**
  * Request states that use a mandate's budget: on their way to being paid (waiting for evidence or a person, approved or
- * scheduled), being paid, or paid. Blocked, cancelled, failed and returned requests do not; nor does a refusal. A
- * blocked request a person later clears starts using it again, which can take the total over the cap: that is the
- * person's decision, not the agent's (review AF-5).
+ * scheduled), being paid, paid, and blocked. A blocked request is reserved until it is cancelled: a person clearing it
+ * (verifying the supplier, then a re-check) moves it on without the agent asking again, so leaving it out would let
+ * several blocked requests all go through past the cap (review AF2-S1). Cancelled, failed and returned requests use
+ * none of it; nor does a refusal. So the total cap is a true ceiling on what the agent can put in front of people.
  */
-export const BUDGET_STATES = ["drafted", "needs_evidence", "verified", "awaiting_approval", "approved", "execution_pending", "sent", "settled", "disputed"] as const;
+export const BUDGET_STATES = ["drafted", "needs_evidence", "verified", "awaiting_approval", "approved", "execution_pending", "sent", "settled", "disputed", "blocked"] as const;
 
-/** Used under a mandate: its requests in a budget state, and those still being created (no request yet). */
+/**
+ * Used under a mandate: its requests in a budget state at their current amount (a person may have corrected it), and
+ * those still being created at the amount asked. A request a person moved to another currency counts at the amount
+ * the agent asked, in the mandate's currency.
+ */
 export function spentUnder(db: Db, mandateId: string): number {
+  const cur = db.select({ c: agentMandates.currency }).from(agentMandates).where(eq(agentMandates.id, mandateId)).get()?.c ?? "";
   const r = db
-    .select({ total: sql<number>`coalesce(sum(${agentChecks.amountMinor}), 0)` })
+    .select({ total: sql<number>`coalesce(sum(case when ${obligations.amountMinor} is not null and ${obligations.currency} = ${cur} then ${obligations.amountMinor} else ${agentChecks.amountMinor} end), 0)` })
     .from(agentChecks)
     .leftJoin(obligations, eq(obligations.id, agentChecks.obligationId))
     .where(and(eq(agentChecks.mandateId, mandateId), eq(agentChecks.tool, "request_payment"), ne(agentChecks.verdict, "refused"), or(isNull(agentChecks.obligationId), inArray(obligations.state, [...BUDGET_STATES]))))
     .get();
   return Number(r?.total ?? 0);
+}
+
+/**
+ * For the request page: the mandate a request was made under, and whether its mandate is now over its cap (a person
+ * raised an amount, or cleared a request a re-check moved on). Approval does not re-check the mandate: that would be a
+ * money-path change, so a person reads this line before approving (review AF2 nit).
+ */
+export function mandateUseFor(db: Db, obligationId: string): { mandateId: string; agent: string; status: ReturnType<typeof statusOf>; currency: string; usedMinor: number; totalMinor: number; over: boolean } | null {
+  const c = db.select({ m: agentChecks.mandateId }).from(agentChecks).where(and(eq(agentChecks.obligationId, obligationId), eq(agentChecks.tool, "request_payment"))).get();
+  const row = c?.m ? db.select().from(agentMandates).where(eq(agentMandates.id, c.m)).get() : undefined;
+  if (!row) return null;
+  const used = spentUnder(db, row.id);
+  return { mandateId: row.id, agent: row.agent, status: statusOf(row), currency: row.currency, usedMinor: used, totalMinor: row.totalMinor, over: used > row.totalMinor };
 }
 
 export function statusOf(row: MandateRow, at = now()): "active" | "not_yet_valid" | "expired" | "revoked" {
@@ -256,6 +275,12 @@ export function statusOf(row: MandateRow, at = now()): "active" | "not_yet_valid
 
 /** The mandate behind a token for this business, or the reason it cannot be used. Signature first, then the record. */
 export function loadMandate(db: Db, businessId: string, token: string): { ok: true; row: MandateRow } | { ok: false; reason: string } {
+  // Without the data key where one is required, no mandate can be checked: say so, not "could not complete" (AF2 nit).
+  try {
+    mandatePublicKey();
+  } catch {
+    return { ok: false, reason: "mandates cannot be checked on this server: CHECKRAIL_DATA_KEY is not set. Ask the owner" };
+  }
   const v = verifyMandateToken(token);
   if (!v.ok) return v;
   const row = db.select().from(agentMandates).where(eq(agentMandates.id, v.payload.id)).get();
@@ -379,8 +404,11 @@ export function mandateStatus(db: Db, agent: AgentKey, businessId: string, raw: 
     total: major(v.totalMinor, v.currency),
     used: major(v.spentMinor, v.currency),
     remaining: major(v.status === "active" ? v.remainingMinor : 0, v.currency),
+    over_cap: v.spentMinor > v.totalMinor,
     summary:
-      v.status === "active"
+      v.spentMinor > v.totalMinor
+        ? `Over its cap: ${formatMoney(v.spentMinor, v.currency, { code: true })} committed of ${formatMoney(v.totalMinor, v.currency, { code: true })}, after a person changed or cleared a request. Nothing more may be requested under it.`
+        : v.status === "active"
         ? `${formatMoney(v.remainingMinor, v.currency, { code: true })} left of ${formatMoney(v.totalMinor, v.currency, { code: true })}, at most ${formatMoney(v.perPaymentMinor, v.currency, { code: true })} per payment, until ${v.validUntil.slice(0, 10)}.`
         : v.status === "revoked" ? "Revoked by the owner. Nothing more may be requested under it."
         : v.status === "expired" ? `Expired on ${v.validUntil.slice(0, 10)}. Nothing more may be requested under it.`

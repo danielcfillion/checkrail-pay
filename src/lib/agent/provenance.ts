@@ -196,6 +196,12 @@ export function isProvenanceHold(message: string): boolean {
 
 // ---------- Display ----------
 
+/**
+ * The pill tone for a source: attention for outside content, neutral for everything else. Never the green "settled"
+ * tone: an owner_chat or system_of_record claim is the agent's own word, not a cleared check (review AF2 nit).
+ */
+export const pillTone = (l: Pick<ProvenanceLine, "outside">): "attention" | "neutral" => (l.outside ? "attention" : "neutral");
+
 export interface ProvenanceLine {
   what: string;
   kind: SourceKind;

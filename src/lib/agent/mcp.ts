@@ -140,8 +140,9 @@ export function toolsFor(agent: AgentKey) {
   }
   if (isSupplierKey(agent)) {
     // A supplier's own agent sees nothing about other suppliers or the business's rules: no lookup, no rule guide.
+    // check_payment records a counter-offer for a supplier key, so it is not read-only there (review AF2 nit).
     return [
-      ...tools.filter((t) => t.name !== "lookup_payee" && t.name !== "explain_rule"),
+      ...tools.filter((t) => t.name !== "lookup_payee" && t.name !== "explain_rule").map((t) => (t.name === "check_payment" ? { ...t, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } } : t)),
       {
         name: "accept_offer",
         title: "Accept Checkrail's counter-offer",

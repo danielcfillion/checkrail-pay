@@ -2,7 +2,8 @@ import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { agentRecordFor } from "@/lib/agent/activity";
 import { offerLine, offersForRequest, type OfferStatus, type OfferView } from "@/lib/agent/offers";
-import type { ProvenanceLine } from "@/lib/agent/provenance";
+import { pillTone, type ProvenanceLine } from "@/lib/agent/provenance";
+import { mandateUseFor } from "@/lib/agent/mandates";
 import { formatDateTime, formatMoney, formatMoneySymbol } from "@/lib/format";
 import { RelativeTime, TonePill } from "./ui";
 
@@ -19,7 +20,7 @@ export function ProvenanceList({ lines, className = "" }: { lines: ProvenanceLin
       {lines.map((l, i) => (
         <li key={i} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="w-[92px] shrink-0 text-ink-soft">{l.what}</span>
-          <TonePill tone={l.outside ? "attention" : l.trusted ? "settled" : "neutral"}>
+          <TonePill tone={pillTone(l)}>
             {l.kindLabel}
           </TonePill>
           {l.detail ? <span className="min-w-0 break-all text-ink-soft">{l.detail}</span> : null}
@@ -75,6 +76,7 @@ export function AgentGuardRecord({ obligationId }: { obligationId: string }) {
   const offers = offersForRequest(db, obligationId);
   const withProvenance = asks.find((a) => a.provenance.length > 0);
   const mandate = asks.find((a) => a.mandateId);
+  const use = mandate ? mandateUseFor(db, obligationId) : null;
   if (!asks.length && !offers.length) return null;
   return (
     <div className="mt-3 border-t pt-3 hairline">
@@ -84,6 +86,13 @@ export function AgentGuardRecord({ obligationId }: { obligationId: string }) {
           Requested by <span className="font-medium">{asks[0].agent}</span>, an outside agent, <RelativeTime iso={asks[0].createdAt} />.
           {mandate ? " Under a spending mandate from the owner, which only narrows what it may ask for." : ""}
         </p>
+      ) : null}
+      {use?.over ? (
+        <p className="mt-1 text-sm text-blocked">
+          Its mandate is over its cap: {formatMoney(use.usedMinor, use.currency, { code: true })} committed of {formatMoney(use.totalMinor, use.currency, { code: true })}. Approval does not re-check the mandate, so decide with this in mind.
+        </p>
+      ) : use && use.status !== "active" ? (
+        <p className="mt-1 text-sm text-attention">Its mandate is now {use.status === "not_yet_valid" ? "not yet valid" : use.status}. Approval does not re-check the mandate.</p>
       ) : null}
       {withProvenance ? (
         <div className="mt-2">

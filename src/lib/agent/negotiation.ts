@@ -163,7 +163,7 @@ export async function disputeOffer(db: Db, agent: AgentKey, raw: unknown): Promi
           evidence: [...evidenceArgs(req, o.currency), ...[statement, ...extra].map((e) => ({ kind: e.kind, label: e.label, amount: e.amountMinor != null ? majorString(e.amountMinor, o.currency) : undefined, reference: e.reference ?? undefined, excerpt: e.excerpt ?? undefined }))].slice(0, 10),
           idempotency_key: `offer-dispute-${o.id}`,
         },
-        { skipProbe: true, flags: [DISPUTE_FLAG(o)] },
+        { skipProbe: true, noOffer: true, flags: [DISPUTE_FLAG(o)] },
       );
       resultId = answer.request_id;
     }
@@ -172,5 +172,6 @@ export async function disputeOffer(db: Db, agent: AgentKey, raw: unknown): Promi
     throw e;
   }
   db.update(agentOffers).set({ resultObligationId: resultId, disputeReason: reason, disputeEvidenceJson: JSON.stringify(extra.map((e) => ({ kind: e.kind, label: e.label, amount: e.amountMinor != null ? formatMoney(e.amountMinor, o.currency, { code: true }) : null, excerpt: e.excerpt }))) }).where(eq(agentOffers.id, o.id)).run();
-  return { ...answer, offer: offerForAgent(reread(db, o.id)) };
+  // Described again now the dispute is on record, so the answer leads with it.
+  return { ...answer, ...describeRequest(db, resultId, true), offer: offerForAgent(reread(db, o.id)) };
 }

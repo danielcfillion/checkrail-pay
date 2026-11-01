@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, like } from "drizzle-orm";
+import { and, desc, eq, gte, like, or } from "drizzle-orm";
 import { snapshotOf, type Db } from "../db";
-import { agentChecks, agentMandates, auditEntries, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
+import { agentChecks, agentMandates, agentOffers, auditEntries, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
@@ -619,7 +619,13 @@ function describe(db: Db, id: string, supplier = false): StatusAnswer {
   const blockReasons = failing.filter((r) => r.severity === "block");
   const holdReasons = failing.filter((r) => r.severity !== "block" && own(r));
   const reasons = [...blockReasons, ...holdReasons, ...failing.filter((r) => r.severity !== "block" && !own(r))].map(say).slice(0, 6);
-  const provenanceFirst = blockReasons.length === 0 && holdReasons.length > 0;
+  // A request whose counter-offer the supplier's agent disputed: a person is reviewing it, and that leads (review AF2-S2).
+  const dispute = db.select().from(agentOffers).where(and(or(eq(agentOffers.obligationId, id), eq(agentOffers.resultObligationId, id)), eq(agentOffers.status, "disputed"))).orderBy(desc(agentOffers.createdAt)).get();
+  const disputeLine = dispute?.disputeReason ? clean(`The supplier's agent disputes Checkrail's counter-offer of ${formatMoney(dispute.offerMinor, dispute.currency, { code: true })}, and a person is reviewing it. Its reason, its own say-so: ${dispute.disputeReason}`, others, vendor?.name ?? null) : null;
+  if (disputeLine) reasons.unshift(disputeLine);
+  if (reasons.length > 6) reasons.length = 6;
+  const firstBlock = blockReasons.length ? say(blockReasons[0]) : null;
+  const provenanceFirst = !disputeLine && blockReasons.length === 0 && holdReasons.length > 0;
   const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"
@@ -634,7 +640,9 @@ function describe(db: Db, id: string, supplier = false): StatusAnswer {
     : ob.state === "disputed" ? "disputed"
     : "failed";
   const summary =
-    status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}.`
+    status === "blocked" && disputeLine ? `A person is reviewing the supplier's dispute. Until they decide, the rules still block it: ${firstBlock ?? "a rule blocks it"}.`
+    : status === "waiting_for_approval" && disputeLine ? "Waiting for a person, who is reviewing the supplier's dispute."
+    : status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}.`
     : status === "waiting_for_evidence" ? "Waiting for supporting evidence before anyone can approve it."
     : status === "waiting_for_approval" ? `Waiting for a person to approve${reasons[0] ? `: ${reasons[0]}` : ""}.`
     : status === "scheduled" ? `Autopilot sends it ${whenRelease(ob.releaseAt!)} unless a person cancels before then.`
@@ -700,6 +708,8 @@ export type RequestAnswer = StatusAnswer & {
 export interface SubmitOptions {
   /** The amount is Checkrail's own offer, or the one already asked: trying it is not a probe. */
   skipProbe?: boolean;
+  /** No counter-offer on this request: it is the supplier's dispute of one, for a person to decide (review AF2-S2). */
+  noOffer?: boolean;
   /** Concerns to hold the request for a person, before the agent's own. */
   flags?: string[];
 }
@@ -813,7 +823,7 @@ export async function submitRequest(db: Db, agent: AgentKey, raw: unknown, opts:
     db.update(agentChecks).set({ obligationId: id, verdict, summary: answer.summary, rulesJson: JSON.stringify(answer.reasons) }).where(eq(agentChecks.id, claim)).run();
     // A supplier's agent asking more than the record supports gets the supported figure back, as an offer it can take.
     let offer: CounterOffer | undefined;
-    if (supplier && answer.status === "blocked" && asked) {
+    if (supplier && !opts.noOffer && answer.status === "blocked" && asked) {
       const failing = previewPolicy(db, id).rules.filter((x) => !x.passed && x.severity === "block").map((x) => ({ rule: x.ruleId, message: x.message }));
       const basis = counterOfferFrom(db, { businessId: biz.id, vendorId: asked.id, obligationId: id }, failing, a.amountMinor, a.currency);
       if (basis) offer = offerForAgent(recordOffer(db, { businessId: biz.id, agent: agent.name, vendorId: asked.id, checkId: claim, obligationId: id, askedMinor: a.amountMinor, currency: a.currency, reference: a.reference, basis, request: { payee: a.payee, reference: a.reference, description: a.description, evidence: a.evidence } }));

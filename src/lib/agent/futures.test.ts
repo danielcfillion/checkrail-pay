@@ -10,8 +10,8 @@ import { createBill } from "../engine/bills";
 import { configuredAgentKeys, type AgentKey } from "./keys";
 import { checkPayment, paymentStatus, requestPayment } from "./guard";
 import { handleMcp, toolsFor } from "./mcp";
-import { assessProvenance, isProvenanceHold, provenanceLines, validateProvenance } from "./provenance";
-import { DEV_KEY_LABEL, issueMandate, mandatePublicKey, mandateStatus, publicKeyFromRaw, revokeMandate, verifyMandateToken, type MandatePayload } from "./mandates";
+import { assessProvenance, isProvenanceHold, pillTone, provenanceLines, validateProvenance } from "./provenance";
+import { DEV_KEY_LABEL, mandateUseFor, issueMandate, mandatePublicKey, mandateStatus, publicKeyFromRaw, revokeMandate, verifyMandateToken, type MandatePayload } from "./mandates";
 import { counterOfferFrom } from "./offers";
 import { acceptOffer, disputeOffer } from "./negotiation";
 import { PHUONG_EMAIL, PHUONG_EMAIL_BANK_CHANGE, PHUONG_EMAIL_CHECK } from "./fixtures/phuongEmail";
@@ -64,6 +64,11 @@ describe("instruction provenance", () => {
   beforeEach(async () => {
     db = openTestDb();
     await seedDemo(db);
+  });
+
+  it("AF2 nit: owner_chat and system_of_record show a neutral pill, never the cleared green one", () => {
+    const lines = provenanceLines(JSON.stringify(validateProvenance({ instruction: { kind: "owner_chat" }, facts: { amount: { kind: "system_of_record" }, payee: { kind: "web", sender: "x.example" } } })));
+    expect(lines.map((l) => [l.what, pillTone(l)])).toEqual([["Instruction", "neutral"], ["Payee", "attention"], ["Amount", "neutral"]]);
   });
 
   it("validates sources and keeps senders to an address or a domain", () => {
@@ -290,10 +295,12 @@ describe("signed spending mandates", () => {
     await expect(ask(5, "10")).rejects.toThrow(/USD 0.00 left/);
   });
 
-  it("AF-5: blocked, failed and returned requests use none of the budget", async () => {
+  it("AF-5, AF2-S1: a blocked request is reserved until cancelled; failed and returned ones use none of the budget", async () => {
     const m = issue({ perPayment: "300", total: "500" });
     const blocked = await requestPayment(db, desk, { ...ROSA, amount: "250", evidence: [], description: "Pay Rosa Villanueva USD 250 for CEB-2D-1024.", idempotency_key: "rosa-over-250", mandate: m });
     expect(blocked.status).toBe("blocked");
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("250.00");
+    rejectObligation(db, blocked.request_id, "user:daniel", "not this one");
     expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("0.00");
     const ok = await requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-ok-190", mandate: m });
     expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("190.00");
@@ -301,6 +308,32 @@ describe("signed spending mandates", () => {
       db.update(obligations).set({ state }).where(eq(obligations.id, ok.request_id)).run();
       expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used, state).toBe("0.00");
     }
+  });
+
+  it("AF2-S1: blocked requests cannot pile up past the cap and all go through once a person clears the block", async () => {
+    // The reviewer's case: Rosa's payout details unverified, a USD 200 mandate, three USD 190 requests.
+    db.update(vendors).set({ verifiedAt: null }).where(eq(vendors.id, "ven_rosa")).run();
+    const m = issue({ perPayment: "200", total: "200" });
+    const first = await requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-unv-1", mandate: m });
+    expect(first.status).toBe("blocked");
+    await expect(requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-unv-2", mandate: m })).rejects.toThrow(/USD 10.00 left of USD 200.00/);
+    await expect(requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-unv-3", mandate: m })).rejects.toThrow(/USD 10.00 left of USD 200.00/);
+    expect(outsideRequests(db)).toHaveLength(1);
+    expect(mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m }).used).toBe("190.00");
+    // The budget follows the request's current amount; over the cap is said in mandate_status and on the request page.
+    db.update(obligations).set({ amountMinor: 25_000, state: "awaiting_approval" }).where(eq(obligations.id, first.request_id)).run();
+    const st = mandateStatus(db, desk, DEMO_BUSINESS_ID, { mandate: m });
+    expect([st.used, st.remaining, st.over_cap]).toEqual(["250.00", "0.00", true]);
+    expect(st.summary).toMatch(/^Over its cap: USD 250.00 committed of USD 200.00/);
+    expect(mandateUseFor(db, first.request_id)).toMatchObject({ usedMinor: 25_000, totalMinor: 20_000, over: true });
+  });
+
+  it("AF2 nit: an agent is told when a mandate cannot be checked for lack of a data key", async () => {
+    const m = issue();
+    vi.stubEnv("CHECKRAIL_DATA_KEY", "");
+    vi.stubEnv("NODE_ENV", "production");
+    await expect(requestPayment(db, desk, { ...ROSA, idempotency_key: "rosa-nokey-1", mandate: m })).rejects.toThrow(/mandates cannot be checked on this server: CHECKRAIL_DATA_KEY is not set/);
+    vi.unstubAllEnvs();
   });
 
   it("AF-11: the departures purpose binds the reference, not a departure named in the description", async () => {
@@ -490,7 +523,14 @@ describe("negotiation with a supplier's agent", () => {
     const d = await disputeOffer(db, phuongAgent, { offer_id: offer.offer_id, reason: "The guests asked for an airport transfer on the last day, agreed with your guide.", evidence: [{ kind: "message", label: "Guide chat 30 Sept", excerpt: "Guide: please add the airport run, USD 160." }] });
     expect(d.offer.status).toBe("disputed");
     expect(d.amount).toBe("USD 960.00");
-    expect(["blocked", "waiting_for_approval"]).toContain(d.status);
+    // AF2-S2: still blocked by the rate card, but the headline says a person is reviewing the dispute, the supplier's
+    // reason leads, and no new counter-offer is made on the dispute (accepting one would cancel the dispute).
+    expect(d.status).toBe("blocked");
+    expect(d.summary).toBe("A person is reviewing the supplier's dispute. Until they decide, the rules still block it: Rate card and departure HG-4D-0927 say USD 800.00 (4 vehicle-days x USD 200.00); this asks for USD 960.00.");
+    expect(d.reasons[0]).toBe("The supplier's agent disputes Checkrail's counter-offer of USD 800.00, and a person is reviewing it. Its reason, its own say-so: The guests asked for an airport transfer on the last day, agreed with your guide.");
+    expect(d.counter_offer).toBeUndefined();
+    expect(db.select().from(agentOffers).where(eq(agentOffers.obligationId, d.request_id)).all()).toHaveLength(0);
+    expect(paymentStatus(db, phuongAgent, { request_id: d.request_id }).summary).toBe(d.summary);
     const ev = db.select().from(evidence).where(eq(evidence.obligationId, d.request_id)).all();
     expect(ev.map((e) => e.label)).toEqual(expect.arrayContaining(["From the supplier's agent: its dispute of the counter-offer", "From the supplier's agent: Guide chat 30 Sept"]));
     const ob = db.select().from(obligations).where(eq(obligations.id, d.request_id)).get()!;
@@ -550,6 +590,11 @@ describe("negotiation with a supplier's agent", () => {
     expect(db.select().from(agentOffers).where(eq(agentOffers.id, id)).get()!.status).toBe("disputed");
     expect(db.select().from(obligations).where(eq(obligations.id, r.request_id)).get()!.state).toBe("blocked");
     expect(outsideRequests(db)).toHaveLength(1);
+  });
+
+  it("AF2 nit: check_payment is not read-only for a supplier key, since it records offers", () => {
+    const ann = (k: AgentKey) => (toolsFor(k).find((t) => t.name === "check_payment")!.annotations as { readOnlyHint: boolean }).readOnlyHint;
+    expect([ann(phuongAgent), ann(desk)]).toEqual([false, true]);
   });
 
   it("a supplier key whose supplier is not on file is refused", async () => {
