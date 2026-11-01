@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Db } from "../db";
 import { xeroConnections, xeroRecords } from "../db/schema";
 import { config } from "../config";
@@ -188,7 +188,7 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
   const tenant = conn?.tenantId ?? "";
   const counts = conn ? db.select({ status: xeroRecords.status }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.kind, ["bill", "credit_note", "payment", "withholding", "fee", "allocation"]))).all() : [];
   const failures = conn
-    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.status, ["failed", "needs_person"]))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
+    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), or(inArray(xeroRecords.status, ["failed", "needs_person"]), and(eq(xeroRecords.status, "pushed"), isNotNull(xeroRecords.nextAttemptAt))))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
     : [];
   return {
     configured: xeroConfigured(),

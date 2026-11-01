@@ -24,7 +24,7 @@ Nothing about a payment waits for Xero. The push runs beside the payment path, o
 
    An older app that still has the broad `accounting.transactions` scope can set `XERO_SCOPES` to its own list.
 5. **Use the US Demo Company.** In Xero, open the organisation menu and choose the Demo Company, and pick the **US** version so its base currency is USD like the demo's payments. It is free, full of sample data and resets itself, so nothing real is touched while you try it. Other currencies (VND, PHP) need multi-currency turned on in that organisation.
-6. **Connect from Settings.** As the owner, open Settings, System, and press **Connect to Xero**. Sign in at Xero, pick the Demo Company and allow access. You come back to Settings with the organisation's name on the Xero card.
+6. **Connect from Settings.** As the owner, open Settings, System, and press **Connect to Xero**. Sign in at Xero, pick the Demo Company and allow access. You come back to Settings with the organisation's name on the Xero card. Only the organisation picked in that sign-in is used; if Xero does not say which one it was, the connection is refused and you connect again.
 7. **Check the accounts.** Checkrail reads the chart of accounts and fills first guesses. Choose:
    - **Supplier bills**: used when a bill's own account (310, 320, 400, 429 or the vendor's code) is not in this chart.
    - **PayPal clearing**, **Stellar treasury** and **Wise and bank file**: the bank accounts each rail pays from. Each must be in the currency of the payments it carries. Add bank accounts in Xero first if the chart has none for them.
@@ -55,7 +55,7 @@ A Stellar fee is taken out of the amount in transit, so no separate fee is booke
 
 The bill is the invoice's gross amount. Each part paid clears its share in two payments: what was sent from the rail's bank account, and what was kept back from the tax withheld account. The bill therefore clears exactly, whatever each part really withheld: rounding on a split invoice, a W-9 filed between deposit and balance, or a per-payment threshold. The liability then sits on the tax withheld account until it is paid to the tax office.
 
-The bills file does the same: bills are at gross with no withholding line. When you match a payment from the settlement CSV, record the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account).
+The bills file does the same: bills are at gross with no withholding line. For a settlement CSV row whose `xeroPayment` column is blank (its bill came from the file, so the live push did not send it), record the payment from the bank feed and the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account). A row with `xero:<payment id>` is already in Xero, withheld part included: do not enter it again.
 
 ### With Xero connected, the bills file leaves out the live bills
 
@@ -63,9 +63,11 @@ While the destination is xero and Xero is connected, Export new bills on the Acc
 
 ### Changes after a bill went to Xero
 
-- A request cancelled or rejected after its bill went: the bill is voided in Xero if nothing is paid or credited on it. If something is, the card asks a person to sort it out in Xero.
-- A payout that came back: its payment (and withheld part) is deleted in Xero, so paying the vendor again fits the bill. If Xero will not delete it (a reconciled payment, for one), the card says it needs a person in Xero and it is not retried.
-- An approved request whose amount or reference is amended: its bill is updated in Xero while nothing is paid on it; otherwise the card asks for the same change by hand.
+- A request cancelled or rejected after its bill went: the bill is voided in Xero if nothing is paid or credited on it. If something is, the card asks a person to sort it out in Xero. If only part of a bill was cancelled and the rest is paid, the card says by how much the bill is still open in Xero, to adjust or credit there.
+- A payout that came back: its payment (and withheld part) is deleted in Xero, so paying the vendor again fits the bill; anything of that payout not yet sent is closed and never sent. A payment already deleted in Xero is taken as done. If Xero will not delete it (a reconciled payment, for one), the card says it needs a person in Xero and it is not retried.
+- An approved request whose amount or reference is amended: once it is agreed again, its bill is updated in Xero while nothing is paid on it; otherwise the card asks for the same change by hand.
+- A credit note applied to a bill that is in the files stays in the files too, and the card asks for the credit to be applied in Xero by hand.
+- Each of these keeps its own error and waits (1, 2, 4 ... up to 60 minutes) before another try, like everything else, so one stuck item never holds up the rest.
 
 ## How it avoids sending twice
 

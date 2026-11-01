@@ -59,6 +59,7 @@ CREATE TABLE `xero_records` (
 	`key_seq` integer DEFAULT 0 NOT NULL,
 	`idem_key` text,
 	`sent_hash` text,
+	`amend_checked_at` text,
 	`uncertain` integer DEFAULT false NOT NULL,
 	`next_attempt_at` text,
 	`pushed_at` text,

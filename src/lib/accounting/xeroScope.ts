@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { auditEntries, bills, obligations } from "../db/schema";
+import { auditEntries, billAllocations, bills, obligations } from "../db/schema";
 import type { XeroBillGroup } from "./xeroBills";
 
 /**
@@ -49,6 +49,21 @@ export function billApprovedAt(db: Db, obligationIds: string[]): Map<string, str
   return out;
 }
 
+/**
+ * A bill that belongs to the files rather than the live push: it went out in a bills file, or its first approval (of a
+ * part that is not cancelled) was before the connection.
+ */
+export function isFileSideBill(db: Db, billId: string, syncFrom: string): boolean {
+  const b = db.select({ exported: bills.xeroExportedAt, kind: bills.kind, createdAt: bills.createdAt }).from(bills).where(eq(bills.id, billId)).get();
+  if (!b) return false;
+  if (b.kind === "credit_note") return b.createdAt < syncFrom;
+  const parts = db.select({ id: obligations.id, state: obligations.state }).from(obligations).where(eq(obligations.billId, billId)).all().filter((p) => p.state !== "cancelled");
+  const when = approvedAt(db, parts.map((p) => p.id));
+  const first = [...when.values()].sort()[0];
+  if (first) return first < syncFrom;
+  return Boolean(b.exported);
+}
+
 /** A bill goes to Xero live when its first part was approved after the connection; a credit note when it was recorded after it. */
 export function splitGroups(db: Db, groups: XeroBillGroup[], syncFrom: string): { live: XeroBillGroup[]; earlier: XeroBillGroup[] } {
   const when = approvedAt(db, groups.flatMap((g) => g.obligationIds));
@@ -56,8 +71,13 @@ export function splitGroups(db: Db, groups: XeroBillGroup[], syncFrom: string): 
   const earlier: XeroBillGroup[] = [];
   for (const g of groups) {
     let first: string | null = null;
-    if (g.kind === "credit_note") first = g.billId ? (db.select({ at: bills.createdAt }).from(bills).where(eq(bills.id, g.billId)).get()?.at ?? null) : null;
-    else for (const id of g.obligationIds) {
+    if (g.kind === "credit_note") {
+      first = g.billId ? (db.select({ at: bills.createdAt }).from(bills).where(eq(bills.id, g.billId)).get()?.at ?? null) : null;
+      // A credit applied to a bill that is in the files stays in the files with it.
+      const targets = g.billId ? db.select({ billId: billAllocations.billId }).from(billAllocations).where(eq(billAllocations.creditBillId, g.billId)).all() : [];
+      if (targets.some((t) => isFileSideBill(db, t.billId, syncFrom))) first = null;
+    } else
+      for (const id of g.obligationIds) {
       const at = when.get(id);
       if (at && (!first || at < first)) first = at;
     }

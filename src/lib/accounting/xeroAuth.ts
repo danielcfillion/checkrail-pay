@@ -161,10 +161,13 @@ export async function fetchXeroConnections(accessToken: string): Promise<XeroTen
   return (await res.json()) as XeroTenant[];
 }
 
-/** The organisation chosen in this sign-in: the one tagged with this authentication event, else the first organisation. */
+/**
+ * The organisation chosen in this sign-in: the one tagged with this authentication event. Never another one the user
+ * connected earlier: without a match, the connection is refused and the owner picks again.
+ */
 export function pickTenant(tenants: XeroTenant[], authEventId: string | null): XeroTenant | null {
-  const orgs = tenants.filter((t) => t.tenantType === "ORGANISATION");
-  return (authEventId ? orgs.find((t) => t.authEventId === authEventId) : undefined) ?? orgs[0] ?? null;
+  if (!authEventId) return null;
+  return tenants.find((t) => t.tenantType === "ORGANISATION" && t.authEventId === authEventId) ?? null;
 }
 
 /** Finish the callback: exchange the code, find the organisation, store the tokens encrypted. Returns the tenant name. */
@@ -173,7 +176,7 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
   const tok = await exchangeXeroCode(opts.code);
   if (!tok.refresh_token) throw new XeroAuthError("Xero did not return a refresh token. The app must ask for offline_access.");
   const tenant = pickTenant(await fetchXeroConnections(tok.access_token), authEventIdOf(tok.access_token));
-  if (!tenant) throw new XeroAuthError("No Xero organisation was connected. Pick an organisation on Xero's screen and try again.");
+  if (!tenant) throw new XeroAuthError("Xero did not say which organisation was picked in this sign-in. Connect again and pick one organisation on Xero's screen.", false, "no tenant for this auth event");
   const nowMs = opts.nowMs ?? Date.now();
   const ts = new Date(nowMs).toISOString();
   const prior = db.select().from(xeroConnections).where(eq(xeroConnections.businessId, opts.businessId)).get();

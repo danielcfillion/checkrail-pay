@@ -713,6 +713,8 @@ export const xeroRecords = sqliteTable(
     idemKey: text("idem_key"),
     /** For a bill: a digest of what was sent, so an amended request's bill can be updated while it is unpaid. */
     sentHash: text("sent_hash"),
+    /** For a bill: when an amendment to its request was last compared with what was sent (after it was agreed again). */
+    amendCheckedAt: text("amend_checked_at"),
     /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
     uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
     nextAttemptAt: text("next_attempt_at"),

@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, settlements, vendors, accountingSyncs, bills } from "../db/schema";
+import { obligations, settlements, vendors, accountingSyncs, bills, xeroRecords } from "../db/schema";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { config } from "../config";
@@ -43,6 +43,8 @@ export interface AccountingPayload {
   /** Xero tax type for the bill line (XERO_TAX_TYPE, default "Tax Exempt"); tax profiles refine it. */
   taxType?: string;
   obligationId: string;
+  /** Filled at export, not stored: "xero:<payment id>" when the live push already put this payment in Xero, else blank. */
+  xeroPayment?: string;
 }
 
 export function buildAccountingRecord(db: Db, obligationId: string): { destination: string; payload: AccountingPayload } | null {
@@ -115,7 +117,22 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "departure",
   "taxType",
   "obligationId",
+  "xeroPayment",
 ];
+
+/** Which settlement rows Xero already has (sent by the live push), so the bookkeeper does not enter them again. */
+function withXeroPayment(db: Db, rows: Array<{ id: string; payload: AccountingPayload }>): AccountingPayload[] {
+  const sent = new Map(
+    db
+      .select({ sync: xeroRecords.accountingSyncId, id: xeroRecords.xeroId })
+      .from(xeroRecords)
+      .where(and(eq(xeroRecords.kind, "payment"), eq(xeroRecords.status, "pushed")))
+      .all()
+      .filter((r) => r.sync && r.id)
+      .map((r) => [r.sync!, `xero:${r.id}`]),
+  );
+  return rows.map((r) => ({ ...r.payload, xeroPayment: sent.get(r.id) ?? "" }));
+}
 
 /** One CSV cell: quoted when needed, and never a live spreadsheet formula. */
 export function csvCell(v: unknown): string {
@@ -137,14 +154,14 @@ export function toCsv(rows: AccountingPayload[]): string {
 
 /** Every accounting record as CSV, changing nothing. Safe for a plain link or a second click. */
 export function allRecordsCsv(db: Db): { csv: string; count: number } {
-  const rows = db.select().from(accountingSyncs).all().map((p) => JSON.parse(p.payloadJson ?? "{}") as AccountingPayload);
+  const rows = withXeroPayment(db, db.select().from(accountingSyncs).all().map((p) => ({ id: p.id, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload })));
   return { csv: toCsv(rows), count: rows.length };
 }
 
 /** Mark every pending CSV sync as exported and return the file contents. */
 export function exportPendingCsv(db: Db): { csv: string; count: number } {
   const pending = db.select().from(accountingSyncs).where(eq(accountingSyncs.status, "pending")).all();
-  const rows = pending.map((p) => JSON.parse(p.payloadJson ?? "{}") as AccountingPayload);
+  const rows = withXeroPayment(db, pending.map((p) => ({ id: p.id, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload })));
   const ts = new Date().toISOString();
   for (const p of pending) {
     db.update(accountingSyncs).set({ status: "exported", externalRef: `csv:${localDateString(new Date(ts))}`, updatedAt: ts }).where(eq(accountingSyncs.id, p.id)).run();
