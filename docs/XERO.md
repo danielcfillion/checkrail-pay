@@ -55,7 +55,11 @@ A Stellar fee is taken out of the amount in transit, so no separate fee is booke
 
 The bill is the invoice's gross amount. Each part paid clears its share in two payments: what was sent from the rail's bank account, and what was kept back from the tax withheld account. The bill therefore clears exactly, whatever each part really withheld: rounding on a split invoice, a W-9 filed between deposit and balance, or a per-payment threshold. The liability then sits on the tax withheld account until it is paid to the tax office.
 
-The bills file does the same: bills are at gross with no withholding line. For a settlement CSV row whose `xeroPayment` column is blank (its bill came from the file, so the live push did not send it), record the payment from the bank feed and the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account). A row with `xero:<payment id>` is already in Xero, withheld part included: do not enter it again.
+The bills file does the same: bills are at gross with no withholding line. The settlement CSV's last column, `xeroPayment`, says what to do with each row:
+
+- `xero:<payment id>`: the live push has put all of it in Xero (payment, withheld part and fee). Do not enter it.
+- `xero:sending`: the live push owns it and will send it (it is waiting, or retrying after a failure shown on the Xero card). Do not enter it either.
+- blank: its bill came from the file (or Xero is not connected). Record the payment from the bank feed and the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account).
 
 ### With Xero connected, the bills file leaves out the live bills
 
@@ -64,7 +68,7 @@ While the destination is xero and Xero is connected, Export new bills on the Acc
 ### Changes after a bill went to Xero
 
 - A request cancelled or rejected after its bill went: the bill is voided in Xero if nothing is paid or credited on it. If something is, the card asks a person to sort it out in Xero. If only part of a bill was cancelled and the rest is paid, the card says by how much the bill is still open in Xero, to adjust or credit there.
-- A payout that came back: its payment (and withheld part) is deleted in Xero, so paying the vendor again fits the bill; anything of that payout not yet sent is closed and never sent. A payment already deleted in Xero is taken as done. If Xero will not delete it (a reconciled payment, for one), the card says it needs a person in Xero and it is not retried.
+- A payout that came back: its payment (and withheld part) is deleted in Xero, so paying the vendor again fits the bill; anything of that payout not yet sent is closed and never sent. Its fee stays booked, and the card says what to check: PayPal returns its fee with a returned payout, so remove or reverse that fee spend in Xero; for Wise and the bank file the fee was spent, so change nothing unless the provider refunded it. A payment already deleted in Xero is taken as done. If Xero will not delete it (a reconciled payment, for one), the card says it needs a person in Xero and it is not retried.
 - An approved request whose amount or reference is amended: once it is agreed again, its bill is updated in Xero while nothing is paid on it; otherwise the card asks for the same change by hand.
 - A credit note applied to a bill that is in the files stays in the files too, and the card asks for the credit to be applied in Xero by hand.
 - Each of these keeps its own error and waits (1, 2, 4 ... up to 60 minutes) before another try, like everything else, so one stuck item never holds up the rest.
@@ -75,6 +79,8 @@ While the destination is xero and Xero is connected, Export new bills on the Acc
 - Before a bill is created, Xero is searched for a bill with the same number for the same contact; if there is one, it is used. A bill for a different contact with the same number is never used.
 - Before a payment is created, Xero's payments are searched for its reference (the rail and the provider's transaction id); one found is used. As a last resort, if the bill in Xero holds more payments of that amount than Checkrail has recorded, one of them is taken as this payment and its fee is not booked again; the card and the Accounting page count these as skipped fees. This is what keeps a demo reset from paying the same demo bill twice.
 - A success from Xero whose answer cannot be read is treated like a lost answer.
+- One rule for anything that may already be in Xero (a lost answer, or a server that stopped mid-send): at the start of the next pass it is looked up by what it was sent as, before anything else is decided about it. Found, it is taken on under its record, so a later cancel voids it, an amendment updates it, and a returned payout removes it. Not found, it is cleared and goes again only if still due. A row left "sending" by a stopped server shows on the card until then.
+- A payment waits while its bill's amendment has not reached Xero yet, rather than failing against the old number.
 - Each create call carries an Idempotency-Key, and the record is marked "sending" with that key in the database before the call. If the answer is lost, or the server stops before saving it, the next pass looks the item up in Xero before creating it. Xero keeps an idempotency key for only six minutes, so this look-up is what covers a longer gap.
 
 These cover the cases above. Something deleted or edited by hand in Xero is not detected.

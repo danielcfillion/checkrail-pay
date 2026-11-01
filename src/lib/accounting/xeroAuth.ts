@@ -182,6 +182,14 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
   const prior = db.select().from(xeroConnections).where(eq(xeroConnections.businessId, opts.businessId)).get();
   // Reconnecting the same organisation keeps the account mapping; a different organisation starts clean.
   const keepMapping = prior && prior.tenantId === tenant.tenantId;
+  // Connecting over another organisation: the old sign-in is revoked, not left valid behind the new one.
+  if (prior && !keepMapping && prior.status !== "disconnected" && prior.refreshTokenEnc) {
+    try {
+      await fetch(XERO_REVOCATION_URL, { method: "POST", headers: { Authorization: basicAuth(), "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: decryptField(prior.refreshTokenEnc) }).toString(), signal: xeroTimeout() });
+    } catch {
+      // Best effort: the old token expires on its own; the new connection does not depend on it.
+    }
+  }
   const values = {
     businessId: opts.businessId,
     tenantId: tenant.tenantId,

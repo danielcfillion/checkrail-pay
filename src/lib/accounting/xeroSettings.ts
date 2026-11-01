@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lt, or } from "drizzle-orm";
 import type { Db } from "../db";
 import { xeroConnections, xeroRecords } from "../db/schema";
 import { config } from "../config";
@@ -7,6 +7,9 @@ import { createXeroClient, XeroApiError, type XeroClient } from "./xeroClient";
 import { getXeroConnection, xeroConfigured, xeroDataKeyMissing, xeroRedirectUri, type XeroConnectionRow } from "./xeroAuth";
 import { xeroBillRows } from "./xeroBills";
 import { splitGroups } from "./xeroScope";
+
+/** How long a pass holds its lease (xeroSync.LEASE_MS); a row still "sending" after that was left by a stopped server. */
+const LEASE_MS = 90_000;
 
 /**
  * The account mapping: which of the organisation's accounts Checkrail posts to. Read from the tenant's chart of
@@ -188,7 +191,7 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
   const tenant = conn?.tenantId ?? "";
   const counts = conn ? db.select({ status: xeroRecords.status }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.kind, ["bill", "credit_note", "payment", "withholding", "fee", "allocation"]))).all() : [];
   const failures = conn
-    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), or(inArray(xeroRecords.status, ["failed", "needs_person"]), and(eq(xeroRecords.status, "pushed"), isNotNull(xeroRecords.nextAttemptAt))))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
+    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), or(inArray(xeroRecords.status, ["failed", "needs_person"]), and(eq(xeroRecords.status, "pushed"), isNotNull(xeroRecords.nextAttemptAt)), and(eq(xeroRecords.status, "sending"), lt(xeroRecords.updatedAt, new Date(Date.now() - LEASE_MS).toISOString()))))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
     : [];
   return {
     configured: xeroConfigured(),
@@ -218,7 +221,7 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
     taxRates: chart?.taxRates ?? [],
     pushed: counts.filter((c) => c.status === "pushed").length,
     waiting: counts.filter((c) => c.status === "pending").length,
-    failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.error ?? "Not sent", attempts: f.attempts, nextAttemptAt: f.nextAttemptAt, needsPerson: f.status === "needs_person" })),
+    failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.status === "sending" ? "Was being sent when the server stopped. It is checked in Xero on the next pass, before anything else is done with it." : (f.error ?? "Not sent"), attempts: f.attempts, nextAttemptAt: f.nextAttemptAt, needsPerson: f.status === "needs_person" })),
     skippedFees: conn ? db.select({ id: xeroRecords.id }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), eq(xeroRecords.kind, "fee"), eq(xeroRecords.status, "skipped"))).all().length : 0,
     earlierBills: conn ? splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true }).groups, conn.syncFrom).earlier.length : 0,
   };

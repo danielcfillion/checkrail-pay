@@ -166,6 +166,7 @@ function fakeXero() {
       const inv = state.invoices.find((i) => i.InvoiceID === decodeURIComponent(one[1]));
       if (!inv) return { status: 404, body: { Title: "Not found" } };
       const patch = (JSON.parse(c.body) as { Invoices: Array<Record<string, unknown>> }).Invoices[0];
+      if (patch.Contact && !(patch.Contact as { ContactID?: string }).ContactID) return { status: 400, body: { Elements: [{ ValidationErrors: [{ Message: "A Contact must be specified for this type of transaction" }] }] } };
       if (due(inv).paid > 0 || due(inv).credited > 0) return { status: 400, body: { Elements: [{ ValidationErrors: [{ Message: "This document cannot be edited as it has a payment or credit note allocated to it." }] }] } };
       Object.assign(inv, patch);
       return { status: 200, body: { Invoices: [inv] } };
@@ -584,7 +585,8 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     const failed = records("bill").find((r) => r.status === "failed")!;
     expect(failed.uncertain).toBe(true);
     // Make the look-up miss, so the create is repeated: the same key returns the cached answer.
-    xero.injections.push({ when: (c) => c.method === "GET" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => xero.res(200, { Invoices: [] }) });
+    // Both look-ups miss (the check of the unsure row, then the one before creating), so the create is repeated.
+    xero.injections.push({ when: (c) => c.method === "GET" && c.url.pathname.endsWith("/Invoices"), times: 2, respond: () => xero.res(200, { Invoices: [] }) });
     await runXeroSync(db, { force: true });
     const keys = xero.api("PUT", "/Invoices").map((c) => c.headers.get("idempotency-key"));
     expect(new Set(keys).size).toBeLessThan(keys.length);
@@ -1069,7 +1071,8 @@ describe("Review round 3", () => {
     await runXeroSync(db);
     expect(xero.state.payments.map((x) => x.Status)).toEqual(["DELETED", "AUTHORISED"]);
     expect(xero.amountDue("INV-MS-1101")).toBe(0);
-    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures).toHaveLength(0);
+    // Only the note about the first payout's PayPal fee.
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures.map((f) => f.label)).toEqual([expect.stringMatching(/^Fee on INV-MS-1101 \(paypal\), payout came back$/)]);
   });
 
   it("S1. when Xero will not remove it (reconciled), a person is asked and nothing retries", async () => {
@@ -1300,6 +1303,152 @@ describe("Review round 4", () => {
     const back = await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${state}`, OWNER), db);
     expect(back.headers.get("location")).toContain("xero=failed");
     expect(conn()).toBeUndefined();
+  });
+});
+
+describe("Review round 5", () => {
+  const csvMark = (ref: string) => allRecordsCsv(db).csv.trim().split("\n").find((l) => l.includes(ref))?.split(",").pop();
+
+  it("M1 A. a bill whose answer was lost, then rejected: it is found in Xero and voided", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => "network_after" });
+    await runXeroSync(db);
+    expect(records("bill")[0]).toMatchObject({ status: "failed", uncertain: true });
+    rejectObligation(db, story.stellar, "user:minh", "Trip cancelled");
+    await runXeroSync(db, { force: true });
+    expect(xero.state.invoices).toHaveLength(1);
+    expect(xero.state.invoices[0].Status).toBe("VOIDED");
+    expect(records("bill")[0]).toMatchObject({ status: "voided" });
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures).toHaveLength(0);
+  });
+
+  it("M1 F. the server stops mid-send, the reference is amended and re-approved: one bill, renumbered, and paid", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    const t0 = Date.now();
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => "hang_after" });
+    void runXeroSync(db, { now: () => t0 });
+    await until(() => xero.api("PUT", "/Invoices").length === 1);
+    expect(records("bill")[0]).toMatchObject({ status: "sending" });
+    // On the card, a row still "sending" after the lease is a thing to look at.
+    db.update(xeroRecords).set({ updatedAt: new Date(t0 - 5 * 60_000).toISOString() }).where(eq(xeroRecords.kind, "bill")).run();
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures[0].error).toMatch(/^Was being sent when the server stopped/);
+    await amendObligation(db, story.stellar, "user:lan", { sourceRef: "JOB-PAL3D-0927-R" }, "Re-issued invoice");
+    if (db.select().from(obligations).where(eq(obligations.id, story.stellar)).get()!.state !== "approved") approveObligation(db, story.stellar, "user:minh");
+    await executeObligation(db, story.stellar, { actor: "user:minh" });
+    await confirmSettlement(db, story.stellar);
+    xero.state.idem.clear();
+    await runXeroSync(db, { now: () => t0 + 7 * 60_000 });
+    await runXeroSync(db, { now: () => t0 + 8 * 60_000 });
+    expect(xero.state.invoices.map((i) => i.InvoiceNumber)).toEqual(["JOB-PAL3D-0927-R"]);
+    expect(xero.state.payments).toHaveLength(1);
+    expect(xero.amountDue("JOB-PAL3D-0927-R")).toBe(0);
+  });
+
+  it("M1 F2. the same, but the update of the found bill fails for now: still never a second bill", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    const t0 = Date.now();
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => "hang_after" });
+    void runXeroSync(db, { now: () => t0 });
+    await until(() => xero.api("PUT", "/Invoices").length === 1);
+    await amendObligation(db, story.stellar, "user:lan", { sourceRef: "JOB-PAL3D-0927-R" }, "Re-issued invoice");
+    if (db.select().from(obligations).where(eq(obligations.id, story.stellar)).get()!.state !== "approved") approveObligation(db, story.stellar, "user:minh");
+    xero.state.idem.clear();
+    xero.injections.push({ when: (c) => c.method === "POST" && /\/Invoices\/[^/]+$/.test(c.url.pathname), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    await runXeroSync(db, { now: () => t0 + 7 * 60_000 });
+    expect(xero.state.invoices).toHaveLength(1);
+    await runXeroSync(db, { now: () => t0 + 20 * 60_000, force: true });
+    expect(xero.state.invoices.map((i) => i.InvoiceNumber)).toEqual(["JOB-PAL3D-0927-R"]);
+  });
+
+  it("M1 B. a payment whose answer was lost, then the payout came back: removed in Xero; a second payout of the same amount is paid and its fee booked", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9101", totalMinor: 20_000, currency: "USD" });
+    const first = await payPart(bill, 20_000);
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Payments"), times: 1, respond: () => "network_after" });
+    await runXeroSync(db);
+    expect(records("payment")[0]).toMatchObject({ status: "failed", uncertain: true });
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), first, "RETURN-9101");
+    await runXeroSync(db, { force: true });
+    expect(xero.state.payments.map((x) => x.Status)).toEqual(["DELETED"]);
+    await payPart(bill, 20_000);
+    await runXeroSync(db, { force: true });
+    expect(xero.state.payments.map((x) => x.Status)).toEqual(["DELETED", "AUTHORISED"]);
+    expect(xero.state.bankTx).toHaveLength(1);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).skippedFees).toBe(0);
+    expect(xero.amountDue("INV-MS-9101")).toBe(0);
+  });
+
+  it("S1 and S2. the CSV marks a row xero:<id> only when all of it is in Xero, and xero:sending while the live push owns it", async () => {
+    await connect();
+    await settle(story.paypal); // approved before connecting: the files'
+    await settle(story.stellar); // approved after: the live push's
+    expect(csvMark("JOB-HG4D-0921")).toBe("");
+    expect(csvMark("JOB-PAL3D-0927")).toBe("xero:sending");
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9201", totalMinor: 20_000, currency: "USD" });
+    await payPart(bill, 20_000);
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/BankTransactions"), times: 1, respond: () => xero.res(400, { Elements: [{ ValidationErrors: [{ Message: "Bank account is archived" }] }] }) });
+    await runXeroSync(db);
+    expect(records("payment").find((r) => r.label.includes("9201"))).toMatchObject({ status: "pushed" });
+    expect(csvMark("INV-MS-9201")).toBe("xero:sending"); // payment in, fee not yet: not complete
+    expect(csvMark("JOB-PAL3D-0927")).toMatch(/^xero:pay-/);
+    await runXeroSync(db, { force: true });
+    expect(csvMark("INV-MS-9201")).toMatch(/^xero:pay-/);
+  });
+
+  it("S3. a credit applied to a bill with no agreed part is put on the card", async () => {
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9301", totalMinor: 40_000, currency: "USD" });
+    const dep = await payBill(db, DEMO_BUSINESS_ID, as("lan"), bill, 20_000);
+    approveObligation(db, dep, "user:minh");
+    rejectObligation(db, dep, "user:minh", "Not needed");
+    await connect();
+    const cn = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "credit_note", reference: "CN-MS-9301", totalMinor: 5_000, currency: "USD", note: "Short day" });
+    applyCredit(db, DEMO_BUSINESS_ID, as("daniel"), cn, bill, 5_000);
+    await runXeroSync(db);
+    const f = xeroCardView(db, DEMO_BUSINESS_ID).failures.find((x) => x.label.includes("INV-MS-9301"))!;
+    expect(f.error).toMatch(/that bill has no agreed payment, so it is not in Xero/);
+  });
+
+  it("S4. a returned PayPal payout: the card says to remove the fee in Xero", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9401", totalMinor: 20_000, currency: "USD" });
+    const first = await payPart(bill, 20_000);
+    await runXeroSync(db);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), first, "RETURN-9401");
+    await runXeroSync(db);
+    const f = xeroCardView(db, DEMO_BUSINESS_ID).failures.find((x) => x.label.startsWith("Fee on INV-MS-9401"))!;
+    expect(f.error).toMatch(/PayPal returns its fee with it, so the fee spend booked in Xero should be removed or reversed there\.$/);
+  });
+
+  it("S5. a payment waits while its bill's amendment has not reached Xero", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    await runXeroSync(db);
+    await amendObligation(db, story.stellar, "user:lan", { sourceRef: "JOB-PAL3D-0927-R" }, "Re-issued invoice");
+    if (db.select().from(obligations).where(eq(obligations.id, story.stellar)).get()!.state !== "approved") approveObligation(db, story.stellar, "user:minh");
+    await executeObligation(db, story.stellar, { actor: "user:minh" });
+    await confirmSettlement(db, story.stellar);
+    xero.injections.push({ when: (c) => c.method === "POST" && /\/Invoices\/[^/]+$/.test(c.url.pathname), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    await runXeroSync(db);
+    expect(xero.api("PUT", "/Payments")).toHaveLength(0);
+    expect(records("payment")).toHaveLength(0);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures.map((f) => f.error)).toEqual([expect.stringMatching(/updating the bill did not go through/)]);
+    await runXeroSync(db, { force: true });
+    expect(xero.state.invoices[0].InvoiceNumber).toBe("JOB-PAL3D-0927-R");
+    expect(xero.amountDue("JOB-PAL3D-0927-R")).toBe(0);
+  });
+
+  it("nit. connecting over another organisation revokes the old sign-in", async () => {
+    await connect();
+    xero.state.access = jwt({ authentication_event_id: "evt-0", n: 9 });
+    xero.state.refresh = "rt-other";
+    const start = handleXeroConnect(req("GET", "/api/xero/connect", OWNER), db);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${state}`, OWNER), db);
+    expect(conn()).toMatchObject({ tenantId: "tenant-other" });
+    expect(xero.state.revokedTokens).toEqual(["rt-1"]);
   });
 });
 
