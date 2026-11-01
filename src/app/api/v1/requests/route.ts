@@ -1,4 +1,5 @@
 import { businessOf, handleApi, intParam } from "@/lib/api/http";
+import { hasScope } from "@/lib/api/keys";
 import { REQUEST_BODY_LIMIT, createRequest, listOwnRequests } from "@/lib/api/requests";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,9 @@ export function POST(req: Request) {
   return handleApi(req, { scope: "requests:write", bodyLimit: REQUEST_BODY_LIMIT, idempotency: "required" }, async ({ db, key, body }) => {
     const biz = businessOf(db);
     const idem = req.headers.get("idempotency-key")!.trim();
-    return { status: 201, body: await createRequest(db, biz.id, key, idem, body) };
+    const made = await createRequest(db, biz.id, key, idem, body);
+    // A key that may not read requests learns only that its request was taken: no reasons, nothing about other parts.
+    return { status: 201, body: hasScope(key, "requests:read") ? made : { id: made.id, status: made.status, idempotency_key: idem } };
   });
 }
 

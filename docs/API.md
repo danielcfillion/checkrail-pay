@@ -79,7 +79,9 @@ Read them back, optionally from a start date:
 
 A document is read and checked against the request the way a clerk's upload is, and a supplier's own invoice still goes to a person. Unlike a clerk's upload, a document from a key never sets a bill total (see Trust above). Fields the endpoint does not know (`approve`, `paypal_email`, anything else) are refused, not ignored.
 
-The answer (201) is the request after the checks. `status` is one of `blocked`, `waiting_for_evidence`, `waiting_for_approval`, `scheduled` (Autopilot sends it at `releases_at` unless a person cancels), `approved`, `sending`, `paid`, `returned`, `cancelled`, `failed`, `disputed`. `verdict` is what the rules say (`pay`, `hold` or `block`), `reasons` says why in plain words and `rules_failed` gives the rule ids. Payout details are never included.
+The answer (201) is the request after the checks. `status` is one of `blocked`, `waiting_for_evidence`, `waiting_for_approval`, `scheduled` (Autopilot sends it at `releases_at` unless a person cancels), `approved`, `sending`, `paid`, `returned`, `cancelled`, `failed`, `disputed`. `verdict` is what the rules say (`pay`, `hold` or `block`), `rules_failed` gives the rule ids and `reasons` gives one fixed sentence for each, never text from the books, so nothing about other suppliers or other payments. Payout details are never included. A key without `requests:read` gets back only `id`, `status` and its own `idempotency_key`.
+
+A request on a bill that already has another part (anything not cancelled or returned, whichever came first) is never paid without a person: it waits with the rule `bill_part_repeat`, also when it is checked again, retried or due for release. The one exception is the balance, when every other part is approved by a person, being paid, paid or disputed, and the request is exactly what is left.
 
 ### Read requests back
 

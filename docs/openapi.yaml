@@ -149,14 +149,19 @@ paths:
               $ref: "#/components/schemas/PaymentRequestIn"
       responses:
         "201":
-          description: Created and checked. A replay carries the header Idempotency-Replayed.
+          description: >-
+            Created and checked. A replay carries the header Idempotency-Replayed. A key with requests:read gets the
+            request as it stands (PaymentRequest); a key without it gets only the id, the status and its own
+            Idempotency-Key back (PaymentRequestCreated).
           headers:
             Idempotency-Replayed:
               $ref: "#/components/headers/IdempotencyReplayed"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PaymentRequest"
+                oneOf:
+                  - $ref: "#/components/schemas/PaymentRequest"
+                  - $ref: "#/components/schemas/PaymentRequestCreated"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -680,6 +685,19 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Money"
             - type: "null"
+    PaymentRequestCreated:
+      type: object
+      description: The answer to a key without requests:read. No reasons and nothing about other payments.
+      required: [id, status, idempotency_key]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [blocked, waiting_for_evidence, waiting_for_approval, scheduled, approved, sending, paid, returned, cancelled, failed, disputed]
+        idempotency_key:
+          type: string
     PaymentRequest:
       type: object
       description: A request as it stands. Never payout details.
@@ -701,7 +719,9 @@ components:
           type: array
           items:
             type: string
-          description: Why it is held or blocked, in plain words, with payout details removed.
+          description: >-
+            Why it is held or blocked: one fixed sentence per rule in rules_failed, never text from the books, so
+            nothing about other suppliers or other payments. Empty once the request has left the waiting states.
         rules_failed:
           type: array
           items:

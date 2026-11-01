@@ -12,7 +12,7 @@ import { uploadDocument, ALLOWED_UPLOAD_TYPES } from "../engine/attachments";
 import { formatMoney } from "../format";
 import { AgentInputError, clean, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
-import { otherNames, reasonForIntegration } from "./redact";
+import { apiReasons } from "./redact";
 import { ApiError, Problems, isObject, onlyFields, stable } from "./http";
 
 /**
@@ -237,23 +237,14 @@ export function describeRequest(db: Db, id: string) {
   const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
   if (!ob) throw new ApiError(404, "not_found", "No such request");
   const vendor = ob.vendorId ? db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
-  const keep = vendor?.name ?? null;
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId, rail: paymentAttempts.rail, status: paymentAttempts.status }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const waiting = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state);
   const policy = waiting ? previewPolicy(db, id) : null;
   const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").sort((x, y) => Number(y.severity === "block") - Number(x.severity === "block"));
-  const stored = JSON.parse(ob.policyReasonsJson ?? "[]") as string[];
-  // The agent guard's rewrite: no other supplier's name, no word on how far their payment got (review R1-3).
-  const others = otherNames(db, ob.businessId, [keep]);
-  const ruleMessages = new Set(failing.map((r) => r.message));
-  const reasons = [
-    ...new Set(
-      policy
-        ? [...failing.map((r) => reasonForIntegration(r.ruleId, r.message, others, keep)), ...policy.reasons.filter((r) => !ruleMessages.has(r)).map((r) => reasonForIntegration(null, r, others, keep))]
-        : stored.map((r) => reasonForIntegration(null, r, others, keep)),
-    ),
-  ].slice(0, 8);
+  // Built from rule codes only, never from the messages a person reads: those name other suppliers and other
+  // payments, with their states and dates (review R5-M3). Once a request has left the waiting states, its status says it.
+  const reasons = policy ? apiReasons(policy.rules, policy.decision) : [];
   const scheduled = ob.state === "approved" && Boolean(ob.releaseAt) && !ob.autopilotCancelledAt;
   const status: RequestStatus =
     ob.state === "blocked" ? "blocked"
