@@ -10,6 +10,7 @@ CREATE TABLE `xero_connections` (
 	`status` text NOT NULL,
 	`connected_by` text NOT NULL,
 	`connected_at` text NOT NULL,
+	`sync_from` text NOT NULL,
 	`expense_account_code` text,
 	`paypal_account_code` text,
 	`stellar_account_code` text,
@@ -21,6 +22,12 @@ CREATE TABLE `xero_connections` (
 	`blocked_until` text,
 	`last_push_at` text,
 	`last_error` text,
+	`lease_owner` text,
+	`lease_until` text,
+	`rate_window_start` integer,
+	`rate_window_calls` integer DEFAULT 0 NOT NULL,
+	`chart_attempts` integer DEFAULT 0 NOT NULL,
+	`chart_retry_at` text,
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
@@ -39,6 +46,8 @@ CREATE TABLE `xero_records` (
 	`tenant_id` text NOT NULL,
 	`kind` text NOT NULL,
 	`local_key` text NOT NULL,
+	`parent_key` text,
+	`amount` text,
 	`label` text NOT NULL,
 	`obligation_id` text,
 	`accounting_sync_id` text,
@@ -47,6 +56,7 @@ CREATE TABLE `xero_records` (
 	`error` text,
 	`attempts` integer DEFAULT 0 NOT NULL,
 	`key_seq` integer DEFAULT 0 NOT NULL,
+	`idem_key` text,
 	`uncertain` integer DEFAULT false NOT NULL,
 	`next_attempt_at` text,
 	`pushed_at` text,

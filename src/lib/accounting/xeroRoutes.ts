@@ -4,7 +4,7 @@ import { isRole, type Permission } from "../auth/roles";
 import { actorCan, resolveActor, type Actor } from "../engine/users";
 import { getBusiness } from "../queries";
 import { config } from "../config";
-import { beginXeroConnect, completeXeroConnect, consumeXeroState, disconnectXero, getXeroConnection, xeroConfigured } from "./xeroAuth";
+import { beginXeroConnect, completeXeroConnect, consumeXeroState, disconnectXero, getXeroConnection, xeroConfigured, XeroAuthError } from "./xeroAuth";
 import { refreshXeroChart, saveXeroMapping, type XeroMappingInput } from "./xeroSettings";
 import { runXeroSync } from "./xeroSync";
 import { XeroApiError } from "./xeroClient";
@@ -74,7 +74,9 @@ export async function handleXeroCallback(req: Request, db: Db): Promise<Response
   if (!code) return backToSettings(req, "invalid_state");
   try {
     await completeXeroConnect(db, { businessId: who.businessId, actor: who.actor.id, code });
-  } catch {
+  } catch (e) {
+    // Server side only, and never a token: why the exchange failed (Xero's error code and status, or our own sentence).
+    console.warn("[xero] connect failed:", (e as Error).message, e instanceof XeroAuthError && e.detail ? `(${e.detail})` : "");
     return backToSettings(req, "failed");
   }
   // The chart of accounts, so the mapping can be chosen straight away. Not fatal: the card has a button for it.
@@ -88,7 +90,13 @@ export async function handleXeroDisconnect(req: Request, db: Db): Promise<Respon
   if (who instanceof Response) return who;
   if (!getXeroConnection(db, who.businessId)) return json({ ok: true, message: "Xero was not connected." });
   const r = await disconnectXero(db, who.businessId, who.actor.id);
-  return json({ ok: true, message: r.remote === "failed" ? "Disconnected here. Xero did not confirm, so also remove Checkrail Pay under Connected apps in Xero." : "Disconnected from Xero." });
+  const message =
+    r.remote === "failed"
+      ? "Disconnected here. Xero did not confirm, so also remove Checkrail Pay under Connected apps in Xero."
+      : r.remote === "expired"
+        ? "Disconnected here. The Xero sign-in had already expired, so Xero could not be told: remove Checkrail Pay under Connected apps in Xero."
+        : "Disconnected from Xero.";
+  return json({ ok: true, message });
 }
 
 /** POST /api/xero/accounts: read the chart of accounts again. */
@@ -134,8 +142,16 @@ export async function handleXeroPush(req: Request, db: Db): Promise<Response> {
   if (bad) return bad;
   if (config.accounting.destination !== "xero") return json({ ok: false, message: "Set ACCOUNTING_DESTINATION=xero to send records to Xero." }, 409);
   if (!getXeroConnection(db, who.businessId)) return json({ ok: false, message: "Connect to Xero first." }, 409);
-  const r = await runXeroSync(db, { businessId: who.businessId, force: true });
+  let r;
+  try {
+    r = await runXeroSync(db, { businessId: who.businessId, force: true });
+  } catch (e) {
+    console.error("[xero] push failed:", (e as Error).message);
+    return json({ ok: false, message: "Sending to Xero failed on an unexpected error. It will be tried again." }, 502);
+  }
   if (r.skipped === "needs_reconnect") return json({ ok: false, message: r.errors[0] ?? "Connect to Xero again." }, 409);
+  if (r.skipped === "busy") return json({ ok: false, message: r.errors[0] }, 409);
+  if (r.errors.length && r.failed && !r.pushed && r.errors[0].startsWith("Could not read the chart")) return json({ ok: false, message: r.errors[0] }, 502);
   const parts = [r.pushed ? `${r.pushed} sent to Xero` : "Nothing new to send", r.failed ? `${r.failed} could not be sent` : null, r.rateLimited ? "the rest goes in a minute" : null].filter(Boolean);
   return json({ ok: r.failed === 0, message: `${parts.join(", ")}.`, result: r });
 }

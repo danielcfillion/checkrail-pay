@@ -22,6 +22,7 @@ import { audit } from "../domain/stateMachine";
 
 export const XERO_AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize";
 export const XERO_TOKEN_URL = "https://identity.xero.com/connect/token";
+export const XERO_REVOCATION_URL = "https://identity.xero.com/connect/revocation";
 export const XERO_CONNECTIONS_URL = "https://api.xero.com/connections";
 export const XERO_API_BASE = "https://api.xero.com/api.xro/2.0";
 
@@ -39,6 +40,10 @@ export const DEFAULT_XERO_SCOPES = [
 
 /** A "Connect to Xero" link is good for this long: enough to sign in to Xero and pick an organisation. */
 export const STATE_TTL_MS = 10 * 60_000;
+/** No call to Xero waits longer than this: a hung connection fails like a dropped one. */
+export const XERO_FETCH_TIMEOUT_MS = 20_000;
+export const xeroTimeout = () => AbortSignal.timeout(XERO_FETCH_TIMEOUT_MS);
+
 /** Refresh this long before the access token runs out, so a push never starts with a token about to expire. */
 const REFRESH_MARGIN_MS = 2 * 60_000;
 
@@ -102,7 +107,12 @@ interface TokenResponse {
 
 /** A token call failed. `revoked` means the refresh token is no good any more: the owner has to connect again. */
 export class XeroAuthError extends Error {
-  constructor(message: string, readonly revoked = false) {
+  constructor(
+    message: string,
+    readonly revoked = false,
+    /** For the server log only: Xero's error code and HTTP status, never a token. */
+    readonly detail?: string,
+  ) {
     super(message);
   }
 }
@@ -110,15 +120,15 @@ export class XeroAuthError extends Error {
 async function tokenCall(body: Record<string, string>): Promise<TokenResponse> {
   let res: Response;
   try {
-    res = await fetch(XERO_TOKEN_URL, { method: "POST", headers: { Authorization: basicAuth(), "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: new URLSearchParams(body).toString() });
-  } catch {
-    throw new XeroAuthError("Could not reach Xero to sign in. Try again in a minute.");
+    res = await fetch(XERO_TOKEN_URL, { method: "POST", headers: { Authorization: basicAuth(), "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: new URLSearchParams(body).toString(), signal: xeroTimeout() });
+  } catch (e) {
+    throw new XeroAuthError("Could not reach Xero to sign in. Try again in a minute.", false, `network: ${(e as Error).name}`);
   }
   const json = (await res.json().catch(() => ({}))) as Partial<TokenResponse> & { error?: string };
   if (!res.ok || !json.access_token) {
     // invalid_grant: the code or refresh token was used, expired or revoked. Never echo the token itself.
     const revoked = json.error === "invalid_grant";
-    throw new XeroAuthError(revoked ? "Xero no longer accepts this connection. Connect to Xero again from Settings." : `Xero sign-in failed (HTTP ${res.status}).`, revoked);
+    throw new XeroAuthError(revoked ? "Xero no longer accepts this connection. Connect to Xero again from Settings." : `Xero sign-in failed (HTTP ${res.status}).`, revoked, `HTTP ${res.status} ${json.error ?? "no error code"}`);
   }
   return json as TokenResponse;
 }
@@ -146,8 +156,8 @@ export interface XeroTenant {
 }
 
 export async function fetchXeroConnections(accessToken: string): Promise<XeroTenant[]> {
-  const res = await fetch(XERO_CONNECTIONS_URL, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
-  if (!res.ok) throw new XeroAuthError(`Xero did not list the connected organisations (HTTP ${res.status}).`);
+  const res = await fetch(XERO_CONNECTIONS_URL, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" }, signal: xeroTimeout() });
+  if (!res.ok) throw new XeroAuthError(`Xero did not list the connected organisations (HTTP ${res.status}).`, false, `connections HTTP ${res.status}`);
   return (await res.json()) as XeroTenant[];
 }
 
@@ -180,6 +190,8 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
     status: "connected",
     connectedBy: opts.actor,
     connectedAt: ts,
+    // The same organisation again: what was already owed to go keeps going. A new one starts from now.
+    syncFrom: keepMapping ? prior.syncFrom : ts,
     expenseAccountCode: keepMapping ? prior.expenseAccountCode : null,
     paypalAccountCode: keepMapping ? prior.paypalAccountCode : null,
     stellarAccountCode: keepMapping ? prior.stellarAccountCode : null,
@@ -191,6 +203,12 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
     blockedUntil: null,
     lastPushAt: keepMapping ? prior.lastPushAt : null,
     lastError: null,
+    leaseOwner: null,
+    leaseUntil: null,
+    rateWindowStart: null,
+    rateWindowCalls: 0,
+    chartAttempts: 0,
+    chartRetryAt: null,
     updatedAt: ts,
   };
   db.insert(xeroConnections).values(values).onConflictDoUpdate({ target: xeroConnections.businessId, set: values }).run();
@@ -204,34 +222,50 @@ export function getXeroConnection(db: Db, businessId: string): XeroConnectionRow
   return db.select().from(xeroConnections).where(eq(xeroConnections.businessId, businessId)).get() ?? null;
 }
 
-/** One refresh at a time per business: two at once would each rotate the token and one would lose. */
+/** One refresh at a time per business in this process; the stored token is also compared and swapped, for other processes. */
 const refreshing = new Map<string, Promise<string>>();
 
-/** Refresh now, store both new tokens, return the new access token. */
+/**
+ * Refresh now, store both new tokens, return the new access token. The update only lands if the stored refresh token
+ * is still the one this call used: if another process refreshed first, its tokens win and are used here instead.
+ */
 export function refreshXeroToken(db: Db, businessId: string): Promise<string> {
   const running = refreshing.get(businessId);
   if (running) return running;
   const p = (async () => {
     const conn = getXeroConnection(db, businessId);
     if (!conn) throw new XeroAuthError("Xero is not connected.");
+    const used = conn.refreshTokenEnc;
+    const winner = () => {
+      const latest = getXeroConnection(db, businessId);
+      return latest && latest.refreshTokenEnc !== used && latest.status === "connected" ? decryptField(latest.accessTokenEnc) : null;
+    };
     try {
-      const tok = await tokenCall({ grant_type: "refresh_token", refresh_token: decryptField(conn.refreshTokenEnc) });
+      const tok = await tokenCall({ grant_type: "refresh_token", refresh_token: decryptField(used) });
       const ts = new Date().toISOString();
-      db.update(xeroConnections)
+      const res = db
+        .update(xeroConnections)
         .set({
           accessTokenEnc: encryptField(tok.access_token),
           // Rotation: the new refresh token replaces the old one at once. Keep the old one only if Xero sent none.
-          refreshTokenEnc: tok.refresh_token ? encryptField(tok.refresh_token) : conn.refreshTokenEnc,
+          refreshTokenEnc: tok.refresh_token ? encryptField(tok.refresh_token) : used,
           accessExpiresAt: new Date(Date.now() + tok.expires_in * 1000).toISOString(),
           status: "connected",
           updatedAt: ts,
         })
-        .where(and(eq(xeroConnections.businessId, businessId), eq(xeroConnections.tenantId, conn.tenantId)))
+        .where(and(eq(xeroConnections.businessId, businessId), eq(xeroConnections.tenantId, conn.tenantId), eq(xeroConnections.refreshTokenEnc, used)))
         .run();
-      return tok.access_token;
+      if (res.changes === 1) return tok.access_token;
+      // Lost the race: another process stored its rotated tokens first. Use those.
+      const w = winner();
+      if (w) return w;
+      throw new XeroAuthError("Xero is not connected.");
     } catch (e) {
       if (e instanceof XeroAuthError && e.revoked) {
-        db.update(xeroConnections).set({ status: "needs_reconnect", lastError: e.message, updatedAt: new Date().toISOString() }).where(eq(xeroConnections.businessId, businessId)).run();
+        // Refused because another process already rotated the token this call used: theirs is good.
+        const w = winner();
+        if (w) return w;
+        db.update(xeroConnections).set({ status: "needs_reconnect", lastError: e.message, updatedAt: new Date().toISOString() }).where(and(eq(xeroConnections.businessId, businessId), eq(xeroConnections.refreshTokenEnc, used))).run();
       }
       throw e;
     }
@@ -249,20 +283,28 @@ export async function xeroAccessToken(db: Db, businessId: string, nowMs = Date.n
   return refreshXeroToken(db, businessId);
 }
 
+export type DisconnectOutcome = "removed" | "failed" | "expired" | "skipped";
+
 /**
- * Disconnect: remove the connection at Xero (DELETE /connections/{id}), then wipe the tokens and tenant here. The
- * local wipe happens whatever Xero says, so a failed call never leaves a token behind. Sync records stay: they say
- * what is already in that organisation, should it be connected again.
+ * Disconnect: remove the connection at Xero (DELETE /connections/{id}) and revoke the refresh token, then wipe the
+ * tokens and tenant here. The local wipe happens whatever Xero says, so a failed call never leaves a token behind.
+ * Sync records stay: they say what is already in that organisation, should it be connected again.
  */
-export async function disconnectXero(db: Db, businessId: string, actor: string): Promise<{ remote: "removed" | "failed" | "skipped" }> {
+export async function disconnectXero(db: Db, businessId: string, actor: string): Promise<{ remote: DisconnectOutcome }> {
   const conn = getXeroConnection(db, businessId);
   if (!conn) return { remote: "skipped" };
-  let remote: "removed" | "failed" | "skipped" = "skipped";
+  let remote: DisconnectOutcome = conn.status === "needs_reconnect" ? "expired" : "skipped";
   if (conn.connectionId && conn.status === "connected") {
     try {
       const token = await xeroAccessToken(db, businessId);
-      const res = await fetch(`${XERO_CONNECTIONS_URL}/${encodeURIComponent(conn.connectionId)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${XERO_CONNECTIONS_URL}/${encodeURIComponent(conn.connectionId)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` }, signal: xeroTimeout() });
       remote = res.ok || res.status === 404 ? "removed" : "failed";
+      // And the refresh token itself, so it cannot be used again even if it leaked.
+      const fresh = getXeroConnection(db, businessId);
+      if (fresh) {
+        const rv = await fetch(XERO_REVOCATION_URL, { method: "POST", headers: { Authorization: basicAuth(), "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: decryptField(fresh.refreshTokenEnc) }).toString(), signal: xeroTimeout() });
+        if (!rv.ok && remote === "removed") remote = "failed";
+      }
     } catch {
       remote = "failed";
     }

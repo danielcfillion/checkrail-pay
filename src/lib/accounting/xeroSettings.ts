@@ -5,6 +5,8 @@ import { config } from "../config";
 import { audit } from "../domain/stateMachine";
 import { createXeroClient, XeroApiError } from "./xeroClient";
 import { getXeroConnection, xeroConfigured, xeroRedirectUri, type XeroConnectionRow } from "./xeroAuth";
+import { xeroBillRows } from "./xeroBills";
+import { splitGroups } from "./xeroScope";
 
 /**
  * The account mapping: which of the organisation's accounts Checkrail posts to. Read from the tenant's chart of
@@ -128,7 +130,9 @@ export function saveXeroMapping(db: Db, businessId: string, actor: string, input
     if (!a) return { ok: false, message: `${label}: account ${code} is not in this Xero organisation's chart of accounts.` };
     if (!ok(a)) return { ok: false, message: `${label}: ${a.code} ${a.name} is the wrong kind of account (${a.type.toLowerCase()}).` };
   }
-  if (input.taxType && !chart.taxRates.some((t) => t.type === input.taxType)) return { ok: false, message: "That tax rate is not in this Xero organisation." };
+  // Required: the bill's lines are sent with this rate, so the bill total is exactly what is paid (see xeroSync taxTerms).
+  if (!input.taxType) return { ok: false, message: "Tax rate on bills: choose one (Tax Exempt, or No Tax, when you do not reclaim tax on supplier bills)." };
+  if (!chart.taxRates.some((t) => t.type === input.taxType)) return { ok: false, message: "That tax rate is not in this Xero organisation." };
   db.update(xeroConnections)
     .set({ ...input, updatedAt: new Date().toISOString() })
     .where(eq(xeroConnections.businessId, businessId))
@@ -157,6 +161,8 @@ export interface XeroCardView {
   pushed: number;
   waiting: number;
   failures: Array<{ id: string; label: string; error: string; attempts: number; nextAttemptAt: string | null }>;
+  /** Bills approved before Xero was connected: they stay in the bills file and the settlement CSV. */
+  earlierBills: number;
 }
 
 export function xeroCardView(db: Db, businessId: string): XeroCardView {
@@ -194,5 +200,6 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
     pushed: counts.filter((c) => c.status === "pushed").length,
     waiting: counts.filter((c) => c.status === "pending").length,
     failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.error ?? "Not sent", attempts: f.attempts, nextAttemptAt: f.nextAttemptAt })),
+    earlierBills: conn ? splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true }).groups, conn.syncFrom).earlier.length : 0,
   };
 }

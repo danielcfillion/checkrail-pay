@@ -57,6 +57,11 @@ export async function XeroConnection() {
                 ACCOUNTING_DESTINATION is csv, so nothing is sent yet. Set it to xero on the server and restart.
               </p>
             ) : null}
+            {v.connected && v.earlierBills ? (
+              <p className="mb-3 text-sm text-ink-soft">
+                {v.earlierBills === 1 ? "1 bill" : `${v.earlierBills} bills`} approved before Xero was connected {v.earlierBills === 1 ? "stays" : "stay"} in the bills file and the settlement CSV on the Accounting page, with {v.earlierBills === 1 ? "its payment" : "their payments"}. Only what is approved from now on goes to Xero.
+              </p>
+            ) : null}
             {v.blockedUntil ? (
               <p className="mb-3 text-sm text-ink-soft" role="status">
                 Xero asked us to slow down. Sending again <RelativeTime iso={v.blockedUntil} />.

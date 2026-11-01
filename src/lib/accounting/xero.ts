@@ -51,6 +51,10 @@ export function toXeroPayment(r: AccountingPayload, bankAccountCode: string) {
   };
 }
 
+export function xeroFeeReference(r: Pick<AccountingPayload, "reference" | "obligationId">): string {
+  return `fee ${r.reference} ${r.obligationId}`;
+}
+
 /**
  * A separate fee spend exists whenever the fee left the bank account on top of the bill: PayPal, Wise and the bank
  * file, so the payment plus the fee equals netPaid. On the Stellar path the fee is deducted from the amount in
@@ -64,7 +68,8 @@ export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: stri
     Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : "Bank transfer fee" },
     Date: r.paymentDate,
     BankAccount: { Code: bankAccountCode },
-    Reference: `fee ${r.reference}`,
+    // One per payment: a deposit and its balance share the bill's reference, so the payment's own id goes on too.
+    Reference: xeroFeeReference(r),
     LineItems: [{ Description: `Payment fee for ${r.reference}`, Quantity: 1, UnitAmount: Number(r.feeAmount), AccountCode: feeAccountCode }],
   };
 }

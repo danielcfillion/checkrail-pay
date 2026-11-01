@@ -76,7 +76,11 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
       const due = [b.dueDate ?? o.dueDate ?? date, date].sort()[1];
       const main: Row = { ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode, b.kind), Currency: b.currency };
       rows.push(main);
-      const w = withholdingLine(b.reference, date, due, o.withheldMinor ?? 0, b.currency, o.withholdingNote);
+      // Tax kept back on every part of this invoice (a deposit and its balance each withhold), not only the part that
+      // happened to be agreed first. A cancelled part was never paid, so nothing was kept back from it.
+      const parts = db.select({ withheld: obligations.withheldMinor, note: obligations.withholdingNote, state: obligations.state }).from(obligations).where(eq(obligations.billId, b.id)).all().filter((p) => p.state !== "cancelled");
+      const withheldAll = parts.reduce((sum, p) => sum + (p.withheld ?? 0), 0);
+      const w = withholdingLine(b.reference, date, due, withheldAll, b.currency, o.withholdingNote ?? parts.find((p) => p.note)?.note ?? null);
       if (w) rows.push(w);
       groups.set(b.id, { kind: "bill", billId: b.id, obligationIds: [o.id], rows: w ? [main, w] : [main] });
       continue;

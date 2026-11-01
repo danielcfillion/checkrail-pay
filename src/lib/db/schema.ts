@@ -640,6 +640,8 @@ export const xeroConnections = sqliteTable("xero_connections", {
   status: text("status").notNull(), // connected | needs_reconnect
   connectedBy: text("connected_by").notNull(),
   connectedAt: text("connected_at").notNull(),
+  /** Only what is approved from this moment on goes to Xero; earlier bills stay in the files. Kept when the same organisation reconnects. */
+  syncFrom: text("sync_from").notNull(),
   /** Account for supplier bills whose own code (310, 320, ...) is not in this tenant's chart. */
   expenseAccountCode: text("expense_account_code"),
   paypalAccountCode: text("paypal_account_code"),
@@ -655,6 +657,15 @@ export const xeroConnections = sqliteTable("xero_connections", {
   blockedUntil: text("blocked_until"),
   lastPushAt: text("last_push_at"),
   lastError: text("last_error"),
+  /** One push at a time across every server process: a lease with an expiry, renewed before each call. */
+  leaseOwner: text("lease_owner"),
+  leaseUntil: text("lease_until"),
+  /** Calls to Xero in the current minute, counted here so every process shares one budget. */
+  rateWindowStart: integer("rate_window_start"),
+  rateWindowCalls: integer("rate_window_calls").notNull().default(0),
+  /** Reading the chart of accounts failed this many times; the next try waits until chartRetryAt. */
+  chartAttempts: integer("chart_attempts").notNull().default(0),
+  chartRetryAt: text("chart_retry_at"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -680,16 +691,23 @@ export const xeroRecords = sqliteTable(
     businessId: text("business_id").notNull(),
     tenantId: text("tenant_id").notNull(),
     kind: text("kind").notNull(), // contact | bill | credit_note | payment | fee
+    /** Natural key: the contact name, contact and invoice number, or obligation, rail and provider transaction id. */
     localKey: text("local_key").notNull(),
+    /** For a payment, the bill it pays; for a fee, the payment it belongs to. */
+    parentKey: text("parent_key"),
+    /** For a payment, the amount sent (major units), so a payment already in Xero can be recognised. */
+    amount: text("amount"),
     label: text("label").notNull(), // what a person sees: "Bill INV-JM-1030, Jake Morrison"
     obligationId: text("obligation_id"),
     accountingSyncId: text("accounting_sync_id"),
     xeroId: text("xero_id"),
-    status: text("status").notNull(), // pending | pushed | failed
+    status: text("status").notNull(), // pending | sending | pushed | failed | skipped
     error: text("error"),
     attempts: integer("attempts").notNull().default(0),
     /** Part of the Idempotency-Key: moves on only after Xero gave a definite answer, so a retry after a dropped connection reuses the key. */
     keySeq: integer("key_seq").notNull().default(0),
+    /** Written before each create call: a row still "sending" on the next pass may already be in Xero, so it is looked up first. */
+    idemKey: text("idem_key"),
     /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
     uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
     nextAttemptAt: text("next_attempt_at"),

@@ -1,14 +1,15 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { xeroConnections } from "../db/schema";
-import { XERO_API_BASE, XeroAuthError, refreshXeroToken, xeroAccessToken } from "./xeroAuth";
+import { XERO_API_BASE, XeroAuthError, refreshXeroToken, xeroAccessToken, xeroTimeout } from "./xeroAuth";
 
 /**
  * Calls to the Xero Accounting API for one connected organisation.
  *
- *  - Rate limits (developer.xero.com/documentation/guides/oauth2/limits): 60 calls a minute per organisation. The
- *    client counts its own calls and stops short of the limit; a 429 stores Retry-After on the connection and no call
- *    goes to that organisation until then.
+ *  - Rate limits (developer.xero.com/documentation/guides/oauth2/limits): 60 calls a minute per organisation. Calls
+ *    are counted on the connection row in the database (one budget for every server process) and stop short of the
+ *    limit; a 429 stores Retry-After on the connection and no call goes to that organisation until then.
+ *  - Every call times out after 20 seconds.
  *  - A 401 refreshes the token once and repeats the call once.
  *  - Writes carry an Idempotency-Key (POST, PUT and PATCH; Xero keeps a key for 6 minutes), so a call repeated after
  *    a dropped connection returns the first answer instead of creating a second bill.
@@ -32,18 +33,24 @@ export class XeroApiError extends Error {
 export const MINUTE_LIMIT = 60;
 /** Leave room for a person's own clicks (reading the chart of accounts) inside the same minute. */
 const MINUTE_BUDGET = MINUTE_LIMIT - 5;
-const calls = new Map<string, number[]>();
 
-/** Tests and a fresh connection start with an empty window. */
-export function resetXeroRateWindow(): void {
-  calls.clear();
-}
-
-function underBudget(tenantId: string, nowMs: number): number | null {
-  const recent = (calls.get(tenantId) ?? []).filter((t) => nowMs - t < 60_000);
-  calls.set(tenantId, recent);
-  if (recent.length < MINUTE_BUDGET) return null;
-  return Math.max(1, Math.ceil((60_000 - (nowMs - recent[0])) / 1000));
+/**
+ * Take one call from this minute's budget, in one statement so two processes cannot both take the last one. A new
+ * window starts when the last one is a minute old. Returns null when the call may go, else the seconds to wait.
+ */
+export function takeXeroCallSlot(db: Db, businessId: string, nowMs: number): number | null {
+  const fresh = sql`(${xeroConnections.rateWindowStart} IS NULL OR ${xeroConnections.rateWindowStart} <= ${nowMs - 60_000})`;
+  const res = db
+    .update(xeroConnections)
+    .set({
+      rateWindowStart: sql`CASE WHEN ${fresh} THEN ${nowMs} ELSE ${xeroConnections.rateWindowStart} END`,
+      rateWindowCalls: sql`CASE WHEN ${fresh} THEN 1 ELSE ${xeroConnections.rateWindowCalls} + 1 END`,
+    })
+    .where(and(eq(xeroConnections.businessId, businessId), sql`(${fresh} OR ${xeroConnections.rateWindowCalls} < ${MINUTE_BUDGET})`))
+    .run();
+  if (res.changes === 1) return null;
+  const row = db.select({ start: xeroConnections.rateWindowStart }).from(xeroConnections).where(eq(xeroConnections.businessId, businessId)).get();
+  return Math.max(1, Math.ceil(((row?.start ?? nowMs) + 60_000 - nowMs) / 1000));
 }
 
 export interface XeroRequest {
@@ -76,12 +83,10 @@ export function createXeroClient(db: Db, businessId: string, tenantId: string, o
     const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "xero-tenant-id": tenantId, Accept: "application/json" };
     if (req.body !== undefined) headers["Content-Type"] = "application/json";
     if (req.idempotencyKey && req.method !== "GET" && req.method !== "DELETE") headers["Idempotency-Key"] = req.idempotencyKey;
-    const nowMs = clock();
-    const seen = calls.get(tenantId);
-    if (seen) seen.push(nowMs);
-    else calls.set(tenantId, [nowMs]);
+    const wait = takeXeroCallSlot(db, businessId, clock());
+    if (wait !== null) throw new XeroApiError(`Paused at Xero's limit of ${MINUTE_LIMIT} calls a minute. Sending again in ${wait} seconds.`, "rate_limited", false, wait);
     try {
-      return await fetch(url, { method: req.method, headers, body: req.body === undefined ? undefined : JSON.stringify(req.body) });
+      return await fetch(url, { method: req.method, headers, body: req.body === undefined ? undefined : JSON.stringify(req.body), signal: xeroTimeout() });
     } catch {
       throw new XeroApiError("Could not reach Xero. It will be tried again.", "unavailable", req.method !== "GET");
     }
@@ -96,8 +101,6 @@ export function createXeroClient(db: Db, businessId: string, tenantId: string, o
         const wait = Math.ceil((Date.parse(conn.blockedUntil) - nowMs) / 1000);
         throw new XeroApiError(`Xero asked us to slow down. Sending again in ${wait} seconds.`, "rate_limited", false, wait);
       }
-      const wait = underBudget(tenantId, nowMs);
-      if (wait !== null) throw new XeroApiError(`Paused at Xero's limit of ${MINUTE_LIMIT} calls a minute. Sending again in ${wait} seconds.`, "rate_limited", false, wait);
 
       let token: string;
       try {
