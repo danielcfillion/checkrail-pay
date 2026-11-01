@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { accountingSyncs, approvals, attachments, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, bills } from "../db/schema";
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
@@ -674,7 +674,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   const vendor = vendorRow ? toProfile(vendorRow) : null;
   const prior = vendor
     ? db
-        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, paymentKind: obligations.paymentKind, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
+        .select({ obligationId: obligations.id, sourceRef: obligations.sourceRef, amountMinor: obligations.amountMinor, currency: obligations.currency, billId: obligations.billId, state: obligations.state, updatedAt: obligations.updatedAt, createdAt: obligations.createdAt, rawInput: obligations.rawInput, description: obligations.description, payoutHash: obligations.payoutHash })
         .from(obligations)
         .where(and(eq(obligations.vendorId, vendor.id), ne(obligations.id, obligationId)))
         .all()
@@ -684,7 +684,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
           const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
           const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
           const all = [p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))];
-          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])], ev };
+          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])] };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
@@ -776,59 +776,69 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     vendorRecentMinor,
     businessRecentMinor,
   });
-  return { outcome: withBillParts(db, ob, outcome, prior, myJobKeys, myEvidence, approvalsCount, acknowledgedWarnings), withholding };
+  return { outcome: withBillParts(db, ob, outcome, approvalsCount, acknowledgedWarnings), withholding };
+}
+
+/** The actor who first asked for this payment: the creator, or the creator of the payment it asks for again. */
+function originOf(db: Db, obligationId: string): string {
+  const row = db.select({ actor: auditEntries.actor, detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
+  if (!row) return "";
+  const origin = (JSON.parse(row.detail ?? "{}") as { originActor?: unknown }).originActor;
+  return typeof origin === "string" ? origin : row.actor;
 }
 
 /**
- * Parts of one bill (API review R4). Policy does not compare parts of one bill with each other as duplicates, which is
- * how a deposit and its balance both get paid. So, in plain words:
+ * Parts of one bill (API reviews R4, R5). Policy does not compare parts of one bill with each other as duplicates,
+ * which is how a deposit and its balance both get paid. So, in plain words:
  *
- *  - Every part of a bill says which part it is and lists the earlier ones, so an approver always sees the bill.
- *  - A part "looks like" an earlier part when it is for the same amount, or names the same job or record beyond the
- *    bill's own reference. Earlier parts that were cancelled, failed, returned or blocked do not count.
- *  - When a request from an outside agent (mcp:) or an integration (api:) looks like an earlier part, it is never paid
- *    without a person: Autopilot cannot schedule it, and a person confirms it is a different job. The one exception is
- *    the balance, when it is exactly what is still open on the bill.
- *  - A person's request that looks like an earlier part carries the same note, and otherwise goes as it always has.
+ *  - Every part of a bill says which part it is and lists the other parts, so an approver always sees the bill.
+ *  - A request from an outside agent (mcp:) or an integration (api:) that is part of a bill is never paid without a
+ *    person while the bill has any other part that is not cancelled or returned, whatever its state and whichever came
+ *    first. There is no matching on amounts or job names. Autopilot cannot schedule or release it, and an approval
+ *    counts only if the approver saw this warning. It runs wherever policy runs: on create, on every re-check, on
+ *    retry and at release.
+ *  - The one exception is an exact balance: every other part is approved by a person, in flight, paid or disputed,
+ *    and this request is exactly what is left of the bill after them and its credits.
+ *  - A person's part carries the same note and otherwise goes as it always has.
  */
-function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome, prior: Array<{ obligationId: string; billId: string | null; amountMinor: number | null; currency: string | null; state: string; createdAt: string; updatedAt: string; keys: string[]; ev: Array<{ reference: string | null }> }>, myKeys: string[], myEvidence: EvidenceItem[], approvalsCount: number, acknowledged: string[] | undefined): PolicyOutcome {
+function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome, approvalsCount: number, acknowledged: string[] | undefined): PolicyOutcome {
   if (!ob.billId) return outcome;
   const bill = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
   if (!bill) return outcome;
-  const gone = ["cancelled", "failed", "refunded", "blocked"];
-  const earlier = prior
-    .filter((p) => p.billId === ob.billId && !gone.includes(p.state) && (p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.obligationId < ob.id)))
-    .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-  const describe = (p: (typeof earlier)[number]) => `${p.amountMinor != null ? fmt(p.amountMinor, p.currency ?? bill.currency) : "an amount"}, ${p.state.replace(/_/g, " ")} ${new Date(p.updatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`;
-  const rules = [...outcome.rules];
-  const partLine = `Part ${earlier.length + 1} of bill ${bill.reference}; earlier parts: ${earlier.length ? earlier.map(describe).join("; ") : "none"}`;
-  rules.push({ ruleId: "bill_part", passed: true, severity: "info", message: partLine });
+  const others = db
+    .select({ id: obligations.id, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, createdAt: obligations.createdAt, updatedAt: obligations.updatedAt })
+    .from(obligations)
+    .where(and(eq(obligations.billId, ob.billId), ne(obligations.id, ob.id)))
+    .all()
+    .filter((p) => p.state !== "cancelled" && p.state !== "refunded")
+    .sort((x, y) => x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
+  const money = (p: { amountMinor: number | null; currency: string | null }) => (p.amountMinor != null ? fmt(p.amountMinor, p.currency ?? bill.currency) : "an amount");
+  const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  const position = others.filter((p) => p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.id < ob.id)).length + 1;
+  const partLine = `Part ${position} of bill ${bill.reference}; other parts: ${others.length ? others.map((p) => `${money(p)}, ${p.state.replace(/_/g, " ")} ${day(p.updatedAt)}`).join("; ") : "none"}`;
+  const rules: PolicyRuleResult[] = [...outcome.rules, { ruleId: "bill_part", passed: true, severity: "info", message: partLine }];
   // Whenever a person is asked, the reasons say which part of the bill this is.
   const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, partLine];
+  if (!others.length) return { ...outcome, rules, reasons };
 
-  const billForms = new Set(sourceRefKeys(bill.reference).map((k) => k.replace(/^[~^]/, "")));
-  const named = (keys: string[], refs: Array<string | null>) => new Set([...keys, ...refs.flatMap((r) => (r ? sourceRefKeys(r) : []))].map((k) => k.replace(/^[~^]/, "")).filter((k) => k && !billForms.has(k)));
-  const mine = named(myKeys, myEvidence.map((e) => e.reference));
-  const like = earlier.find((p) => (p.amountMinor === ob.amountMinor && p.currency === ob.currency) || [...named(p.keys, p.ev.map((e) => e.reference))].some((k) => mine.has(k)));
-  if (!like) return { ...outcome, rules, reasons };
-
-  const why = `${like.amountMinor === ob.amountMinor ? "Same amount as" : "Same job as"} an earlier part of bill ${bill.reference} (${describe(like)}). A person confirms this is a different job.`;
-  const outside = /^(mcp|api):/.test(originOf(db, ob.id));
-  const bal = billBalance(db, bill.id, ob.id);
-  const isTheBalance = ob.paymentKind === "balance" && ob.amountMinor === bill.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
-  // A person's part, or an outside caller's exact balance: the note only.
-  if (!outside || isTheBalance) {
-    rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why, key: like.obligationId });
+  const why = `Bill ${bill.reference} already has another part (${money(others[0])}). A person confirms this is a separate payment.`;
+  const note = (): PolicyOutcome => {
+    rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
     return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
-  }
-  // An outside caller's part: never paid without a person. With no approval yet it needs one; an approval counts only
-  // if the person saw this warning.
-  const warning = { ruleId: "bill_part_repeat", passed: false, severity: "warn" as const, message: why, key: like.obligationId };
+  };
+  if (!/^(mcp|api):/.test(originOf(db, ob.id))) return note();
+  // The exact balance: every other part is approved by a person, in flight, paid or disputed, and this request is
+  // exactly what is left of the bill after them and its credits.
+  const byPerson = (id: string) => Boolean(db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, id), eq(approvals.decision, "approved"), sql`substr(${approvals.actor}, 1, 5) = 'user:'`)).get());
+  const done = (p: (typeof others)[number]) => ["execution_pending", "sent", "settled", "disputed"].includes(p.state) || (p.state === "approved" && byPerson(p.id));
+  const left = bill.totalMinor - billBalance(db, bill.id, ob.id).creditedMinor - others.reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
+  if (others.every((p) => done(p) && p.currency === bill.currency) && ob.currency === bill.currency && ob.amountMinor === left) return note();
+
+  const warning: PolicyRuleResult = { ruleId: "bill_part_repeat", passed: false, severity: "warn", message: why, key: bill.id };
   rules.push(warning);
-  const held = outcome.decision === "auto_execute" ? [...reasons, partLine] : reasons;
   if (outcome.decision === "block" || outcome.decision === "hold") return { ...outcome, rules, reasons: [...reasons, why] };
-  if (approvalsCount < 1) return { ...outcome, decision: "require_approval", rules, reasons: [why, ...held] };
-  if (acknowledged && !fingerprintCovered(new Set(acknowledged), warningFingerprint(warning))) {
+  if (approvalsCount < 1) return { ...outcome, decision: "require_approval", rules, reasons: [why, ...reasons, ...(outcome.decision === "auto_execute" ? [partLine] : [])] };
+  if (!acknowledged || !fingerprintCovered(new Set(acknowledged), warningFingerprint(warning))) {
     return { ...outcome, decision: "require_approval", rules, reasons: [`New since approval: ${why}`, partLine], unacknowledged: [...(outcome.unacknowledged ?? []), warningFingerprint(warning)] };
   }
   return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [why, ...reasons] };
@@ -839,14 +849,6 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
  * record the invoice as a bill and link this payment to it as the deposit; a later "pay the balance" links to the
  * same bill. The agent only files the record: policy then checks the payment against what is open on it.
  */
-/** The actor who first asked for this payment: the creator, or the creator of the payment it asks for again. */
-function originOf(db: Db, obligationId: string): string {
-  const row = db.select({ actor: auditEntries.actor, detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
-  if (!row) return "";
-  const origin = (JSON.parse(row.detail ?? "{}") as { originActor?: unknown }).originActor;
-  return typeof origin === "string" ? origin : row.actor;
-}
-
 function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: EvidenceItem[]): void {
   const ob = mustGet(db, obligationId);
   if (ob.billId || !ob.vendorId || !ob.currency || !ob.amountMinor || !ob.sourceRef) return;
@@ -1395,6 +1397,12 @@ export function retryFailed(db: Db, obligationId: string, actor: string): void {
   if (ob.payoutHash && ob.payoutHash !== current) throw new Error("Vendor payout details changed since approval; review and approve this payment again");
   db.update(obligations).set({ payoutHash: current, releaseAt: null, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   transition(db, obligationId, "approved", actor, "execution.retry_requested", { payoutHash: current });
+  // A part of a bill is checked again at once (API review R5): another part may have arrived since it failed, and an
+  // outside caller's part then waits for a person instead of sitting ready for Autopilot. Release checks again anyway.
+  if (ob.billId) {
+    const outcome = runPolicy(db, obligationId);
+    if (outcome.decision !== "auto_execute") moveTo(db, obligationId, targetState(outcome, "approved"), outcome);
+  }
 }
 
 /** Poll the rail for the latest attempt and settle or fail accordingly. Webhooks call the same function. */
