@@ -564,23 +564,6 @@ function jobRecordRefKeys(ev: Array<{ kind: string; reference: string | null }>)
   ];
 }
 
-/**
- * Prints of the records a request carries, for telling the same job sent twice (API review R3-M1): each evidence row
- * by its kind, amount, reference and wording, and each document by its file hash. A row with no wording prints nothing.
- */
-function recordPrints(ev: Array<{ kind: string; amountMinor: number | null; reference: string | null; label: string | null; excerpt: string | null }>, files: Array<{ sha256: string | null }>): string[] {
-  const words = (s: string | null) => (s ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-  return [
-    ...ev.map((e) => (words(e.excerpt) || words(e.label) ? `ev|${e.kind}|${e.amountMinor ?? ""}|${(e.reference ?? "").toUpperCase()}|${words(e.excerpt) || words(e.label)}` : "")).filter(Boolean),
-    ...files.map((f) => (f.sha256 ? `file|${f.sha256}` : "")).filter(Boolean),
-  ];
-}
-
-/** Every form a reference is compared in; none for a missing reference or a date. */
-function refFormsOf(ref: string | null): string[] {
-  return ref && !isDateLike(ref) ? sourceRefKeys(ref) : [];
-}
-
 function ownJobKeys(db: Db, ob: typeof obligations.$inferSelect, ev: EvidenceItem[] = listEvidence(db, ob.id)): string[] {
   const docTexts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, ob.id)).all();
   const texts = [ob.sourceRef, ob.rawInput, ob.description, ...jobTexts(ev), ...docTexts.map((d) => d.text?.slice(0, 4000))];
@@ -698,10 +681,10 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
         .map((p) => {
           // Identity of the underlying job comes from everything that names it, including the document text:
           // a re-issued invoice under a new number still says "ref INV-TAM-0834" or "trip HG-4D-0831" in its lines.
-          const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt, amountMinor: evidenceTable.amountMinor }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
-          const texts = db.select({ text: attachments.extractedText, sha256: attachments.sha256 }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
+          const ev = db.select({ kind: evidenceTable.kind, reference: evidenceTable.reference, label: evidenceTable.label, excerpt: evidenceTable.excerpt }).from(evidenceTable).where(eq(evidenceTable.obligationId, p.obligationId)).all();
+          const texts = db.select({ text: attachments.extractedText }).from(attachments).where(eq(attachments.obligationId, p.obligationId)).all();
           const all = [p.sourceRef, p.rawInput, p.description, ...jobTexts(ev), ...texts.map((t) => t.text?.slice(0, 4000))];
-          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])], ev, files: texts };
+          return { ...p, keys: [...new Set([...jobKeys(...all), ...bookingKeys(...all), ...sourceRefKeys(p.sourceRef), ...jobRecordRefKeys(ev)])], ev };
         })
     : [];
   // An outside agent's request that nobody has approved, sent without attest, is its say-so: it does not stop another
@@ -762,33 +745,6 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   const ai: AiInterpretation | null = ob.aiSummary
     ? { vendorName: null, vendorId: ob.vendorId, amountMinor: ob.amountMinor, currency: ob.currency, description: ob.description ?? "", sourceRef: ob.sourceRef, dueDate: ob.dueDate, summary: ob.aiSummary, confidence: ob.aiConfidence ?? 0, flags: JSON.parse(ob.aiFlagsJson ?? "[]"), missing: JSON.parse(ob.aiMissingJson ?? "[]") }
     : null;
-  // The same job sent twice (API review R3-M1). Two requests are the same job when they carry the same record (the same
-  // evidence row, or the same document file) or name the same job in their records beyond the bill's own reference.
-  const myBill = ob.billId ? db.select({ reference: bills.reference, totalMinor: bills.totalMinor }).from(bills).where(eq(bills.id, ob.billId)).get() : undefined;
-  const billRefForms = new Set(refFormsOf(myBill?.reference ?? null));
-  // The bill's own record (its reference at its total), which every part of the bill carries by design, says nothing
-  // about which part this is, so it never makes two parts the same job.
-  const notTheBill = (e: { reference: string | null; amountMinor: number | null }) => !(myBill && e.amountMinor === myBill.totalMinor && refFormsOf(e.reference).some((k) => billRefForms.has(k)));
-  const myFiles = db.select({ sha256: attachments.sha256 }).from(attachments).where(eq(attachments.obligationId, obligationId)).all();
-  const myRecords = recordPrints(myEvidence, myFiles);
-  const myPartRecords = recordPrints(myEvidence.filter(notTheBill), myFiles);
-  const myRecordRefs = new Set(myEvidence.flatMap((e) => refFormsOf(e.reference)).filter((k) => !billRefForms.has(k)));
-  const sameRecord = (p: (typeof prior)[number]) => recordPrints(p.ev, p.files).some((r) => myRecords.includes(r));
-  const explicitParts = (a: string | null, b: string | null) => (a === "deposit" || a === "balance") && (b === "deposit" || b === "balance") && a !== b;
-  // Parts of one bill are not each other's duplicates, which is how a deposit and its balance both get paid. But a
-  // part that is the same job as another part is a duplicate like any other, and policy sees it without the bill
-  // link: the same kind of part for the same amount with the same record, or records naming the same job beyond the
-  // bill's own reference. An explicit deposit and balance stay two parts even when they cite the same invoice.
-  const sameJobOnBill = (p: (typeof prior)[number]) =>
-    Boolean(ob.billId) && p.billId === ob.billId && !explicitParts(ob.paymentKind, p.paymentKind) &&
-    ((p.paymentKind === ob.paymentKind && p.amountMinor === ob.amountMinor && recordPrints(p.ev.filter(notTheBill), p.files).some((r) => myPartRecords.includes(r))) ||
-      p.ev.flatMap((e) => refFormsOf(e.reference)).some((k) => myRecordRefs.has(k)));
-  // An untrusted caller's open request does not stop another (AG3-3), but when this request is not a system of
-  // record's and repeats it (same amount, same record), the approver is told so.
-  const myTrusted = (JSON.parse(db.select({ d: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get()?.d ?? "{}") as StatedFields).trusted === true;
-  const isEarlier = (p: (typeof prior)[number]) => p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.obligationId < ob.id);
-  const repeatsOpen = !myTrusted && prior.some((p) => untrustedOpen.has(p.obligationId) && isEarlier(p) && p.amountMinor === ob.amountMinor && p.currency === ob.currency && sameRecord(p));
-  if (ai && repeatsOpen) ai.flags = [...ai.flags, "Same job as an earlier request still waiting for a person: the same amount and the same record. Confirm this is not the same payment twice"];
   const outcome = evaluatePolicy(policy, {
     obligation: { id: ob.id, amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId, createdAt: ob.createdAt },
     vendor,
@@ -797,7 +753,7 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     businessCountry: biz.country,
     baseCurrency: biz.baseCurrency,
     baseAmountMinor: ob.amountMinor != null && ob.currency ? toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) : null,
-    priorSourceRefs: prior.filter((p) => !untrustedOpen.has(p.obligationId)).map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: sameJobOnBill(p) ? null : p.billId })),
+    priorSourceRefs: prior.filter((p) => !untrustedOpen.has(p.obligationId)).map((p) => ({ obligationId: p.obligationId, sourceRef: p.sourceRef, amountMinor: p.amountMinor, state: p.state as ObligationState, keys: p.keys, updatedAt: p.updatedAt, createdAt: p.createdAt, billId: p.billId })),
     bill: billInput(db, ob),
     paymentKind: ob.paymentKind,
     invoiceDate: ob.invoiceDate,
@@ -820,7 +776,62 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
     vendorRecentMinor,
     businessRecentMinor,
   });
-  return { outcome, withholding };
+  return { outcome: withBillParts(db, ob, outcome, prior, myJobKeys, myEvidence, approvalsCount, acknowledgedWarnings), withholding };
+}
+
+/**
+ * Parts of one bill (API review R4). Policy does not compare parts of one bill with each other as duplicates, which is
+ * how a deposit and its balance both get paid. So, in plain words:
+ *
+ *  - Every part of a bill says which part it is and lists the earlier ones, so an approver always sees the bill.
+ *  - A part "looks like" an earlier part when it is for the same amount, or names the same job or record beyond the
+ *    bill's own reference. Earlier parts that were cancelled, failed, returned or blocked do not count.
+ *  - When a request from an outside agent (mcp:) or an integration (api:) looks like an earlier part, it is never paid
+ *    without a person: Autopilot cannot schedule it, and a person confirms it is a different job. The one exception is
+ *    the balance, when it is exactly what is still open on the bill.
+ *  - A person's request that looks like an earlier part carries the same note, and otherwise goes as it always has.
+ */
+function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome, prior: Array<{ obligationId: string; billId: string | null; amountMinor: number | null; currency: string | null; state: string; createdAt: string; updatedAt: string; keys: string[]; ev: Array<{ reference: string | null }> }>, myKeys: string[], myEvidence: EvidenceItem[], approvalsCount: number, acknowledged: string[] | undefined): PolicyOutcome {
+  if (!ob.billId) return outcome;
+  const bill = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
+  if (!bill) return outcome;
+  const gone = ["cancelled", "failed", "refunded", "blocked"];
+  const earlier = prior
+    .filter((p) => p.billId === ob.billId && !gone.includes(p.state) && (p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.obligationId < ob.id)))
+    .sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+  const describe = (p: (typeof earlier)[number]) => `${p.amountMinor != null ? fmt(p.amountMinor, p.currency ?? bill.currency) : "an amount"}, ${p.state.replace(/_/g, " ")} ${new Date(p.updatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`;
+  const rules = [...outcome.rules];
+  const partLine = `Part ${earlier.length + 1} of bill ${bill.reference}; earlier parts: ${earlier.length ? earlier.map(describe).join("; ") : "none"}`;
+  rules.push({ ruleId: "bill_part", passed: true, severity: "info", message: partLine });
+  // Whenever a person is asked, the reasons say which part of the bill this is.
+  const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, partLine];
+
+  const billForms = new Set(sourceRefKeys(bill.reference).map((k) => k.replace(/^[~^]/, "")));
+  const named = (keys: string[], refs: Array<string | null>) => new Set([...keys, ...refs.flatMap((r) => (r ? sourceRefKeys(r) : []))].map((k) => k.replace(/^[~^]/, "")).filter((k) => k && !billForms.has(k)));
+  const mine = named(myKeys, myEvidence.map((e) => e.reference));
+  const like = earlier.find((p) => (p.amountMinor === ob.amountMinor && p.currency === ob.currency) || [...named(p.keys, p.ev.map((e) => e.reference))].some((k) => mine.has(k)));
+  if (!like) return { ...outcome, rules, reasons };
+
+  const why = `${like.amountMinor === ob.amountMinor ? "Same amount as" : "Same job as"} an earlier part of bill ${bill.reference} (${describe(like)}). A person confirms this is a different job.`;
+  const outside = /^(mcp|api):/.test(originOf(db, ob.id));
+  const bal = billBalance(db, bill.id, ob.id);
+  const isTheBalance = ob.paymentKind === "balance" && ob.amountMinor === bill.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
+  // A person's part, or an outside caller's exact balance: the note only.
+  if (!outside || isTheBalance) {
+    rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why, key: like.obligationId });
+    return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
+  }
+  // An outside caller's part: never paid without a person. With no approval yet it needs one; an approval counts only
+  // if the person saw this warning.
+  const warning = { ruleId: "bill_part_repeat", passed: false, severity: "warn" as const, message: why, key: like.obligationId };
+  rules.push(warning);
+  const held = outcome.decision === "auto_execute" ? [...reasons, partLine] : reasons;
+  if (outcome.decision === "block" || outcome.decision === "hold") return { ...outcome, rules, reasons: [...reasons, why] };
+  if (approvalsCount < 1) return { ...outcome, decision: "require_approval", rules, reasons: [why, ...held] };
+  if (acknowledged && !fingerprintCovered(new Set(acknowledged), warningFingerprint(warning))) {
+    return { ...outcome, decision: "require_approval", rules, reasons: [`New since approval: ${why}`, partLine], unacknowledged: [...(outcome.unacknowledged ?? []), warningFingerprint(warning)] };
+  }
+  return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [why, ...reasons] };
 }
 
 /**
@@ -845,14 +856,15 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
   // Who asked for this payment in the first place: for one asked again after it came back, the original asker, so a
   // person's "pay again" carries an outside caller's records at their original weight (API review R3-S2).
   const outside = /^(mcp|api):/.test(originOf(db, obligationId));
-  // A request from an outside agent (mcp:) or an integration (api:) joins an existing bill only as what the reader
-  // found it to be, a deposit or a balance, and only when it fits what is open. Anything else under the bill's
-  // reference is checked as a payment of its own, so a repeated job is caught as a duplicate (API review R3-M1).
+  // A request from an outside agent (mcp:) or an integration (api:) joins an existing bill only when it fits what is
+  // still open, in the bill's currency; otherwise it is checked as a payment of its own. It is the balance only when it
+  // is exactly what is open; whatever else it calls itself, it is an ordinary part (API review R4).
+  let outsideKind: string | null = null;
   if (billId && existing && outside) {
     const bal = billBalance(db, existing.id, obligationId);
     const open = existing.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
-    const part = ai.paymentPart?.kind;
-    if (!(part === "deposit" || part === "balance") || existing.currency !== ob.currency || ob.amountMinor > open) billId = null;
+    if (existing.currency !== ob.currency || ob.amountMinor > open) billId = null;
+    else outsideKind = ai.paymentPart?.kind === "balance" && ob.amountMinor === open ? "balance" : ai.paymentPart?.kind === "deposit" ? "deposit" : "part";
   }
   if (!billId && ai.paymentPart?.kind === "deposit") {
     // Which records may set a bill total is decided by where they came from (API review R3-S1). A supplier's own record
@@ -871,7 +883,7 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
     billId = createBill(db, ob.businessId, "agent", ob.vendorId, { kind: "invoice", reference: ob.sourceRef, totalMinor: total, currency: ob.currency, billDate: ob.invoiceDate, dueDate: ob.dueDate, note: `Recorded from a deposit request (${obligationId})` });
   }
   if (!billId) return;
-  const kind = ai.paymentPart?.kind ?? "part";
+  const kind = outsideKind ?? ai.paymentPart?.kind ?? "part";
   db.update(obligations).set({ billId, paymentKind: kind, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   audit(db, { obligationId, actor: "ai:bills", action: "bill.linked", detail: { billId, kind } });
 }
