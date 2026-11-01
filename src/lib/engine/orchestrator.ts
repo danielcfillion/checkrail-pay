@@ -786,10 +786,11 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
   const existing = findBill(db, ob.vendorId, ob.sourceRef);
   let billId = existing && existing.status !== "void" ? existing.id : null;
   if (!billId && ai.paymentPart?.kind === "deposit") {
-    // An outside agent's or an integration's own attachment (an API key without attest) is its say-so, never a record
-    // the business holds: it sets no bill ceiling (agent guard review AG-5, API review R1-2). Clerk-typed records are unchanged.
+    // For a request from an outside agent (mcp:) or an integration (api:), only the business's own records (provenance
+    // "system", an attest key) may set a bill total. Its own typing, its own PDF and a supplier's record are its say-so
+    // and set no ceiling (agent guard review AG-5, API reviews R1-2 and R2-M1). Requests from people are unchanged.
     const byOutsideAgent = /^(mcp|api):/.test(db.select({ actor: auditEntries.actor }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get()?.actor ?? "");
-    const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor! && !(byOutsideAgent && e.provenance === "operator"));
+    const evidenced = ev.find((e) => e.reference?.toUpperCase() === ob.sourceRef && e.currency === ob.currency && (e.amountMinor ?? 0) > ob.amountMinor! && !(byOutsideAgent && e.provenance !== "system"));
     // The bill's total becomes the ceiling for every later payment against it, so it comes from a record the business
     // holds (evidence naming this reference), never from the reader's number alone. A reader total that disagrees with
     // the record creates no bill; the deposit is then checked like any other payment.
