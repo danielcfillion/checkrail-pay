@@ -313,11 +313,14 @@ describe("one request, one visitor's copy", () => {
     vi.stubEnv("CHECKRAIL_AGENT_KEYS", "");
     vi.stubEnv("PAYPAL_ENV", "sandbox");
     const body = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "check_payment", arguments: { payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" } } };
+    // The demo seed carries its own agent-check rows; count only what this call adds.
+    const seeded = (v: string) => inRequest(v, () => getDb().select().from(agentChecks).all()).length;
+    const [beforeA, beforeB, beforeShared] = [seeded(a), seeded(b), shared.select().from(agentChecks).all().length];
     const res = await inRequest(b, () => mcpPost(new Request("http://checkrail.test/api/mcp", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } })), "cookie");
     expect(res.status).toBe(200);
-    expect(inRequest(b, () => getDb().select().from(agentChecks).all()).map((c) => c.verdict)).toEqual(["block"]);
-    expect(inRequest(a, () => getDb().select().from(agentChecks).all())).toEqual([]);
-    expect(shared.select().from(agentChecks).all()).toEqual([]);
+    expect(inRequest(b, () => getDb().select().from(agentChecks).all()).slice(beforeB).map((c) => c.verdict)).toEqual(["block"]);
+    expect(seeded(a)).toBe(beforeA);
+    expect(shared.select().from(agentChecks).all()).toHaveLength(beforeShared);
   });
 
   it("Start over works for every demo person in sandbox mode: it only touches their own copy", async () => {
@@ -337,7 +340,8 @@ describe("one request, one visitor's copy", () => {
     expect(r).toMatchObject({ ok: true, message: expect.stringMatching(/Started over/) });
     expect(inRequest(a, () => phuongOf(getDb()).state)).toBe("blocked");
     expect(inRequest(a, () => activeCopiedAt())).not.toBe(before);
-    expect(inRequest(b, () => getDb().select().from(agentChecks).all())).toHaveLength(1);
+    // b keeps the check the /api/mcp test added on top of the seeded rows; a's reset did not touch it.
+    expect(inRequest(b, () => getDb().select().from(agentChecks).all()).filter((c) => c.reference === "JOB-HG4D-0914" && c.verdict === "block")).toHaveLength(1);
     // The shared database was never touched by any of it.
     expect(shared.select().from(auditEntries).all()).toHaveLength(sharedAudit);
   });
