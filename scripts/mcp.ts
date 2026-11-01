@@ -4,6 +4,7 @@
  *   npm run -s mcp                     check_payment, lookup_payee, explain_rule
  *   npm run -s mcp -- --allow-requests  also request_payment and payment_status
  *   npm run -s mcp -- --allow-requests --attest   what this agent attaches counts as the business's own records
+ *   npm run -s mcp -- --supplier=ven_phuong        a supplier's own agent, for that one supplier (accept_offer, dispute_offer)
  *
  * It opens the same database as the app (DATABASE_PATH, default ./data/checkrail-pay.sqlite) and follows .env for the
  * rails and the reader, so in live mode a check reads PayPal's real sandbox history. The agent's name in the audit is
@@ -23,8 +24,10 @@ async function main() {
   const pkg = await import("../package.json");
   const name = (process.env.CHECKRAIL_AGENT_NAME ?? "local-agent").toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40) || "local-agent";
   const requests = process.argv.includes("--allow-requests");
-  const scopes: Array<"check" | "request" | "attest"> = requests ? (process.argv.includes("--attest") ? ["check", "request", "attest"] : ["check", "request"]) : ["check"];
-  const agent = { name, scopes, digest: Buffer.alloc(32) };
+  const supplier = process.argv.find((a) => a.startsWith("--supplier="))?.slice("--supplier=".length) ?? "";
+  if (supplier && !/^[A-Za-z0-9_-]{3,64}$/.test(supplier)) throw new Error("--supplier takes a supplier id such as ven_phuong");
+  const scopes: Array<"check" | "request" | "attest" | "supplier"> = supplier ? ["check", "request", "supplier"] : requests ? (process.argv.includes("--attest") ? ["check", "request", "attest"] : ["check", "request"]) : ["check"];
+  const agent = { name, scopes, digest: Buffer.alloc(32), ...(supplier ? { vendorId: supplier } : {}) };
   const db = getDb();
   const version = (pkg as { version?: string; default?: { version?: string } }).version ?? pkg.default?.version ?? "0.0.0";
   console.error(`[checkrail] MCP on stdio as agent "${name}" (${scopes.join(", ")})`);

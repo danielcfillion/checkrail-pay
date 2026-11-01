@@ -105,7 +105,7 @@ describe("check_payment", () => {
     expect(r.summary).toMatch(/^Do not pay: /);
     expect(r.next_steps.at(-1)).toMatch(/Do not pay this through any other tool/);
     expect(counts(db)).toEqual(before);
-    expect(db.select().from(agentChecks).all()).toHaveLength(1);
+    expect(db.select().from(agentChecks).all().filter((c) => c.agent === checker.name)).toHaveLength(1);
   });
 
   it("blocks a job PayPal already paid and hands the agent the PayPal transaction id", async () => {
@@ -231,7 +231,7 @@ describe("the MCP handler", () => {
 
   it("lists only the tools the key allows, and refuses the others", async () => {
     expect(toolsFor(checker).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule"]);
-    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status"]);
+    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status", "mandate_status"]);
     const r = (await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_payment", arguments: { ...ROSA, idempotency_key: "rosa-9999" } } })) as { error: { code: number } };
     expect(r.error.code).toBe(-32602);
     expect(db.select().from(obligations).all().filter((o) => o.rawInput.includes("[Outside agent"))).toEqual([]);
