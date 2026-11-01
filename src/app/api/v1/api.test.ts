@@ -526,31 +526,33 @@ describe("review fixes, round 3", () => {
   it("M1: a bill a person recorded does not let the same job through twice", async () => {
     await autopilot();
     personBill("INV-ROSA-7777", 500_000);
-    await postRequest(job, "r3-bill-00001", "l");
+    expect((await postRequest(job, "r3-bill-00001", "l")).json.status).toBe("scheduled");
     const second = await postRequest(job, "r3-bill-00002", "l");
-    expect(second.json.status).toBe("blocked");
-    expect(second.json.rules_failed).toContain("no_duplicate");
+    // Round 4: held for a person, never scheduled by Autopilot.
+    expect(second.json.status).toBe("waiting_for_approval");
+    expect(second.json.rules_failed).toContain("bill_part_repeat");
+    expect((second.json.reasons as string[])[0]).toMatch(/^Same amount as an earlier part of bill INV-ROSA-7777 \(USD 190\.00\)\. A person confirms this is a different job\.$/);
   });
 
-  it("M1: two identical balance payments, both linked to the bill, are still caught as the same job", async () => {
+  it("M1: a second 'remaining balance' that is not what is open is an ordinary part, and held", async () => {
     await autopilot();
     personBill("INV-ROSA-7777", 500_000);
     const balance = { ...job, description: "Please pay the remaining balance USD 190 to Rosa Villanueva on invoice INV-ROSA-7777, 2 days guiding at USD 95." };
     const first = await postRequest(balance, "r3-bal2-00001", "l");
     const second = await postRequest(balance, "r3-bal2-00002", "l");
     const linked = getDb().select({ id: obligations.id, billId: obligations.billId, kind: obligations.paymentKind }).from(obligations).all().filter((o) => o.id === first.json.id || o.id === second.json.id);
-    expect(linked.every((o) => o.billId && o.kind === "balance")).toBe(true);
-    expect(second.json.status).toBe("blocked");
-    expect(second.json.rules_failed).toContain("no_duplicate");
+    expect(linked.every((o) => o.billId && o.kind === "part")).toBe(true);
+    expect(["scheduled", "approved"]).not.toContain(second.json.status);
+    expect(second.json.rules_failed).toContain("bill_part_repeat");
   });
 
-  it("M1: from a key without attest, the approver is told the second is the same job", async () => {
+  it("M1: from a key without attest, the approver is told it looks like an earlier part", async () => {
     await autopilot();
     personBill("INV-ROSA-7777", 500_000);
     await postRequest(job, "r3-plain-0001");
     const second = await postRequest(job, "r3-plain-0002");
     expect(["scheduled", "approved"]).not.toContain(second.json.status);
-    expect((second.json.reasons as string[]).join(" ")).toMatch(/same job/i);
+    expect((second.json.reasons as string[]).join(" ")).toMatch(/earlier part of bill INV-ROSA-7777/);
   });
 
   it("M1: a deposit and a balance of the same amount on one bill both still go through", async () => {
@@ -561,7 +563,49 @@ describe("review fixes, round 3", () => {
     const balance = await postRequest({ payee: "Rosa Villanueva", amount: "190", currency: "USD", reference: "INV-ROSA-8800", description: "Balance USD 190 for Rosa Villanueva after the deposit, invoice INV-ROSA-8800, total USD 380.", evidence: invoice }, "r3-bal-000001", "l");
     expect(deposit.json.rules_failed).not.toContain("no_duplicate");
     expect(balance.json.rules_failed).not.toContain("no_duplicate");
+    expect(balance.json.rules_failed).not.toContain("bill_part_repeat");
     expect(balance.json.status).not.toBe("blocked");
+  });
+
+  describe("round 4: the same job on a bill from an attest key is never paid twice by Autopilot", () => {
+    // The trip sheet names the job (departure CEB-2D-1101) in its own words, beyond the bill's reference.
+    const sheet = (amount: string, excerpt: string) => ({ ...job, amount, evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-7777", amount, reference: "INV-ROSA-7777", excerpt: `Departure CEB-2D-1101. ${excerpt}` }] });
+    const twice = async (a: object, b: object) => {
+      await autopilot();
+      personBill("INV-ROSA-7777", 500_000);
+      const first = await postRequest(a, "r4-first-00001", "l");
+      const second = await postRequest(b, "r4-second-0001", "l");
+      return { first, second };
+    };
+
+    it("a reworded excerpt", async () => {
+      const { first, second } = await twice(sheet("190", "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00."), sheet("190", "Rosa V., guiding two days, USD 190 in total."));
+      expect(first.json.status).toBe("scheduled");
+      expect(second.json.status).toBe("waiting_for_approval");
+      expect(second.json.rules_failed).toContain("bill_part_repeat");
+    });
+
+    it("an amended amount, 190 then 195, for the same trip sheet", async () => {
+      const { second } = await twice(sheet("190", "Guide: Rosa Villanueva. 2 days at USD 95. Total USD 190.00."), { ...sheet("195", "Guide: Rosa Villanueva. 2 days at USD 95, plus USD 5 parking. Total USD 195.00."), description: "Rosa Villanueva, 2 days guiding, USD 195 with parking, INV-ROSA-7777." });
+      expect(second.json.status).toBe("waiting_for_approval");
+      expect((second.json.reasons as string[])[0]).toMatch(/^Same job as an earlier part of bill INV-ROSA-7777/);
+    });
+
+    it("a repeat relabelled deposit, then balance", async () => {
+      const { second } = await twice(
+        { ...job, description: "50% deposit USD 190 for Rosa Villanueva on invoice INV-ROSA-7777, total USD 380." },
+        { ...job, description: "Please pay the remaining balance USD 190 to Rosa Villanueva on invoice INV-ROSA-7777." },
+      );
+      expect(second.json.status).toBe("waiting_for_approval");
+      expect(second.json.rules_failed).toContain("bill_part_repeat");
+    });
+
+    it("N1: an integration is not told how far an earlier payment got", async () => {
+      // Maria Santos was paid for JOB-HG4D-0914.
+      const r = await postRequest({ payee: "Maria Santos", amount: "180", currency: "USD", reference: "JOB-HG4D-0914" }, "r4-n1-0000001");
+      expect(r.json.rules_failed).toContain("no_duplicate");
+      expect((r.json.reasons as string[]).join(" ")).not.toMatch(/settled|approved|scheduled|\((?:sent|disputed)\)/i);
+    });
   });
 
   it("nit: a retry whose stored answer is gone must match the description and evidence too", async () => {

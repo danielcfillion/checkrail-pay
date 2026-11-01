@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { vendors } from "../db/schema";
 import { clean } from "../agent/guard";
+import { OBLIGATION_STATES } from "../domain/types";
 
 /**
  * What an integration may read of a rule's message, the same rewrite the agent guard gives agents (src/lib/agent/guard.ts,
@@ -14,9 +15,17 @@ const OTHER_VENDOR_TEXT = "This reference is also on a payment to another suppli
 /** The policy message for reference_other_vendor, for stored reasons that no longer carry their rule id. */
 const OTHER_VENDOR_MESSAGE = /Reference \S+ is also on a payment to .*? \([a-z_]+\); confirm who did this job/g;
 
+/** A request state as policy messages write it ("settled", "awaiting_approval" or "awaiting approval"). */
+const STATE = `(?:${OBLIGATION_STATES.flatMap((s) => [s, s.replace(/_/g, " ")]).join("|")})`;
+
 export function forIntegration(rule: string | null, message: string): string {
   if (rule === "reference_other_vendor") return OTHER_VENDOR_TEXT;
-  return message.replace(OTHER_VENDOR_MESSAGE, OTHER_VENDOR_TEXT);
+  // How far an earlier payment got is not the integration's to know (review R4-N1): "(settled)" goes, and
+  // "(USD 190.00, approved 1 Nov)" keeps only the amount.
+  return message
+    .replace(OTHER_VENDOR_MESSAGE, OTHER_VENDOR_TEXT)
+    .replace(new RegExp(`\\s*\\(${STATE}\\)`, "g"), "")
+    .replace(new RegExp(`, ${STATE}(?: \\d{1,2} [A-Z][a-z]{2})?\\)`, "g"), ")");
 }
 
 const norm = (s: string) => s.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
