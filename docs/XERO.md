@@ -29,6 +29,7 @@ Nothing about a payment waits for Xero. The push runs beside the payment path, o
    - **Supplier bills**: used when a bill's own account (310, 320, 400, 429 or the vendor's code) is not in this chart.
    - **PayPal clearing**, **Stellar treasury** and **Wise and bank file**: the bank accounts each rail pays from. Each must be in the currency of the payments it carries. Add bank accounts in Xero first if the chart has none for them.
    - **Payment fees**: usually 404 Bank Fees.
+   - **Tax withheld**: the liability account for tax kept back from a vendor (US backup withholding, Vietnamese PIT, Philippine EWT), usually 825. Payments must be enabled on it: in Xero, open Accounting, Chart of accounts, click the account, tick **Enable payments to this account**, save, then press Read accounts again here. Needed only once a payment withholds tax.
    - **Tax rate on bills** (required): usually Tax Exempt. With a rate that carries tax, the amounts are sent tax inclusive, so a bill's total is still what is paid.
 
    Press Save accounts.
@@ -40,19 +41,38 @@ Only what is approved after you first connect. A bill whose first part was appro
 
 | Checkrail | Xero | When |
 | --- | --- | --- |
-| Vendor | Contact, found by exact name, else created | with its first bill |
-| Bill (one per invoice; a deposit and its balance are one bill, with the tax withheld on the whole invoice, worked out from its total when only the deposit exists yet; the withholding line never carries a tax rate) | Bill (ACCPAY, Authorised), with a Departure tracking option when Xero has that option | when the request is approved |
+| Vendor | Contact, found by Xero's contact search and an exact name check (archived contacts passed over), else created | with its first bill |
+| Bill (one per invoice; a deposit and its balance are one bill) | Bill (ACCPAY, Authorised) at the invoice's gross amount, with a Departure tracking option when Xero has that option | when the request is approved |
 | Credit note | Credit note (ACCPAYCREDIT) | when it is recorded |
 | Settled payment | Payment against that vendor's bill, from the rail's bank account, for the amount sent | when the payment settles |
+| Tax kept back on that payment | A second payment against the same bill, from the tax withheld account, for what that payment really withheld (reference `<rail>:<transaction id>:wh`) | with the payment |
+| Credit note applied to a bill | Allocation of the credit note to the bill | once both are in Xero |
 | Fee (PayPal, Wise, bank file) | Spend money on the same bank account, to the fee account, referenced `fee <invoice> <obligation id>` | with the payment |
 
 A Stellar fee is taken out of the amount in transit, so no separate fee is booked.
+
+### Tax withheld
+
+The bill is the invoice's gross amount. Each part paid clears its share in two payments: what was sent from the rail's bank account, and what was kept back from the tax withheld account. The bill therefore clears exactly, whatever each part really withheld: rounding on a split invoice, a W-9 filed between deposit and balance, or a per-payment threshold. The liability then sits on the tax withheld account until it is paid to the tax office.
+
+The bills file does the same: bills are at gross with no withholding line. When you match a payment from the settlement CSV, record the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account).
+
+### With Xero connected, the bills file leaves out the live bills
+
+While the destination is xero and Xero is connected, Export new bills on the Accounting page leaves out the bills the live push owns (approved after connecting), so a bill is never both imported and sent.
+
+### Changes after a bill went to Xero
+
+- A request cancelled or rejected after its bill went: the bill is voided in Xero if nothing is paid or credited on it. If something is, the card asks a person to sort it out in Xero.
+- A payout that came back: its payment (and withheld part) is deleted in Xero, so paying the vendor again fits the bill. If Xero will not delete it (a reconciled payment, for one), the card says it needs a person in Xero and it is not retried.
+- An approved request whose amount or reference is amended: its bill is updated in Xero while nothing is paid on it; otherwise the card asks for the same change by hand.
 
 ## How it avoids sending twice
 
 - Each bill, payment and fee sent is recorded here with Xero's id, keyed on the contact and invoice number (bills) or on the payment and the provider's transaction id (payments and fees). A recorded one is not sent again.
 - Before a bill is created, Xero is searched for a bill with the same number for the same contact; if there is one, it is used. A bill for a different contact with the same number is never used.
 - Before a payment is created, Xero's payments are searched for its reference (the rail and the provider's transaction id); one found is used. As a last resort, if the bill in Xero holds more payments of that amount than Checkrail has recorded, one of them is taken as this payment and its fee is not booked again; the card and the Accounting page count these as skipped fees. This is what keeps a demo reset from paying the same demo bill twice.
+- A success from Xero whose answer cannot be read is treated like a lost answer.
 - Each create call carries an Idempotency-Key, and the record is marked "sending" with that key in the database before the call. If the answer is lost, or the server stops before saving it, the next pass looks the item up in Xero before creating it. Xero keeps an idempotency key for only six minutes, so this look-up is what covers a longer gap.
 
 These cover the cases above. Something deleted or edited by hand in Xero is not detected.

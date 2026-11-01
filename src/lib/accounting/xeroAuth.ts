@@ -198,6 +198,7 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
     stellarAccountCode: keepMapping ? prior.stellarAccountCode : null,
     bankAccountCode: keepMapping ? prior.bankAccountCode : null,
     feeAccountCode: keepMapping ? prior.feeAccountCode : null,
+    withholdingAccountCode: keepMapping ? prior.withholdingAccountCode : null,
     taxType: keepMapping ? prior.taxType : null,
     chartJson: keepMapping ? prior.chartJson : null,
     chartFetchedAt: keepMapping ? prior.chartFetchedAt : null,

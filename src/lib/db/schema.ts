@@ -649,6 +649,8 @@ export const xeroConnections = sqliteTable("xero_connections", {
   /** Wise and the bank file pay from an ordinary bank account. */
   bankAccountCode: text("bank_account_code"),
   feeAccountCode: text("fee_account_code"),
+  /** Liability account for tax withheld, with payments enabled: the withheld part of each payment is paid from it. */
+  withholdingAccountCode: text("withholding_account_code"),
   taxType: text("tax_type"),
   /** Cached from Xero: accounts, tax rates, currencies, tracking categories and the base currency. */
   chartJson: text("chart_json"),
@@ -701,13 +703,16 @@ export const xeroRecords = sqliteTable(
     obligationId: text("obligation_id"),
     accountingSyncId: text("accounting_sync_id"),
     xeroId: text("xero_id"),
-    status: text("status").notNull(), // pending | sending | pushed | failed | skipped
+    // pending | sending | pushed | failed | skipped | voided (bill cancelled) | reversed (payout came back) | needs_person
+    status: text("status").notNull(),
     error: text("error"),
     attempts: integer("attempts").notNull().default(0),
     /** Part of the Idempotency-Key: moves on only after Xero gave a definite answer, so a retry after a dropped connection reuses the key. */
     keySeq: integer("key_seq").notNull().default(0),
     /** Written before each create call: a row still "sending" on the next pass may already be in Xero, so it is looked up first. */
     idemKey: text("idem_key"),
+    /** For a bill: a digest of what was sent, so an amended request's bill can be updated while it is unpaid. */
+    sentHash: text("sent_hash"),
     /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
     uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
     nextAttemptAt: text("next_attempt_at"),

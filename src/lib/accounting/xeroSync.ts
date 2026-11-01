@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, bills, businesses, obligations, xeroConnections, xeroRecords } from "../db/schema";
+import { accountingSyncs, auditEntries, billAllocations, bills, businesses, obligations, xeroConnections, xeroRecords } from "../db/schema";
 import { config } from "../config";
 import { audit } from "../domain/stateMachine";
 import { newId } from "../domain/ids";
@@ -52,7 +53,7 @@ export const LEASE_MS = 90_000;
 
 type RecordRow = typeof xeroRecords.$inferSelect;
 /** "settlement" marks one accounting record as finished (payment and fee in Xero, or left to the files), so it is not read again. */
-type Kind = "contact" | "bill" | "credit_note" | "payment" | "fee" | "settlement";
+type Kind = "contact" | "bill" | "credit_note" | "payment" | "withholding" | "fee" | "settlement" | "allocation";
 
 /** This pass has used its share of calls, or another process took over: stop quietly, the next pass carries on. */
 class PassPaused extends Error {}
@@ -175,9 +176,10 @@ function finishSettlement(db: Db, conn: XeroConnectionRow, sync: typeof accounti
 async function pass(db: Db, businessId: string, owner: string, force: boolean, now: () => number): Promise<XeroSyncResult> {
   const result = empty();
   let conn = getXeroConnection(db, businessId)!;
-  const { live } = splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true }).groups, conn.syncFrom);
+  const { live } = splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true, includeLive: true }).groups, conn.syncFrom);
   const settlements = pendingSettlements(db, conn);
-  if (!live.length && !settlements.length) return result;
+  const upkeep = findUpkeep(db, conn);
+  if (!live.length && !settlements.length && !upkeep.any) return result;
 
   let budget = MAX_CALLS_PER_PASS;
   const base = createXeroClient(db, businessId, conn.tenantId, { now });
@@ -211,7 +213,13 @@ async function pass(db: Db, businessId: string, owner: string, force: boolean, n
       conn = getXeroConnection(db, businessId)!;
     }
     const ctx: Ctx = { db, businessId, conn, chart: parseChart(conn.chartJson), client, now, force, result };
+    // Changes after a bill went: cancelled bills are voided, payouts that came back are taken off, amended bills updated.
+    await voidCancelled(ctx, upkeep.cancelled);
+    await reverseReturned(ctx, upkeep.returned);
+    if (upkeep.amended.length) await updateAmended(ctx, upkeep.amended);
     for (const g of live) await pushBillGroup(ctx, g);
+    // Credits before payments, so each payment fits what is still owed.
+    await pushAllocations(ctx, upkeep.allocations);
     for (const s of settlements) await pushSettlement(ctx, s);
   } catch (e) {
     if (e instanceof PassPaused) {
@@ -382,7 +390,8 @@ function tracking(ctx: Ctx, name: unknown, option: unknown): Array<{ Name: strin
 async function findContact(ctx: Ctx, name: string): Promise<string | null> {
   const known = findRecord(ctx, "contact", name.trim().toLowerCase());
   if (known?.status === "pushed" && known.xeroId) return known.xeroId;
-  const res = await ctx.client.request<{ Contacts: Array<{ ContactID: string; Name: string; ContactStatus?: string }> }>({ method: "GET", path: "/Contacts", query: { where: `Name=="${q(name)}"` } });
+  // searchTerm is Xero's indexed search (partial and any case); the exact name is checked on what comes back.
+  const res = await ctx.client.request<{ Contacts: Array<{ ContactID: string; Name: string; ContactStatus?: string }> }>({ method: "GET", path: "/Contacts", query: { searchTerm: name.trim() } });
   // An archived contact cannot take a new bill; it is passed over and a live one used or created.
   return res.Contacts?.find((c) => c.ContactStatus !== "ARCHIVED" && c.Name.trim().toLowerCase() === name.trim().toLowerCase())?.ContactID ?? null;
 }
@@ -421,6 +430,36 @@ async function findCreditNote(ctx: Ctx, number: string, contact: string): Promis
   return (res.CreditNotes ?? []).find((c) => c.Status !== "DELETED" && c.Status !== "VOIDED" && c.Contact?.ContactID === contact)?.CreditNoteID ?? null;
 }
 
+/** What a bill looks like in Xero, from its file rows, and a digest of it (to see an amendment later). */
+function billBody(ctx: Ctx, g: XeroBillGroup, contact: string) {
+  const first = g.rows[0];
+  const number = String(first["*InvoiceNumber"]);
+  const currency = String(first.Currency ?? "");
+  const terms = taxTerms(ctx);
+  const lines = g.rows.map((row) => {
+    const amount = Number(row["*UnitAmount"]);
+    const trk = tracking(ctx, row.TrackingName1, row.TrackingOption1);
+    return {
+      Description: String(row.Description ?? number),
+      Quantity: 1,
+      // A credit note is entered positive in the API; the file carries it negative.
+      UnitAmount: g.kind === "credit_note" ? Math.abs(amount) : amount,
+      AccountCode: lineAccount(ctx, String(row["*AccountCode"])),
+      ...(terms.taxType ? { TaxType: terms.taxType } : {}),
+      ...(trk ? { Tracking: trk } : {}),
+    };
+  });
+  const common = { Contact: { ContactID: contact }, Date: isoDay(first["*InvoiceDate"]), CurrencyCode: currency, Status: "AUTHORISED", LineAmountTypes: terms.LineAmountTypes, LineItems: lines };
+  const body = g.kind === "credit_note" ? { Type: "ACCPAYCREDIT", CreditNoteNumber: number, ...common } : { Type: "ACCPAY", InvoiceNumber: number, DueDate: isoDay(first["*DueDate"]), Reference: "Checkrail Pay", ...common };
+  return { body, number, currency, hash: groupHash(g) };
+}
+
+/** A digest of the bill as the files describe it: number, dates, currency and lines. */
+function groupHash(g: XeroBillGroup): string {
+  const view = g.rows.map((r) => [r["*InvoiceNumber"], r["*InvoiceDate"], r["*DueDate"], r.Currency, r.Description, r["*UnitAmount"], r["*AccountCode"]]);
+  return createHash("sha256").update(JSON.stringify(view)).digest("hex").slice(0, 32);
+}
+
 async function pushBillGroup(ctx: Ctx, g: XeroBillGroup): Promise<void> {
   const first = g.rows[0];
   if (!first) return;
@@ -428,62 +467,197 @@ async function pushBillGroup(ctx: Ctx, g: XeroBillGroup): Promise<void> {
   const number = String(first["*InvoiceNumber"]);
   const currency = String(first.Currency ?? "");
   const kind: Kind = g.kind === "credit_note" ? "credit_note" : "bill";
-  const r = recordFor(ctx, kind, billKey(contactName, number), `${kind === "bill" ? "Bill" : "Credit note"} ${number}, ${contactName}`, { obligationId: g.obligationIds[0] ?? null });
+  const r = recordFor(ctx, kind, billKey(contactName, number), `${kind === "bill" ? "Bill" : "Credit note"} ${number}, ${contactName}`, { obligationId: g.obligationIds[0] ?? null, parentKey: g.source });
   if (r.status !== "pushed") {
-    if (waiting(ctx, r)) {
+    if (waiting(ctx, r) || r.status === "needs_person") {
       ctx.result.waiting++;
       return;
     }
+    let sentHash: string | null = null;
     const created = await attempt(ctx, r, async (write) => {
       checkCurrency(ctx, currency);
       const contact = await contactId(ctx, contactName, { email: first.EmailAddress as string | null, country: first.POCountry as string | null });
       // Always look first: a bill already in Xero for this contact and number (imported from the file, or sent before
       // a demo reset, or before the process stopped) is used, not created again.
       const existing = kind === "credit_note" ? await findCreditNote(ctx, number, contact) : await findBill(ctx, number, contact);
+      const { body, hash } = billBody(ctx, g, contact);
+      sentHash = hash;
       if (existing) return existing;
-      const terms = taxTerms(ctx);
-      const withholdingCode = process.env.XERO_WITHHOLDING_ACCOUNT || "825";
-      const lines = g.rows.map((row) => {
-        const amount = Number(row["*UnitAmount"]);
-        // Tax kept back for the tax office is not a purchase: never a tax rate on that line.
-        const isWithholding = kind === "bill" && amount < 0 && String(row["*AccountCode"]) === withholdingCode;
-        const trk = tracking(ctx, row.TrackingName1, row.TrackingOption1);
-        return {
-          Description: String(row.Description ?? number),
-          Quantity: 1,
-          // A credit note is entered positive in the API; the file carries it negative.
-          UnitAmount: kind === "credit_note" ? Math.abs(amount) : amount,
-          AccountCode: lineAccount(ctx, String(row["*AccountCode"])),
-          ...(terms.taxType ? { TaxType: isWithholding ? exemptTaxType(ctx) : terms.taxType } : {}),
-          ...(trk ? { Tracking: trk } : {}),
-        };
-      });
       if (kind === "credit_note") {
-        const res = await write<{ CreditNotes: Array<{ CreditNoteID: string }> }>({
-          method: "PUT",
-          path: "/CreditNotes",
-          body: { CreditNotes: [{ Type: "ACCPAYCREDIT", Contact: { ContactID: contact }, Date: isoDay(first["*InvoiceDate"]), CreditNoteNumber: number, CurrencyCode: currency, Status: "AUTHORISED", LineAmountTypes: terms.LineAmountTypes, LineItems: lines }] },
-        });
+        const res = await write<{ CreditNotes: Array<{ CreditNoteID: string }> }>({ method: "PUT", path: "/CreditNotes", body: { CreditNotes: [body] } });
         const cid = res.CreditNotes?.[0]?.CreditNoteID;
         if (!cid) throw new XeroApiError("Xero did not return the credit note.", "validation");
         return cid;
       }
-      const res = await write<{ Invoices: Array<{ InvoiceID: string }> }>({
-        method: "PUT",
-        path: "/Invoices",
-        body: { Invoices: [{ Type: "ACCPAY", Contact: { ContactID: contact }, Date: isoDay(first["*InvoiceDate"]), DueDate: isoDay(first["*DueDate"]), InvoiceNumber: number, Reference: "Checkrail Pay", CurrencyCode: currency, Status: "AUTHORISED", LineAmountTypes: terms.LineAmountTypes, LineItems: lines }] },
-      });
+      const res = await write<{ Invoices: Array<{ InvoiceID: string }> }>({ method: "PUT", path: "/Invoices", body: { Invoices: [body] } });
       const iid = res.Invoices?.[0]?.InvoiceID;
       if (!iid) throw new XeroApiError("Xero did not return the bill.", "validation");
       return iid;
     });
     if (!created) return;
+    ctx.db.update(xeroRecords).set({ sentHash, parentKey: g.source }).where(eq(xeroRecords.id, r.id)).run();
     audit(ctx.db, { obligationId: g.obligationIds[0] ?? null, actor: "system", action: "accounting.xero_bill_pushed", detail: { invoice: number, contact: contactName, kind } });
   }
   // In Xero now: stamp it as the bills file would, so the file does not carry it a second time.
   const ts = new Date(ctx.now()).toISOString();
   if (g.obligationIds.length) ctx.db.update(obligations).set({ xeroBillExportedAt: ts }).where(and(inArray(obligations.id, g.obligationIds), isNull(obligations.xeroBillExportedAt))).run();
   if (g.billId) ctx.db.update(bills).set({ xeroExportedAt: ts }).where(and(eq(bills.id, g.billId), isNull(bills.xeroExportedAt))).run();
+}
+
+interface Upkeep {
+  any: boolean;
+  cancelled: RecordRow[];
+  returned: RecordRow[];
+  amended: RecordRow[];
+  allocations: Array<typeof billAllocations.$inferSelect>;
+}
+
+/** Work on what already went to Xero, found from the database alone (no call to Xero), so an idle pass costs nothing. */
+function findUpkeep(db: Db, conn: XeroConnectionRow): Upkeep {
+  const mine = and(eq(xeroRecords.businessId, conn.businessId), eq(xeroRecords.tenantId, conn.tenantId));
+  const sourcesOf = (rows: Array<{ id: string; billId: string | null }>) => [...new Set(rows.flatMap((o) => [`ob:${o.id}`, ...(o.billId ? [`bill:${o.billId}`] : [])]))];
+  // Bills whose request was cancelled (or rejected) after they went.
+  const cancelledObs = db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(and(eq(obligations.businessId, conn.businessId), eq(obligations.state, "cancelled"), gte(obligations.updatedAt, conn.syncFrom))).all();
+  const cancelled = cancelledObs.length ? db.select().from(xeroRecords).where(and(mine, eq(xeroRecords.kind, "bill"), eq(xeroRecords.status, "pushed"), inArray(xeroRecords.parentKey, sourcesOf(cancelledObs)))).all() : [];
+  // Payments whose payout came back.
+  const returned = db
+    .select({ r: xeroRecords })
+    .from(xeroRecords)
+    .innerJoin(obligations, eq(obligations.id, xeroRecords.obligationId))
+    .where(and(mine, inArray(xeroRecords.kind, ["payment", "withholding"]), eq(xeroRecords.status, "pushed"), eq(obligations.state, "refunded")))
+    .all()
+    .map((x) => x.r);
+  // Bills whose request was amended after they went.
+  const amendedIds = db.select({ id: auditEntries.obligationId }).from(auditEntries).where(and(eq(auditEntries.action, "obligation.amended"), gte(auditEntries.createdAt, conn.syncFrom))).all().map((a) => a.id).filter((x): x is string => Boolean(x));
+  const amendedObs = amendedIds.length ? db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(inArray(obligations.id, amendedIds)).all() : [];
+  const amended = amendedObs.length
+    ? db.select().from(xeroRecords).where(and(mine, eq(xeroRecords.kind, "bill"), eq(xeroRecords.status, "pushed"), inArray(xeroRecords.parentKey, sourcesOf(amendedObs)))).all().filter((r) => {
+        const last = db.select({ at: auditEntries.createdAt }).from(auditEntries).where(and(eq(auditEntries.action, "obligation.amended"), inArray(auditEntries.obligationId, amendedObs.filter((o) => r.parentKey === `ob:${o.id}` || r.parentKey === `bill:${o.billId}`).map((o) => o.id)))).all().map((x) => x.at).sort().pop();
+        return Boolean(last && last > r.updatedAt);
+      })
+    : [];
+  // Credits applied to bills, not yet sent.
+  const sentAllocations = new Set(db.select({ k: xeroRecords.localKey }).from(xeroRecords).where(and(mine, eq(xeroRecords.kind, "allocation"), inArray(xeroRecords.status, ["pushed", "needs_person"]))).all().map((x) => x.k));
+  const allocations = db
+    .select({ a: billAllocations })
+    .from(billAllocations)
+    .innerJoin(bills, eq(bills.id, billAllocations.creditBillId))
+    .where(and(eq(bills.businessId, conn.businessId), gte(billAllocations.createdAt, conn.syncFrom)))
+    .all()
+    .map((x) => x.a)
+    .filter((a) => !sentAllocations.has(a.id));
+  return { any: cancelled.length + returned.length + amended.length + allocations.length > 0, cancelled, returned, amended, allocations };
+}
+
+function needsPerson(ctx: Ctx, r: RecordRow, message: string): void {
+  ctx.db.update(xeroRecords).set({ status: "needs_person", error: message, updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+  if (!ctx.result.errors.includes(message)) ctx.result.errors.push(message);
+}
+
+type InvoiceView = { InvoiceID: string; Status?: string; AmountPaid?: number; AmountCredited?: number; Payments?: Array<{ PaymentID: string; Amount: number }> };
+async function getInvoice(ctx: Ctx, id: string): Promise<InvoiceView | null> {
+  const res = await ctx.client.request<{ Invoices: InvoiceView[] }>({ method: "GET", path: `/Invoices/${encodeURIComponent(id)}` });
+  return res.Invoices?.[0] ?? null;
+}
+const unpaid = (inv: InvoiceView) => !(inv.Payments ?? []).length && !(inv.AmountPaid ?? 0) && !(inv.AmountCredited ?? 0);
+
+/** A cancelled request's bill, with nothing paid on it, is voided in Xero; with payments, a person sorts it out there. */
+async function voidCancelled(ctx: Ctx, rows: RecordRow[]): Promise<void> {
+  for (const r of rows) {
+    const src = r.parentKey ?? "";
+    const parts = src.startsWith("bill:") ? ctx.db.select({ state: obligations.state }).from(obligations).where(eq(obligations.billId, src.slice(5))).all() : ctx.db.select({ state: obligations.state }).from(obligations).where(eq(obligations.id, src.slice(3))).all();
+    if (!parts.length || parts.some((x) => x.state !== "cancelled")) continue;
+    try {
+      const inv = r.xeroId ? await getInvoice(ctx, r.xeroId) : null;
+      if (!inv || inv.Status === "VOIDED" || inv.Status === "DELETED") {
+        ctx.db.update(xeroRecords).set({ status: "voided", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+        continue;
+      }
+      if (!unpaid(inv)) {
+        needsPerson(ctx, r, `${r.label} was cancelled here but has payments in Xero. Remove the payments in Xero, then void the bill there.`);
+        continue;
+      }
+      await ctx.client.request({ method: "POST", path: `/Invoices/${encodeURIComponent(r.xeroId!)}`, body: { Invoices: [{ InvoiceID: r.xeroId, Status: "VOIDED" }] }, idempotencyKey: `checkrail-${r.id}-void` });
+      ctx.db.update(xeroRecords).set({ status: "voided", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+      audit(ctx.db, { obligationId: r.obligationId, actor: "system", action: "accounting.xero_bill_voided", detail: { label: r.label } });
+    } catch (e) {
+      if (e instanceof XeroApiError && e.kind === "validation") needsPerson(ctx, r, `${r.label} was cancelled here, but Xero would not void it (${e.message}). Void it in Xero by hand.`);
+      else throw e;
+    }
+  }
+}
+
+/** A payout that came back: its payment (and withheld part) is taken off the bill in Xero, so paying it again fits. */
+async function reverseReturned(ctx: Ctx, rows: RecordRow[]): Promise<void> {
+  for (const r of rows) {
+    try {
+      await ctx.client.request({ method: "POST", path: `/Payments/${encodeURIComponent(r.xeroId!)}`, body: { Status: "DELETED" }, idempotencyKey: `checkrail-${r.id}-reverse` });
+      ctx.db.update(xeroRecords).set({ status: "reversed", error: "The payout came back, so this payment was removed in Xero.", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+      audit(ctx.db, { obligationId: r.obligationId, actor: "system", action: "accounting.xero_payment_reversed", detail: { label: r.label } });
+    } catch (e) {
+      // Xero will not delete a reconciled payment, for one. Nothing is retried: a person takes it from here.
+      if (e instanceof XeroApiError && (e.kind === "validation" || e.kind === "not_found")) needsPerson(ctx, r, `${r.label}: the payout came back, but Xero would not remove the payment (${e.message}). Reverse it in Xero by hand; the new payment waits until then.`);
+      else throw e;
+    }
+  }
+}
+
+/** An amended request whose bill is in Xero and unpaid: the bill is updated to match. A paid one needs a person. */
+async function updateAmended(ctx: Ctx, rows: RecordRow[]): Promise<void> {
+  const groups = xeroBillRows(ctx.db, ctx.businessId, { onlyNew: false, includeLive: true }).groups;
+  for (const r of rows) {
+    const g = groups.find((x) => x.source === r.parentKey && x.kind === "bill");
+    const touch = () => ctx.db.update(xeroRecords).set({ updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+    if (!g || groupHash(g) === r.sentHash) {
+      touch();
+      continue;
+    }
+    const inv = await getInvoice(ctx, r.xeroId!);
+    if (!inv || !unpaid(inv)) {
+      needsPerson(ctx, r, `${r.label} was changed here after it went to Xero and has payments there. Make the same change in Xero by hand.`);
+      continue;
+    }
+    const contact = (await findContact(ctx, String(g.rows[0]["*ContactName"]))) ?? "";
+    const { body, number, hash } = billBody(ctx, g, contact);
+    try {
+      await ctx.client.request({ method: "POST", path: `/Invoices/${encodeURIComponent(r.xeroId!)}`, body: { Invoices: [{ ...body, InvoiceID: r.xeroId }] }, idempotencyKey: `checkrail-${r.id}-upd-${hash.slice(0, 12)}` });
+    } catch (e) {
+      if (e instanceof XeroApiError && e.kind === "validation") {
+        needsPerson(ctx, r, `${r.label} was changed here, but Xero would not update it (${e.message}). Make the same change in Xero by hand.`);
+        continue;
+      }
+      throw e;
+    }
+    const contactName = String(g.rows[0]["*ContactName"]);
+    ctx.db.update(xeroRecords).set({ sentHash: hash, localKey: billKey(contactName, number), label: `Bill ${number}, ${contactName}`, updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+    audit(ctx.db, { obligationId: r.obligationId, actor: "system", action: "accounting.xero_bill_updated", detail: { invoice: number } });
+  }
+}
+
+/** A credit applied to a bill here is allocated to that bill in Xero, once. */
+async function pushAllocations(ctx: Ctx, allocations: Upkeep["allocations"]): Promise<void> {
+  for (const a of allocations) {
+    const cn = ctx.db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, ctx.businessId), eq(xeroRecords.tenantId, ctx.conn.tenantId), eq(xeroRecords.kind, "credit_note"), eq(xeroRecords.parentKey, `bill:${a.creditBillId}`), eq(xeroRecords.status, "pushed"))).get();
+    const bill = ctx.db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, ctx.businessId), eq(xeroRecords.tenantId, ctx.conn.tenantId), eq(xeroRecords.kind, "bill"), eq(xeroRecords.parentKey, `bill:${a.billId}`), eq(xeroRecords.status, "pushed"))).get();
+    if (!cn?.xeroId || !bill?.xeroId) continue; // both go first; the allocation follows on a later pass
+    const amount = (a.amountMinor / 100).toFixed(2);
+    const r = recordFor(ctx, "allocation", a.id, `Credit ${cn.label.replace(/^Credit note /, "")} applied to ${bill.label.replace(/^Bill /, "")}`, { parentKey: `bill:${a.billId}`, amount });
+    if (r.status === "pushed" || waiting(ctx, r)) continue;
+    const date = isoDay(a.createdAt);
+    await attempt(
+      ctx,
+      r,
+      async (write) => {
+        const res = await write<{ Allocations?: Array<{ AllocationID?: string }> }>({ method: "PUT", path: `/CreditNotes/${encodeURIComponent(cn.xeroId!)}/Allocations`, body: { Allocations: [{ Invoice: { InvoiceID: bill.xeroId }, Amount: Number(amount), Date: date }] } });
+        return res.Allocations?.[0]?.AllocationID ?? `${cn.xeroId}:${bill.xeroId}:${a.id}`;
+      },
+      async () => {
+        const res = await ctx.client.request<{ CreditNotes: Array<{ Allocations?: Array<{ AllocationID?: string; Amount: number; Invoice?: { InvoiceID?: string } }> }> }>({ method: "GET", path: `/CreditNotes/${encodeURIComponent(cn.xeroId!)}` });
+        const hit = (res.CreditNotes?.[0]?.Allocations ?? []).find((x) => x.Invoice?.InvoiceID === bill.xeroId && hundredths(x.Amount) === a.amountMinor);
+        return hit ? (hit.AllocationID ?? `${cn.xeroId}:${bill.xeroId}:${a.id}`) : null;
+      },
+    );
+  }
 }
 
 /** The bank account for a rail, checked to be in the payment's currency. */
@@ -515,6 +689,10 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
   const pay = recordFor(ctx, "payment", key, `Payment ${p.reference}, ${p.vendorName}`, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: parent, amount });
   const needsFee = hundredths(p.feeAmount) > 0 && p.rail !== "stellar";
   const feeLabel = `Fee on ${p.reference} (${p.rail})`;
+  // The part kept back for the tax office: paid against the same bill from the withholding liability account, so the
+  // bill (sent at its gross) clears exactly with what this part really withheld.
+  const withheld = hundredths(p.withheldAmount);
+  const whLabel = `Tax withheld on ${p.reference}, ${p.vendorName}`;
 
   if (pay.status !== "pushed") {
     if (waiting(ctx, pay)) {
@@ -527,10 +705,8 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
       const bank = bankFor(ctx, p.rail, p.grossCurrency);
       const invoiceId = await billForPayment(ctx, p);
       // First our own payment, by its reference (rail and provider transaction id).
-      const reference = toXeroPayment(p, bank).Reference;
-      const byRef = await ctx.client.request<{ Payments: Array<{ PaymentID: string; Status?: string; Reference?: string; Invoice?: { InvoiceID?: string } }> }>({ method: "GET", path: "/Payments", query: { where: `Reference=="${q(reference)}"` } });
-      const mine = (byRef.Payments ?? []).find((x) => x.Status !== "DELETED" && x.Reference === reference && (!x.Invoice?.InvoiceID || x.Invoice.InvoiceID === invoiceId));
-      if (mine) return mine.PaymentID;
+      const mine = await paymentByReference(ctx, toXeroPayment(p, bank).Reference, invoiceId);
+      if (mine) return mine;
       // Last resort: if Xero holds more payments of this amount on this bill than Checkrail has sent, one of them is this
       // payment (sent before a demo reset, or entered by hand): it is used, not paid twice, and its fee is not booked.
       const inv = await ctx.client.request<{ Invoices: Array<{ Payments?: Array<{ PaymentID: string; Amount: number }> }> }>({ method: "GET", path: `/Invoices/${encodeURIComponent(invoiceId)}` });
@@ -553,10 +729,41 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
       return id;
     });
     if (!done) return;
+    if (adoptedByAmount && withheld > 0) {
+      const wh = recordFor(ctx, "withholding", `${key}|wh`, whLabel, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: parent });
+      ctx.db.update(xeroRecords).set({ status: "skipped", error: "The payment was already on the bill in Xero, so its withheld part was taken to be there too.", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, wh.id)).run();
+    }
     if (adoptedByAmount && needsFee) {
       // The payment was already in Xero, so its fee is taken to be there too; it is not booked a second time.
       const fee = recordFor(ctx, "fee", key, feeLabel, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: key });
       ctx.db.update(xeroRecords).set({ status: "skipped", error: "Skipped fee: a payment of this amount was already on the bill in Xero, so it was used and its fee was not sent again.", updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, fee.id)).run();
+    }
+  }
+
+  if (withheld > 0) {
+    const wh = recordFor(ctx, "withholding", `${key}|wh`, whLabel, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: parent, amount: (withheld / 100).toFixed(2) });
+    if (wh.status !== "pushed" && wh.status !== "skipped") {
+      if (waiting(ctx, wh) || wh.status === "needs_person") {
+        ctx.result.waiting++;
+        return;
+      }
+      const reference = `${toXeroPayment(p, "").Reference}:wh`;
+      const done = await attempt(
+        ctx,
+        wh,
+        async (write) => {
+          const account = ctx.conn.withholdingAccountCode;
+          if (!account) throw new PlainFailure("Choose the Xero account for tax withheld in Settings, Xero (a liability account with payments enabled).");
+          const invoiceId = await billForPayment(ctx, p);
+          const found = await paymentByReference(ctx, reference, invoiceId);
+          if (found) return found;
+          const res = await write<{ Payments: Array<{ PaymentID: string }> }>({ method: "PUT", path: "/Payments", body: { Payments: [{ Invoice: { InvoiceID: invoiceId }, Account: { Code: account }, Date: isoDay(p.paymentDate), Amount: withheld / 100, Reference: reference }] } });
+          const id = res.Payments?.[0]?.PaymentID;
+          if (!id) throw new XeroApiError("Xero did not return the withheld payment.", "validation");
+          return id;
+        },
+      );
+      if (!done) return;
     }
   }
 
@@ -600,9 +807,9 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
   audit(ctx.db, { obligationId: sync.obligationId, actor: "system", action: "accounting.xero_payment_pushed", detail: { reference: p.reference, fee: needsFee } });
 }
 
-/** The organisation's no-tax rate, for lines that carry no tax whatever rate the bill uses. */
-function exemptTaxType(ctx: Ctx): string {
-  const rates = ctx.chart?.taxRates ?? [];
-  return (rates.find((t) => t.type === "NONE") ?? rates.find((t) => /exempt|no tax|no vat|no gst/i.test(t.name)))?.type ?? "NONE";
+/** Our own payment on this bill, found by its reference. A deleted one (a payout that came back) does not count. */
+async function paymentByReference(ctx: Ctx, reference: string, invoiceId: string): Promise<string | null> {
+  const res = await ctx.client.request<{ Payments: Array<{ PaymentID: string; Status?: string; Reference?: string; Invoice?: { InvoiceID?: string } }> }>({ method: "GET", path: "/Payments", query: { where: `Reference=="${q(reference)}"` } });
+  return (res.Payments ?? []).find((x) => x.Status !== "DELETED" && x.Reference === reference && (!x.Invoice?.InvoiceID || x.Invoice.InvoiceID === invoiceId))?.PaymentID ?? null;
 }
 

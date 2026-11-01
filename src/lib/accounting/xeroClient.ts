@@ -128,7 +128,11 @@ export function createXeroClient(db: Db, businessId: string, tenantId: string, o
         throw new XeroApiError(`Xero asked us to slow down (${res.headers.get("x-rate-limit-problem") ?? "rate limit"}). Sending again in ${retry} seconds.`, "rate_limited", false, retry);
       }
       const json = (await res.json().catch(() => null)) as unknown;
-      if (res.ok) return json as T;
+      if (res.ok) {
+        // A success whose body cannot be read: for a write, it may have happened, so it is looked up before any retry.
+        if (json === null) throw new XeroApiError("Xero's answer could not be read. It will be checked in Xero before trying again.", "unavailable", req.method !== "GET");
+        return json as T;
+      }
       if (res.status === 403) throw new XeroApiError("Xero refused this request: the connection may be missing a permission. Disconnect and connect to Xero again.", "forbidden");
       if (res.status === 404) throw new XeroApiError("Xero could not find that record.", "not_found");
       if (res.status >= 500) throw new XeroApiError(`Xero had a problem (HTTP ${res.status}). It will be tried again.`, "unavailable", req.method !== "GET");

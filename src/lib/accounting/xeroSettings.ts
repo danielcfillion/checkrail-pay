@@ -19,6 +19,8 @@ export interface XeroAccount {
   name: string;
   type: string; // BANK, EXPENSE, DIRECTCOSTS, OVERHEADS, CURRLIAB, PREPAYMENT, ...
   currency?: string | null;
+  /** Xero's "Enable payments to this account": a payment can be made from it (bank accounts always can). */
+  payments?: boolean;
 }
 export interface XeroChart {
   accounts: XeroAccount[];
@@ -45,6 +47,7 @@ interface RawAccount {
   Type: string;
   Status?: string;
   CurrencyCode?: string;
+  EnablePaymentsToAccount?: boolean;
 }
 
 /** Read the chart of accounts, tax rates, currencies and tracking categories (five calls), and fill any unset mapping with a sensible default. */
@@ -58,7 +61,7 @@ export async function refreshXeroChart(db: Db, businessId: string, via?: XeroCli
   const org = await client.request<{ Organisations: Array<{ BaseCurrency?: string }> }>({ method: "GET", path: "/Organisation" });
   const trk = await client.request<{ TrackingCategories: Array<{ Name: string; Status?: string; Options?: Array<{ Name: string; Status?: string }> }> }>({ method: "GET", path: "/TrackingCategories" });
   const chart: XeroChart = {
-    accounts: (acc.Accounts ?? []).filter((a) => a.Code && (a.Status ?? "ACTIVE") === "ACTIVE").map((a) => ({ code: a.Code!, name: a.Name, type: a.Type, currency: a.CurrencyCode ?? null })),
+    accounts: (acc.Accounts ?? []).filter((a) => a.Code && (a.Status ?? "ACTIVE") === "ACTIVE").map((a) => ({ code: a.Code!, name: a.Name, type: a.Type, currency: a.CurrencyCode ?? null, payments: a.Type === "BANK" || a.EnablePaymentsToAccount === true })),
     taxRates: (tax.TaxRates ?? []).filter((t) => (t.Status ?? "ACTIVE") === "ACTIVE" && t.CanApplyToExpenses !== false).map((t) => ({ type: t.TaxType, name: t.Name })),
     currencies: (cur.Currencies ?? []).map((c) => c.Code),
     baseCurrency: org.Organisations?.[0]?.BaseCurrency ?? null,
@@ -72,6 +75,7 @@ export async function refreshXeroChart(db: Db, businessId: string, via?: XeroCli
       chartFetchedAt: ts,
       expenseAccountCode: conn.expenseAccountCode ?? d.expenseAccountCode,
       feeAccountCode: conn.feeAccountCode ?? d.feeAccountCode,
+      withholdingAccountCode: conn.withholdingAccountCode ?? d.withholdingAccountCode,
       taxType: conn.taxType ?? d.taxType,
       paypalAccountCode: conn.paypalAccountCode ?? d.paypalAccountCode,
       stellarAccountCode: conn.stellarAccountCode ?? d.stellarAccountCode,
@@ -98,6 +102,8 @@ export function defaultMapping(chart: XeroChart) {
     paypalAccountCode: named(/paypal/i),
     stellarAccountCode: named(/stellar|treasury|pyusd|usdc/i),
     bankAccountCode: banks.find((a) => !/paypal|stellar|treasury|pyusd|usdc/i.test(a.name))?.code ?? null,
+    // The liability account the bills file used (825), when payments are enabled on it.
+    withholdingAccountCode: chart.accounts.find((a) => a.code === (process.env.XERO_WITHHOLDING_ACCOUNT || "825") && a.type !== "BANK" && a.payments)?.code ?? null,
   };
 }
 
@@ -107,6 +113,8 @@ export interface XeroMappingInput {
   stellarAccountCode: string | null;
   bankAccountCode: string | null;
   feeAccountCode: string | null;
+  /** Optional until a payment withholds tax; then required. */
+  withholdingAccountCode?: string | null;
   taxType: string | null;
 }
 
@@ -120,6 +128,7 @@ export function saveXeroMapping(db: Db, businessId: string, actor: string, input
   const checks: Array<[string, string | null, (a: XeroAccount) => boolean]> = [
     ["Supplier bills", input.expenseAccountCode, (a) => EXPENSE_TYPES.has(a.type)],
     ["Payment fees", input.feeAccountCode, (a) => EXPENSE_TYPES.has(a.type)],
+    ["Tax withheld", input.withholdingAccountCode ?? null, (a) => a.type !== "BANK" && a.payments === true],
     ["PayPal", input.paypalAccountCode, (a) => a.type === "BANK"],
     ["Stellar treasury", input.stellarAccountCode, (a) => a.type === "BANK"],
     ["Wise and bank file", input.bankAccountCode, (a) => a.type === "BANK"],
@@ -128,6 +137,7 @@ export function saveXeroMapping(db: Db, businessId: string, actor: string, input
     if (!code) continue;
     const a = find(code);
     if (!a) return { ok: false, message: `${label}: account ${code} is not in this Xero organisation's chart of accounts.` };
+    if (label === "Tax withheld" && !ok(a)) return { ok: false, message: `Tax withheld: ${a.code} ${a.name} does not take payments. In Xero, open Accounting, Chart of accounts, edit the account and tick "Enable payments to this account", then read the accounts again.` };
     if (!ok(a)) return { ok: false, message: `${label}: ${a.code} ${a.name} is the wrong kind of account (${a.type.toLowerCase()}).` };
   }
   // Required: the bill's lines are sent with this rate, so the bill total is exactly what is paid (see xeroSync taxTerms).
@@ -159,10 +169,12 @@ export interface XeroCardView {
   chartFetchedAt: string | null;
   bankAccounts: Array<{ code: string; label: string }>;
   expenseAccounts: Array<{ code: string; label: string }>;
+  /** Accounts the withheld part can be paid from: non-bank accounts with payments enabled. */
+  withholdingAccounts: Array<{ code: string; label: string }>;
   taxRates: Array<{ type: string; name: string }>;
   pushed: number;
   waiting: number;
-  failures: Array<{ id: string; label: string; error: string; attempts: number; nextAttemptAt: string | null }>;
+  failures: Array<{ id: string; label: string; error: string; attempts: number; nextAttemptAt: string | null; needsPerson: boolean }>;
   /** Bills approved before Xero was connected: they stay in the bills file and the settlement CSV. */
   earlierBills: number;
   /** Fees not sent because their payment was already on the bill in Xero (used, not paid twice). */
@@ -174,9 +186,9 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
   const chart = parseChart(conn?.chartJson);
   const label = (a: XeroAccount) => `${a.code} ${a.name}${a.currency ? ` (${a.currency})` : ""}`;
   const tenant = conn?.tenantId ?? "";
-  const counts = conn ? db.select({ status: xeroRecords.status }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.kind, ["bill", "credit_note", "payment", "fee"]))).all() : [];
+  const counts = conn ? db.select({ status: xeroRecords.status }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.kind, ["bill", "credit_note", "payment", "withholding", "fee", "allocation"]))).all() : [];
   const failures = conn
-    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), eq(xeroRecords.status, "failed"))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
+    ? db.select().from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), inArray(xeroRecords.status, ["failed", "needs_person"]))).orderBy(desc(xeroRecords.updatedAt)).limit(10).all()
     : [];
   return {
     configured: xeroConfigured(),
@@ -196,15 +208,17 @@ export function xeroCardView(db: Db, businessId: string): XeroCardView {
       stellarAccountCode: conn?.stellarAccountCode ?? null,
       bankAccountCode: conn?.bankAccountCode ?? null,
       feeAccountCode: conn?.feeAccountCode ?? null,
+      withholdingAccountCode: conn?.withholdingAccountCode ?? null,
       taxType: conn?.taxType ?? null,
     },
     chartFetchedAt: conn?.chartFetchedAt ?? null,
     bankAccounts: (chart?.accounts ?? []).filter((a) => a.type === "BANK").map((a) => ({ code: a.code, label: label(a) })),
     expenseAccounts: (chart?.accounts ?? []).filter((a) => EXPENSE_TYPES.has(a.type)).map((a) => ({ code: a.code, label: label(a) })),
+    withholdingAccounts: (chart?.accounts ?? []).filter((a) => a.type !== "BANK" && a.payments).map((a) => ({ code: a.code, label: label(a) })),
     taxRates: chart?.taxRates ?? [],
     pushed: counts.filter((c) => c.status === "pushed").length,
     waiting: counts.filter((c) => c.status === "pending").length,
-    failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.error ?? "Not sent", attempts: f.attempts, nextAttemptAt: f.nextAttemptAt })),
+    failures: failures.map((f) => ({ id: f.id, label: f.label, error: f.error ?? "Not sent", attempts: f.attempts, nextAttemptAt: f.nextAttemptAt, needsPerson: f.status === "needs_person" })),
     skippedFees: conn ? db.select({ id: xeroRecords.id }).from(xeroRecords).where(and(eq(xeroRecords.businessId, businessId), eq(xeroRecords.tenantId, tenant), eq(xeroRecords.kind, "fee"), eq(xeroRecords.status, "skipped"))).all().length : 0,
     earlierBills: conn ? splitGroups(db, xeroBillRows(db, businessId, { onlyNew: true }).groups, conn.syncFrom).earlier.length : 0,
   };

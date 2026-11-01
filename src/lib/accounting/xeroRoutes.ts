@@ -89,6 +89,8 @@ export async function handleXeroCallback(req: Request, db: Db): Promise<Response
 export async function handleXeroDisconnect(req: Request, db: Db): Promise<Response> {
   const who = allowed(req, db, "settings");
   if (who instanceof Response) return who;
+  const bad = jsonOnly(req);
+  if (bad) return bad;
   if (!getXeroConnection(db, who.businessId)) return json({ ok: true, message: "Xero was not connected." });
   const r = await disconnectXero(db, who.businessId, who.actor.id);
   const message =
@@ -130,6 +132,7 @@ export async function handleXeroMapping(req: Request, db: Db): Promise<Response>
     stellarAccountCode: pick("stellarAccountCode"),
     bankAccountCode: pick("bankAccountCode"),
     feeAccountCode: pick("feeAccountCode"),
+    withholdingAccountCode: pick("withholdingAccountCode"),
     taxType: pick("taxType"),
   });
   return r.ok ? json({ ok: true, message: "Account mapping saved." }) : json(r, 400);

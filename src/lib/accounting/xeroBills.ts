@@ -7,8 +7,9 @@ import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { audit } from "../domain/stateMachine";
 import { now } from "../domain/ids";
-import { DEFAULT_POLICY, type ApprovalPolicy } from "../domain/types";
-import { withholdingFor } from "../engine/taxes";
+import { config } from "../config";
+import { getXeroConnection } from "./xeroAuth";
+import { splitGroups } from "./xeroScope";
 
 /**
  * Bills for Xero at approval, not at payment: the liability belongs in the books the day the business agrees it
@@ -29,6 +30,8 @@ type Row = Record<(typeof XERO_BILL_COLUMNS)[number], string | number | null>;
 
 /** The rows of one invoice in the file, and what they came from: the live Xero push sends each group as one bill. */
 export interface XeroBillGroup {
+  /** What the bill came from, stable when its number changes: "bill:<id>" or "ob:<obligation id>". */
+  source: string;
   kind: "bill" | "credit_note";
   billId: string | null;
   obligationIds: string[];
@@ -37,11 +40,18 @@ export interface XeroBillGroup {
 
 const major = majorText;
 
-export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolean }): { rows: Row[]; obligationIds: string[]; billIds: string[]; groups: XeroBillGroup[] } {
+/**
+ * Bills are at the invoice's gross amount. Tax kept back for the tax office is not on the bill: it is what clears the
+ * rest of the bill when each part is paid (a second payment from the withholding liability account, which the live
+ * push sends and the settlement CSV's withheldAmount carries for a file import). A prediction on the bill could not
+ * match what each part really withheld (rounding, a W-9 filed between deposit and balance, per-payment thresholds).
+ *
+ * With Xero connected and the destination xero, bills the live push owns (approved after the connection) are left out
+ * of the file, so a bill is never both imported and sent. `includeLive` is for the live push itself.
+ */
+export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolean; includeLive?: boolean }): { rows: Row[]; obligationIds: string[]; billIds: string[]; groups: XeroBillGroup[] } {
   const tracking = process.env.XERO_TRACKING_NAME || "Departure";
   const taxType = process.env.XERO_TAX_TYPE || "Tax Exempt";
-  // Tax kept back is owed to the tax office, not the vendor: a negative line on the bill to a liability account.
-  const withholdingAccount = process.env.XERO_WITHHOLDING_ACCOUNT || "825";
   const obs = db
     .select({ o: obligations, v: vendors })
     .from(obligations)
@@ -52,7 +62,6 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
   // and is posted on the first open day.
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get();
   const lock = biz?.lockedThrough ?? null;
-  const policy = (): ApprovalPolicy => ({ ...DEFAULT_POLICY, ...(JSON.parse(biz?.policyJson ?? "{}") as Partial<ApprovalPolicy>) });
   const posting = (d: string) => (lock && d <= lock ? new Date(Date.parse(`${lock}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : d);
   const late = (d: string) => (lock && d <= lock ? ` (invoice dated ${d})` : "");
   const rows: Row[] = [];
@@ -63,8 +72,6 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     if (!o.amountMinor || !o.currency) continue;
     obligationIds.push(o.id);
     const departure = departureCodeFor(db, businessId, [o.rawInput, o.sourceRef, o.description]);
-    const withholdingLine = (invoiceNumber: string, date: string, due: string, withheld: number, currency: string, note: string | null) =>
-      withheld > 0 ? { ...base, "*InvoiceNumber": invoiceNumber, "*InvoiceDate": date, "*DueDate": due, Description: `Tax withheld${note ? `: ${note.split(":")[0]}` : ""}`, "*UnitAmount": `-${major(withheld, currency)}`, "*AccountCode": withholdingAccount, Currency: currency } : null;
     const base = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*Quantity": 1, "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: departure ? tracking : null, TrackingOption1: departure, Currency: o.currency };
     if (o.billId) {
       // The invoice once, at its total, the first time any part of it is agreed.
@@ -80,18 +87,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
       const due = [b.dueDate ?? o.dueDate ?? date, date].sort()[1];
       const main: Row = { ...base, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, b.reference, departure, b.kind) + late(docDate), "*UnitAmount": major(b.totalMinor, b.currency), "*AccountCode": accountCodeFor(v.role, v.defaultAccountCode, b.kind), Currency: b.currency };
       rows.push(main);
-      // Tax kept back on every part of this invoice (a deposit and its balance each withhold), not only the part that
-      // happened to be agreed first. A cancelled part was never paid, so nothing was kept back from it.
-      // The bill goes once, often while only the deposit exists, so the tax on parts not yet raised is worked out from
-      // the invoice total with the vendor's own rule. When every part exists, their own withholding is used as it is.
-      const parts = db.select({ amount: obligations.amountMinor, withheld: obligations.withheldMinor, note: obligations.withholdingNote, state: obligations.state }).from(obligations).where(eq(obligations.billId, b.id)).all().filter((p) => p.state !== "cancelled");
-      const withheldParts = parts.reduce((sum, p) => sum + (p.withheld ?? 0), 0);
-      const covered = parts.reduce((sum, p) => sum + (p.amount ?? 0), 0) >= b.totalMinor;
-      const rule = withheldParts > 0 && !covered ? withholdingFor(policy(), biz?.country ?? "US", v, b.totalMinor, b.currency) : null;
-      const withheldAll = rule ? rule.withheldMinor : withheldParts;
-      const w = withholdingLine(b.reference, date, due, withheldAll, b.currency, o.withholdingNote ?? parts.find((p) => p.note)?.note ?? null);
-      if (w) rows.push(w);
-      groups.set(b.id, { kind: "bill", billId: b.id, obligationIds: [o.id], rows: w ? [main, w] : [main] });
+      groups.set(b.id, { source: `bill:${b.id}`, kind: "bill", billId: b.id, obligationIds: [o.id], rows: [main] });
       continue;
     }
     const docDate = o.invoiceDate ?? localDateString(new Date(o.createdAt));
@@ -100,9 +96,7 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     const ref = o.sourceRef ?? o.id;
     const main: Row = { ...base, "*InvoiceNumber": ref, "*InvoiceDate": date, "*DueDate": due, Description: describeBill(v.role, ref, departure) + late(docDate), "*UnitAmount": major(o.amountMinor, o.currency) };
     rows.push(main);
-    const w = withholdingLine(ref, date, due, o.withheldMinor ?? 0, o.currency, o.withholdingNote);
-    if (w) rows.push(w);
-    groups.set(`ob:${o.id}`, { kind: "bill", billId: null, obligationIds: [o.id], rows: w ? [main, w] : [main] });
+    groups.set(`ob:${o.id}`, { source: `ob:${o.id}`, kind: "bill", billId: null, obligationIds: [o.id], rows: [main] });
   }
   // Credit notes: Xero imports a negative total as a credit note against the supplier; it is then allocated to the bill.
   const credits = db
@@ -117,9 +111,16 @@ export function xeroBillRows(db: Db, businessId: string, opts: { onlyNew: boolea
     const date = posting(b.billDate ?? localDateString(new Date(b.createdAt)));
     const row: Row = { "*ContactName": v.name, EmailAddress: v.email, POCountry: v.country, "*InvoiceNumber": b.reference, "*InvoiceDate": date, "*DueDate": b.dueDate ?? date, Description: `${describeBill(v.role, b.reference, null, "credit_note")}${b.note ? `: ${b.note.slice(0, 120)}` : ""}`, "*Quantity": 1, "*UnitAmount": `-${major(b.totalMinor, b.currency)}`, "*AccountCode": b.note?.startsWith("Settlement of advance") ? advancesAccount() : accountCodeFor(v.role, v.defaultAccountCode), "*TaxType": taxType, TrackingName1: null, TrackingOption1: null, Currency: b.currency };
     rows.push(row);
-    groups.set(b.id, { kind: "credit_note", billId: b.id, obligationIds: [], rows: [row] });
+    groups.set(b.id, { source: `bill:${b.id}`, kind: "credit_note", billId: b.id, obligationIds: [], rows: [row] });
   }
-  return { rows, obligationIds, billIds: [...billIds], groups: [...groups.values()] };
+  const all = [...groups.values()];
+  const conn = opts.includeLive || config.accounting.destination !== "xero" ? null : getXeroConnection(db, businessId);
+  if (!conn) return { rows, obligationIds, billIds: [...billIds], groups: all };
+  const { live, earlier } = splitGroups(db, all, conn.syncFrom);
+  const liveRows = new Set(live.flatMap((g) => g.rows));
+  const liveObligations = new Set(live.flatMap((g) => g.obligationIds));
+  const liveBills = new Set(live.map((g) => g.billId).filter(Boolean));
+  return { rows: rows.filter((r) => !liveRows.has(r)), obligationIds: obligationIds.filter((id) => !liveObligations.has(id)), billIds: [...billIds].filter((id) => !liveBills.has(id)), groups: earlier };
 }
 
 export function xeroBillsCsv(rows: Row[]): string {

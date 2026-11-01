@@ -33,7 +33,8 @@ export function approvedAt(db: Db, obligationIds: string[]): Map<string, string>
 export function billApprovedAt(db: Db, obligationIds: string[]): Map<string, string> {
   const own = db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(inArray(obligations.id, obligationIds.length ? obligationIds : [""])).all();
   const billIds = [...new Set(own.map((o) => o.billId).filter((b): b is string => Boolean(b)))];
-  const siblings = billIds.length ? db.select({ id: obligations.id, billId: obligations.billId }).from(obligations).where(inArray(obligations.billId, billIds)).all() : [];
+  // Cancelled parts never count, here as in splitGroups (which sees only agreed parts): a bill is live or in the files, whole.
+  const siblings = billIds.length ? db.select({ id: obligations.id, billId: obligations.billId, state: obligations.state }).from(obligations).where(inArray(obligations.billId, billIds)).all().filter((s) => s.state !== "cancelled") : [];
   const when = approvedAt(db, [...new Set([...obligationIds, ...siblings.map((s) => s.id)])]);
   const firstOfBill = new Map<string, string>();
   for (const s of siblings) {

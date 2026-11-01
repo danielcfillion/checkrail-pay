@@ -30,12 +30,13 @@ async function call(url: string, method: "POST" | "DELETE", body?: unknown): Pro
   }
 }
 
-const FIELDS: Array<{ key: keyof XeroMappingInput; label: string; list: "expense" | "bank" | "tax"; hint: string }> = [
+const FIELDS: Array<{ key: keyof XeroMappingInput; label: string; list: "expense" | "bank" | "tax" | "withholding"; hint: string }> = [
   { key: "expenseAccountCode", label: "Supplier bills", list: "expense", hint: "Used when a bill's own account (310, 320, 400, 429) is not in your chart." },
   { key: "paypalAccountCode", label: "PayPal clearing", list: "bank", hint: "Bank account PayPal payments come out of." },
   { key: "stellarAccountCode", label: "Stellar treasury", list: "bank", hint: "Bank account for the PYUSD treasury." },
   { key: "bankAccountCode", label: "Wise and bank file", list: "bank", hint: "Bank account local payouts come out of." },
   { key: "feeAccountCode", label: "Payment fees", list: "expense", hint: "PayPal, Wise and bank fees." },
+  { key: "withholdingAccountCode", label: "Tax withheld", list: "withholding", hint: "Liability account the withheld part is paid from. Tick Enable payments to this account on it in Xero." },
   { key: "taxType", label: "Tax rate on bills", list: "tax", hint: "Default tax rate on each bill line." },
 ];
 
@@ -63,7 +64,7 @@ export function XeroConnectionControls({ view, owner, mayPush }: { view: XeroCar
       router.refresh();
     });
 
-  const options = (list: "expense" | "bank" | "tax") => (list === "tax" ? view.taxRates.map((t) => ({ value: t.type, label: t.name })) : (list === "bank" ? view.bankAccounts : view.expenseAccounts).map((a) => ({ value: a.code, label: a.label })));
+  const options = (list: "expense" | "bank" | "tax" | "withholding") => (list === "tax" ? view.taxRates.map((t) => ({ value: t.type, label: t.name })) : (list === "bank" ? view.bankAccounts : list === "withholding" ? view.withholdingAccounts : view.expenseAccounts).map((a) => ({ value: a.code, label: a.label })));
   const changed = FIELDS.some((f) => (mapping[f.key] ?? "") !== (view.mapping[f.key] ?? ""));
 
   return (
@@ -151,9 +152,7 @@ export function XeroConnectionControls({ view, owner, mayPush }: { view: XeroCar
                   <li key={f.id} className="rounded border border-blocked bg-blocked-soft px-3 py-2 text-sm">
                     <span className="font-medium">{f.label}</span>
                     <span className="block text-ink">{f.error}</span>
-                    <span className="block text-xs text-ink-soft">
-                      {f.attempts} {f.attempts === 1 ? "try" : "tries"}
-                    </span>
+                    <span className="block text-xs text-ink-soft">{f.needsPerson ? "Needs a person in Xero: not tried again" : `${f.attempts} ${f.attempts === 1 ? "try" : "tries"}`}</span>
                   </li>
                 ))}
               </ul>
