@@ -716,7 +716,18 @@ export async function applyCreditAction(creditBillId: string, billId: string, am
 export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: number, note?: string): Promise<ActionResult> {
   return inRequest(async () => {
   try {
-    const r = await withBusiness((db, b, who) => settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined));
+    const r = await withBusiness(async (db, b, who) => {
+      const out = settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined);
+      // The difference bill picks up outside requests already waiting that name it, as any new bill does (R9-S3).
+      if (out.differenceBillId) {
+        try {
+          await linkWaitingToBill(db, out.differenceBillId, who.id);
+        } catch (e) {
+          console.error("[checkrail] linking waiting requests to a new bill failed", e);
+        }
+      }
+      return out;
+    });
     done(["/vendors"]);
     return { ok: true, message: r.owedTo === "vendor" ? "Settled. The overspend is recorded as owed to the vendor." : r.owedTo === "business" ? "Settled. The unspent part is a credit to set against their next bill." : "Settled exactly." };
   } catch (e) {

@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, like } from "drizzle-orm";
+import { and, eq, gte, like } from "drizzle-orm";
 import { snapshotOf, type Db } from "../db";
-import { agentChecks, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
+import { agentChecks, obligations, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
@@ -9,12 +9,13 @@ import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendor
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { AGENT_FLAG_PREFIX, ingestObligation, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, ingestObligation } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
 import { guideFor } from "./rules";
 import { BILL_NEUTRAL } from "../api/redact";
+import { outsideView, type RequestStatus } from "../api/view";
 import { billsMatching } from "../engine/bills";
 
 /**
@@ -495,7 +496,7 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
 
 // ---------- request_payment and payment_status ----------
 
-export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_approval" | "scheduled" | "approved" | "sending" | "paid" | "returned" | "cancelled" | "failed" | "disputed";
+export type { RequestStatus } from "../api/view";
 
 export interface StatusAnswer {
   request_id: string;
@@ -519,37 +520,22 @@ export function whenRelease(iso: string, at = Date.now()): string {
 }
 
 function describe(db: Db, id: string): StatusAnswer {
-  const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
-  if (!ob) throw new AgentInputError("No such request");
+  // The same outside view the REST API reads (src/lib/api/view.ts), so the two channels cannot drift (API review
+  // R9-M2): status and reasons come from it, reasons as fixed sentences per rule code.
+  const v = outsideView(db, id);
+  if (!v) throw new AgentInputError("No such request");
+  const { ob, settled, attempt } = v;
   const vendor = ob.vendorId ? db.select({ name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
   const others = otherNames(db, ob.businessId, [vendor?.name]);
   const amount = ob.amountMinor && ob.currency ? formatMoney(ob.amountMinor, ob.currency, { code: true }) : null;
-  const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
-  const attempt = db.select({ externalId: paymentAttempts.externalId }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
-  const policy = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) ? previewPolicy(db, id) : null;
-  // A request about a bill, while it waits, reads the same to the agent whether it fits or not (API review R8).
-  const aboutBill = ["blocked", "drafted", "needs_evidence", "awaiting_approval", "verified"].includes(ob.state) && outsideBillMatch(db, id);
-  const reasons = aboutBill ? [BILL_NEUTRAL] : (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(forAgent(r.ruleId, r.message), others, vendor?.name ?? null)).slice(0, 6);
-  const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
-  const status: RequestStatus =
-    aboutBill ? "waiting_for_approval"
-    : ob.state === "blocked" ? "blocked"
-    : ob.state === "drafted" || ob.state === "needs_evidence" ? "waiting_for_evidence"
-    : ob.state === "awaiting_approval" || ob.state === "verified" ? "waiting_for_approval"
-    : scheduled ? "scheduled"
-    : ob.state === "approved" ? "approved"
-    : ob.state === "execution_pending" || ob.state === "sent" ? "sending"
-    : ob.state === "settled" ? "paid"
-    : ob.state === "refunded" ? "returned"
-    : ob.state === "cancelled" ? "cancelled"
-    : ob.state === "disputed" ? "disputed"
-    : "failed";
+  const status = v.status;
+  const reasons = v.reasons.slice(0, 6);
   const summary =
-    status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}.`
+    status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}`
     : status === "waiting_for_evidence" ? "Waiting for supporting evidence before anyone can approve it."
-    : status === "waiting_for_approval" ? `Waiting for a person to approve${reasons[0] ? `: ${reasons[0]}` : ""}.`
-    : status === "scheduled" ? `Autopilot sends it ${whenRelease(ob.releaseAt!)} unless a person cancels before then.`
-    : status === "approved" ? "Approved by the rules; a person sends it."
+    : status === "waiting_for_approval" ? `Waiting for a person to approve${reasons[0] ? `: ${reasons[0]}` : "."}`
+    : status === "scheduled" ? `Autopilot sends it ${whenRelease(v.releasesAt!)} unless a person cancels before then.`
+    : status === "approved" ? (v.aboutBill ? "Approved by a person; it is sent from here." : "Approved by the rules; a person sends it.")
     : status === "sending" ? "Sent to the payment rail; waiting for it to confirm."
     : status === "paid" ? `Paid${settled ? ` over ${settled.rail}` : ""}.`
     : status === "returned" ? "The payment came back; a person decides what happens next."
@@ -563,7 +549,7 @@ function describe(db: Db, id: string): StatusAnswer {
     amount,
     reference: ob.sourceRef,
     reasons,
-    releases_at: scheduled ? ob.releaseAt : null,
+    releases_at: v.releasesAt,
     paid: settled ? { rail: settled.rail, provider_id: settled.externalId ?? attempt?.externalId ?? null, settled_at: settled.settledAt } : null,
     review_path: `/obligations/${id}`,
   };

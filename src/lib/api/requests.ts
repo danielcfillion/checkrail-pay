@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db";
-import { apiRequests, attachments, obligations, paymentAttempts, settlements, vendors } from "../db/schema";
+import { apiRequests, attachments, obligations, vendors } from "../db/schema";
 import { newId, now } from "../domain/ids";
 import { TRANSITIONS, type ObligationState, type SourceType } from "../domain/types";
 import { transition } from "../domain/stateMachine";
 import { normaliseName } from "../domain/vendorNames";
 import { ZERO_DECIMAL_CURRENCIES } from "../domain/money";
-import { ingestObligation, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
+import { ingestObligation } from "../engine/orchestrator";
 import { uploadDocument, ALLOWED_UPLOAD_TYPES } from "../engine/attachments";
 import { formatMoney } from "../format";
 import { AgentInputError, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
-import { BILL_NEUTRAL, apiReasons } from "./redact";
+import { outsideView } from "./view";
 import { ApiError, Problems, isObject, onlyFields, stable } from "./http";
 
 /**
@@ -229,81 +229,40 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
   });
 }
 
-export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_approval" | "scheduled" | "approved" | "sending" | "paid" | "returned" | "cancelled" | "failed" | "disputed";
+export type { RequestStatus } from "./view";
 
 /**
- * A request as an integration may read it: state, verdict, reasons, amounts, rail and settlement. Never payout
- * details: no PayPal email, bank account or wallet address. Reasons are fixed sentences per rule code (redact.ts).
+ * A request as an integration may read it: status, verdict, reasons, amounts, rail and settlement, from the outside
+ * view both channels share (view.ts). Never payout details: no PayPal email, bank account or wallet address.
  * `withReasons: false` (the list) skips re-running the checks: status and the stored verdict only (review R6-4).
  */
 export function describeRequest(db: Db, id: string, opts: { withReasons?: boolean } = {}) {
-  const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
-  if (!ob) throw new ApiError(404, "not_found", "No such request");
+  const v = outsideView(db, id, opts);
+  if (!v) throw new ApiError(404, "not_found", "No such request");
+  const { ob, settled, attempt } = v;
   const vendor = ob.vendorId ? db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
-  const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
-  const attempt = db.select({ externalId: paymentAttempts.externalId, rail: paymentAttempts.rail, status: paymentAttempts.status }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
-  const waiting = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state);
-  const policy = waiting && opts.withReasons !== false ? previewPolicy(db, id) : null;
-  const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").sort((x, y) => Number(y.severity === "block") - Number(x.severity === "block"));
-  // Built from rule codes only, never from the messages a person reads: those name other suppliers and other
-  // payments, with their states and dates (review R5-M3). Once a request has left the waiting states, its status says it.
-  const reasons = policy ? apiReasons(policy.rules, policy.decision) : [];
-  const scheduled = ob.state === "approved" && Boolean(ob.releaseAt) && !ob.autopilotCancelledAt;
-  const status: RequestStatus =
-    ob.state === "blocked" ? "blocked"
-    : ob.state === "drafted" || ob.state === "needs_evidence" ? "waiting_for_evidence"
-    : ob.state === "awaiting_approval" || ob.state === "verified" ? "waiting_for_approval"
-    : scheduled ? "scheduled"
-    : ob.state === "approved" ? "approved"
-    : ob.state === "execution_pending" || ob.state === "sent" ? "sending"
-    : ob.state === "settled" ? "paid"
-    : ob.state === "refunded" ? "returned"
-    : ob.state === "cancelled" ? "cancelled"
-    : ob.state === "disputed" ? "disputed"
-    : "failed";
-  const decision = policy?.decision ?? ob.policyDecision ?? null;
-  const verdict = decision === "auto_execute" ? "pay" : decision === "block" ? "block" : decision ? "hold" : null;
-  // A request about a bill reads the same to its sender whether it fits or not: waiting for a person, one neutral
-  // sentence, nothing that depends on the bill's balance, state or other parts (API review R8).
-  if (["blocked", "waiting_for_evidence", "waiting_for_approval"].includes(status) && outsideBillMatch(db, id)) {
-    return {
-      id: ob.id,
-      status: "waiting_for_approval" as RequestStatus,
-      state: "awaiting_approval",
-      verdict: "hold",
-      reasons: [BILL_NEUTRAL],
-      rules_failed: ["bill_review"],
-      payee: vendor ? { id: vendor.id, name: vendor.name } : null,
-      amount: ob.amountMinor != null && ob.currency ? { value: amountText(ob.amountMinor, ob.currency), currency: ob.currency, display: formatMoney(ob.amountMinor, ob.currency, { code: true }) } : null,
-      withheld: null,
-      reference: ob.sourceRef,
-      rail: null,
-      releases_at: null,
-      settlement: { status: "not_sent", rail: null, provider_id: null, settled_at: null, sent: null, fee: null, received: null },
-      created_at: ob.createdAt,
-      updated_at: ob.createdAt,
-    };
-  }
+  const pending = v.aboutBill && (v.verdict === "hold" || v.verdict === "approved");
   const settlement =
-    settled ? { status: ob.state === "refunded" ? "returned" : "settled", rail: settled.rail, provider_id: settled.externalId ?? attempt?.externalId ?? null, settled_at: settled.settledAt, sent: { value: amountText(settled.grossMinor, settled.grossCurrency), currency: settled.grossCurrency }, fee: { value: amountText(settled.feeMinor, settled.grossCurrency), currency: settled.grossCurrency }, received: settled.receivedMinor != null && settled.receivedCurrency ? { value: amountText(settled.receivedMinor, settled.receivedCurrency), currency: settled.receivedCurrency } : null }
-    : attempt ? { status: status === "sending" ? "sending" : status === "returned" ? "returned" : attempt.status === "failed" ? "failed" : "sending", rail: attempt.rail, provider_id: attempt.externalId ?? null, settled_at: null, sent: null, fee: null, received: null }
+    pending ? { status: "not_sent", rail: null, provider_id: null, settled_at: null, sent: null, fee: null, received: null }
+    : settled ? { status: ob.state === "refunded" ? "returned" : "settled", rail: settled.rail, provider_id: settled.externalId ?? attempt?.externalId ?? null, settled_at: settled.settledAt, sent: { value: amountText(settled.grossMinor, settled.grossCurrency), currency: settled.grossCurrency }, fee: { value: amountText(settled.feeMinor, settled.grossCurrency), currency: settled.grossCurrency }, received: settled.receivedMinor != null && settled.receivedCurrency ? { value: amountText(settled.receivedMinor, settled.receivedCurrency), currency: settled.receivedCurrency } : null }
+    : attempt ? { status: v.status === "sending" ? "sending" : v.status === "returned" ? "returned" : attempt.status === "failed" ? "failed" : "sending", rail: attempt.rail, provider_id: attempt.externalId ?? null, settled_at: null, sent: null, fee: null, received: null }
     : { status: "not_sent", rail: null, provider_id: null, settled_at: null, sent: null, fee: null, received: null };
   return {
     id: ob.id,
-    status,
-    state: ob.state,
-    verdict,
-    reasons,
-    rules_failed: failing.map((r) => r.ruleId),
+    status: v.status,
+    state: v.state,
+    verdict: v.verdict,
+    reasons: v.reasons,
+    rules_failed: v.rulesFailed,
     payee: vendor ? { id: vendor.id, name: vendor.name } : null,
     amount: ob.amountMinor != null && ob.currency ? { value: amountText(ob.amountMinor, ob.currency), currency: ob.currency, display: formatMoney(ob.amountMinor, ob.currency, { code: true }) } : null,
-    withheld: ob.withheldMinor && ob.currency ? { value: amountText(ob.withheldMinor, ob.currency), currency: ob.currency } : null,
+    withheld: v.showWithheld && ob.withheldMinor && ob.currency ? { value: amountText(ob.withheldMinor, ob.currency), currency: ob.currency } : null,
     reference: ob.sourceRef,
-    rail: ob.selectedRail ?? null,
-    releases_at: scheduled ? ob.releaseAt : null,
+    rail: v.rail,
+    releases_at: v.releasesAt,
     settlement,
     created_at: ob.createdAt,
-    updated_at: ob.updatedAt,
+    updated_at: pending ? ob.createdAt : ob.updatedAt,
   };
 }
 
