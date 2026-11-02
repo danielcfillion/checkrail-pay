@@ -20,7 +20,8 @@ import { setAutonomy } from "@/lib/engine/autopilot";
 import { authenticateApiKey, configuredApiKeys } from "@/lib/api/keys";
 import { resetApiThrottles } from "@/lib/api/http";
 import { textPdf } from "@/lib/api/testPdf";
-import { createBill, payBill } from "@/lib/engine/bills";
+import { applyCredit, createBill, payBill } from "@/lib/engine/bills";
+import { bills as billsTable } from "@/lib/db/schema";
 import { approveObligation, previewPolicy, recheckObligation, retryFailed } from "@/lib/engine/orchestrator";
 import { resolveActor } from "@/lib/engine/users";
 import { departures as departuresTable } from "@/lib/db/schema";
@@ -581,6 +582,82 @@ describe("review fixes, round 3", () => {
     const balance = await postRequest(balance8800, "r5-bal-000001", "l");
     expect(balance.json.rules_failed).not.toContain("bill_part_repeat");
     expect(balance.json.status).toBe("scheduled");
+  });
+
+  describe("round 6: an outside request naming a bill stays on it, and is blocked when it does not fit", () => {
+    const pay = (amount: string, currency = "USD", reference = "INV-ROSA-6001") => ({ payee: "Rosa Villanueva", amount, currency, reference, description: `Rosa Villanueva, guiding, ${currency} ${amount}, invoice ${reference}.`, evidence: [{ kind: "job_sheet", label: `Trip sheet ${reference}`, amount, reference, excerpt: `Guide: Rosa Villanueva. Total ${currency} ${amount}.` }] });
+    const billOf = (id: unknown) => getDb().select().from(obligations).where(eq(obligations.id, id as string)).get()!.billId;
+
+    it("USD 150 on an empty USD 100 bill is blocked, still on the bill", async () => {
+      await autopilot();
+      const bill = personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(pay("150"), "r6-over-00001", "l");
+      expect(r.json.status).toBe("blocked");
+      expect(r.json.rules_failed).toContain("bill_misfit");
+      expect(billOf(r.json.id)).toBe(bill);
+    });
+
+    it("USD 100 on a USD 100 bill with USD 60 of credit is blocked", async () => {
+      await autopilot();
+      const lan = resolveActor(getDb(), DEMO_BUSINESS_ID, "lan", "clerk");
+      const bill = personBill("INV-ROSA-6001", 10_000);
+      const credit = createBill(getDb(), DEMO_BUSINESS_ID, lan, "ven_rosa", { kind: "credit_note", reference: "CN-ROSA-6001", totalMinor: 6_000, currency: "USD", billDate: null, dueDate: null, note: null });
+      applyCredit(getDb(), DEMO_BUSINESS_ID, lan, credit, bill, 6_000);
+      const r = await postRequest(pay("100"), "r6-cred-00001", "l");
+      expect(r.json.status).toBe("blocked");
+      expect(billOf(r.json.id)).toBe(bill);
+    });
+
+    it("PHP 5,000 on a USD bill is blocked", async () => {
+      await autopilot();
+      const bill = personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(pay("5000", "PHP"), "r6-cur-000001", "l");
+      expect(r.json.status).toBe("blocked");
+      expect(billOf(r.json.id)).toBe(bill);
+    });
+
+    it("a closed or void bill blocks it too", async () => {
+      await autopilot();
+      const bill = personBill("INV-ROSA-6001", 10_000);
+      getDb().update(billsTable).set({ status: "void" }).where(eq(billsTable.id, bill)).run();
+      const r = await postRequest(pay("50"), "r6-void-00001", "l");
+      expect(r.json.status).toBe("blocked");
+      expect(billOf(r.json.id)).toBe(bill);
+    });
+
+    it("an outside deposit over what is open does not crash into the bill, and no exception text reaches the key", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest({ ...pay("150"), description: "50% deposit USD 150 for Rosa Villanueva on invoice INV-ROSA-6001, total USD 300." }, "r6-dep-000001", "l");
+      expect(r.status).toBe(201);
+      expect(r.json.status).toBe("blocked");
+      expect(JSON.stringify(r.json)).not.toMatch(/already has a|Error|exception/i);
+    });
+
+    it("a request that fits is unchanged", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      expect((await postRequest(pay("100"), "r6-fit-000001", "l")).json.status).toBe("scheduled");
+    });
+
+    it("the list is capped at 25 and its rows carry no reasons", async () => {
+      expect((await listRequests("?limit=26")).status).toBe(422);
+      await postRequest({ payee: "Maria Santos", amount: "45", currency: "USD", reference: "INV-MS-7601" }, "r6-list-00001");
+      const rows = (await listRequests("?limit=25")).json.requests as Array<{ reasons: unknown[]; rules_failed: unknown[]; status: string }>;
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.reasons.length === 0 && r.rules_failed.length === 0 && typeof r.status === "string")).toBe(true);
+    });
+
+    it("a departure can be changed only by the key that sent it, and conflicts quote no other external id", async () => {
+      vi.stubEnv("CHECKRAIL_API_KEYS", `${KEYS},bokun2:${S("b2")}:departures:write`);
+      expect((await postDepartures({ departures: [dep("bokun-6001", "CB-3D-6001", [phuongVan(3)])] })).status).toBe(200);
+      const other = await postDepartures({ departures: [dep("bokun-6001", "CB-3D-6001", [phuongVan(30)])] }, "b2");
+      expect(other.status).toBe(409);
+      expect(other.json.error?.message).toMatch(/another API key/);
+      const clash = await postDepartures({ departures: [dep("bokun-6002", "CB-3D-6001", [])] }, "b2");
+      expect(clash.status).toBe(409);
+      expect(clash.json.error?.message).not.toMatch(/bokun-6001/);
+    });
   });
 
   describe("round 5: an outside part of a bill that has another part never pays without a person", () => {
