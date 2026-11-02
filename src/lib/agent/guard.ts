@@ -1,6 +1,6 @@
-import { and, eq, gte, like } from "drizzle-orm";
+import { and, desc, eq, gte, like, or } from "drizzle-orm";
 import { snapshotOf, type Db } from "../db";
-import { agentChecks, obligations, vendors } from "../db/schema";
+import { agentChecks, agentMandates, agentOffers, obligations, vendors } from "../db/schema";
 import { getBusiness } from "../queries";
 import { newId, now } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, ZERO_DECIMAL_CURRENCIES, isValidSourceRef } from "../domain/money";
@@ -9,13 +9,17 @@ import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendor
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { AGENT_FLAG_PREFIX, SPREAD_LIMIT, ingestObligation, supplierBillReview } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, SPREAD_LIMIT, ingestObligation, outsideBillMatch, previewPolicy, supplierBillReview } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
-import type { AgentKey } from "./keys";
+import { isSupplierKey, type AgentKey } from "./keys";
 import { guideFor } from "./rules";
 import { BILL_NEUTRAL } from "../api/redact";
 import { outsideView, type RequestStatus } from "../api/view";
+import { AgentInputError } from "./errors";
+import { assessProvenance, PROVENANCE_HINT, validateProvenance } from "./provenance";
+import { loadMandate, outOfScope, spentUnder, type MandateRow } from "./mandates";
+import { counterOfferFrom, offerForAgent, offerOnObligation, recordOffer, supplierLabel, type CounterOffer } from "./offers";
 
 /**
  * The agent guard: what outside agents may ask Checkrail, and nothing more.
@@ -35,7 +39,7 @@ import { outsideView, type RequestStatus } from "../api/view";
  * they can quote what a supplier wrote and the calling agent will read them.
  */
 
-export class AgentInputError extends Error {}
+export { AgentInputError };
 
 const EVIDENCE_KINDS = ["contract", "booking", "job_sheet", "invoice", "message", "photo", "receipt", "purchase_order"] as const;
 const PROBE_WINDOW_MS = 15 * 60_000;
@@ -389,10 +393,22 @@ export function clean(message: string, others: string[] = [], keep: string | nul
  * A rule's message as an agent may read it. That a reference is on another supplier's payment is enough for an agent
  * to stop; which supplier, and how far that payment got, would let an agent map who was paid for what.
  */
-function forAgent(rule: string, message: string): string {
+function forAgent(rule: string, message: string, supplier = false): string {
   if (rule === "reference_other_vendor") return "This reference is also on a payment to another supplier; a person checks who did the job";
+  // A supplier's agent attaches its own records: they are its say-so, not a clerk's typing (review AF-7). They are
+  // stored as operator rows so they can never set a bill ceiling (AG-5); see SUPPLIER_EVIDENCE below.
+  if (supplier && rule === "evidence_provenance") return "The records attached are the supplier's own say-so; a person checks them against the business's records";
   return message;
 }
+
+/**
+ * How a supplier key's attachments are stored: "operator", not "vendor". Policy and every independence test treat both
+ * as say-so, but the bill-ceiling guard in engine/orchestrator.ts (linkToBill, review AG-5) excludes only "operator"
+ * rows of an outside agent, so a "vendor" row from a supplier's agent could set the total for later payments. Storing
+ * them as "vendor" needs that money-path line changed first; until then the agent layer and the request page label them
+ * as the supplier's say-so (review AF-7).
+ */
+export const SUPPLIER_EVIDENCE = "operator" as const;
 
 function otherNames(db: Db, businessId: string, keep: Array<string | null | undefined>): string[] {
   const kept = new Set(keep.filter(Boolean).map((n) => norm(n!)));
@@ -440,15 +456,50 @@ export interface CheckAnswer {
   warnings: Array<{ rule: string; message: string }>;
   next_steps: string[];
   paypal_transaction_id: string | null;
-  autonomy: string;
+  /** The owner's autonomy setting; null for a supplier's agent, which is not told the business's settings. */
+  autonomy: string | null;
   checked_at: string;
   note: string;
+  /** Only when the agent sent no provenance: that it may. */
+  provenance_hint?: string;
+  /** Only for a supplier's agent blocked for more than the evidence or rate card supports. */
+  counter_offer?: CounterOffer;
 }
 
-/** Judge on a copy of the books, with the agent's fields fixed and any disagreement in its text as a hold. */
-async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, kind: string) {
+/** Rule ids for what the agent layer itself decided from provenance. */
+const PROVENANCE_HOLD_RULE = "agent_provenance";
+const PROVENANCE_REFUSAL_RULE = "provenance_payout_change";
+
+/**
+ * A supplier key's own supplier, and refusal of any payee that is not it. The refusal is logged (a supplier's agent
+ * reaching for another supplier is worth an owner's eye) and says nothing about who the payee is.
+ */
+function supplierGate(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, tool: string, extra: Partial<typeof agentChecks.$inferInsert> = {}): void {
+  if (!isSupplierKey(agent)) return;
+  const own = db.select({ id: vendors.id }).from(vendors).where(and(eq(vendors.id, agent.vendorId), eq(vendors.businessId, biz.id))).get();
+  if (!own) throw new AgentInputError("This supplier key's supplier is not on file with this business. Ask the business to check the key.");
   const asked = vendorNamed(db, biz.id, a.payee);
-  const concerns = disagreementsOf(db, biz.id, asked, a);
+  if (asked?.id === own.id) return;
+  const summary = "A supplier's agent may only ask about payments to its own supplier.";
+  log(db, { businessId: biz.id, agent: agent.name, tool, verdict: "refused", payee: a.payee, payeeKey: probeKeyOf(null, a.payee, a.currency, a.reference), amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: null, obligationId: null, idempotencyKey: null, ...extra });
+  throw new AgentInputError(`Refused, and nothing was created: ${summary} This key acts for one supplier.`);
+}
+
+/** What a supplier's agent is told to do next: the business's own guidance on its rules stays with the business. */
+function supplierSteps(verdict: Verdict, offer: CounterOffer | undefined): string[] {
+  if (offer) return ["Accept the offer with accept_offer: a request at the offered amount goes to the business, and its rules and approval still apply.", "Or dispute it with dispute_offer, giving your reason and records: a person at the business reads them."];
+  if (verdict === "block") return ["This payment cannot go ahead as sent. Contact the business about it."];
+  if (verdict === "hold") return ["A person at the business decides. Use request_payment to put it in front of them."];
+  return ["Clear by the business's checks. Use request_payment to put it in front of them."];
+}
+
+/**
+ * Judge on a copy of the books, with the agent's fields fixed and any disagreement in its text as a hold. `holds` are
+ * concerns the agent layer raised before judging (provenance); they go first, so the cap on concerns never drops them.
+ */
+async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType<typeof validatePaymentArgs>, kind: string, holds: string[] = []) {
+  const asked = vendorNamed(db, biz.id, a.payee);
+  const concerns = [...holds, ...disagreementsOf(db, biz.id, asked, a)];
   const stated = { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") };
   // The copy is closed as soon as the check is done: a native database copy per check must not pile up (AG7 run).
   const copy = snapshotOf(db);
@@ -458,18 +509,36 @@ async function judge(db: Db, agent: AgentKey, biz: { id: string }, a: ReturnType
 
 export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promise<CheckAnswer> {
   const a = validatePaymentArgs(raw);
+  const prov = validateProvenance((raw as Record<string, unknown>).provenance);
+  const provenanceJson = prov ? JSON.stringify(prov) : null;
   const biz = businessOf(db);
-  const { asked, r, payeeKey } = await judge(db, agent, biz, a, "check");
+  supplierGate(db, agent, biz, a, "check_payment", { provenanceJson });
+  const found = assessProvenance(prov);
+  const { asked, r, payeeKey } = await judge(db, agent, biz, a, "check", found.holds);
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
+  const supplier = isSupplierKey(agent);
   // A payment held because of bills reads the same to an agent whether it names a bill or not and whether it fits or
   // not: hold, one neutral sentence, nothing that depends on a match or on a bill's balance, state or other parts, so no
-  // answer can be used to find a bill or what is open.
+  // answer can be used to find a bill or what is open. That wins over anything else the rules said about it, the
+  // supported figure a supplier's agent would otherwise be offered included. Provenance is the agent layer's own and
+  // says nothing about bills: its holds are still listed and its refusals still block.
   const aboutBill = supplierBillReview(db, biz.id, asked?.id, a.reference);
-  const blocks = aboutBill ? [] : r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
-  const warnings = aboutBill ? [{ rule: "bill_review", message: BILL_NEUTRAL }] : r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) }));
+  const blocks = aboutBill ? [] : r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message, supplier), others, keep) }));
+  // A provenance hold is Checkrail's own sentence around an address the agent itself sent: shown whole, not redacted.
+  const mapped = r.warnings.map((w) =>
+    w.rule === "ai_flag" && found.holds.includes(w.message) ? { rule: PROVENANCE_HOLD_RULE, message: w.message }
+    : { rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message, supplier), others, keep) },
+  );
+  const holds = mapped.filter((w) => w.rule === PROVENANCE_HOLD_RULE);
+  const warnings = aboutBill ? [...holds, { rule: "bill_review", message: BILL_NEUTRAL }] : [...holds, ...mapped.filter((w) => w.rule !== PROVENANCE_HOLD_RULE)];
   if (aboutBill) verdict = "hold";
+  // Payout details from anywhere but the verified supplier flow: refused, whatever the rules say.
+  if (found.refusal) {
+    verdict = "block";
+    blocks.unshift({ rule: PROVENANCE_REFUSAL_RULE, message: found.refusal });
+  }
 
   // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
   const distinct = probing(db, agent, payeeKey, a.amountMinor, a.reference);
@@ -483,15 +552,26 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
     warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payment in 15 minutes; a person confirms this one` });
   }
 
-  const summary = clean(
-    verdict === "block" ? `Do not pay: ${blocks[0]?.message ?? "a rule blocks it"}.`
-    : verdict === "pay" ? "Clear to pay: every rule passed within the limits this business set."
-    : `A person must look first: ${warnings[0]?.message ?? "it needs approval"}.`,
-    others,
-    keep,
-  ).replace(/\.\.$/, ".");
+  const lead = verdict === "block" ? blocks[0] : verdict === "hold" ? warnings[0] : undefined;
+  const summary =
+    lead?.rule === PROVENANCE_REFUSAL_RULE ? `Do not pay: ${lead.message}.`
+    : lead?.rule === PROVENANCE_HOLD_RULE ? lead.message
+    : clean(
+        verdict === "block" ? `Do not pay: ${blocks[0]?.message ?? "a rule blocks it"}.`
+        : verdict === "pay" ? "Clear to pay: every rule passed within the limits this business set."
+        : `A person must look first: ${warnings[0]?.message ?? "it needs approval"}.`,
+        others,
+        keep,
+      ).replace(/\.\.$/, ".");
   const amount = formatMoney(a.amountMinor, a.currency, { code: true });
-  const checkId = log(db, { businessId: biz.id, agent: agent.name, tool: "check_payment", verdict, payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: JSON.stringify([...blocks, ...warnings].map((x) => x.rule)), obligationId: null, idempotencyKey: null });
+  const checkId = log(db, { businessId: biz.id, agent: agent.name, tool: "check_payment", verdict, payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: JSON.stringify([...blocks, ...warnings].map((x) => x.rule)), obligationId: null, idempotencyKey: null, provenanceJson });
+  // A supplier's agent asking more than the record supports gets the supported figure back, as an offer it can take.
+  // Never for a payment held because of bills: the figure would say what is open.
+  let offer: CounterOffer | undefined;
+  if (supplier && verdict === "block" && !found.refusal && !aboutBill && asked) {
+    const basis = counterOfferFrom(db, { businessId: biz.id, vendorId: asked.id, obligationId: null }, r.blocks, a.amountMinor, a.currency);
+    if (basis) offer = offerForAgent(recordOffer(db, { businessId: biz.id, agent: agent.name, vendorId: asked.id, checkId, obligationId: null, askedMinor: a.amountMinor, currency: a.currency, reference: a.reference, basis, request: { payee: a.payee, reference: a.reference, description: a.description, evidence: a.evidence } }));
+  }
   return {
     check_id: checkId,
     verdict,
@@ -501,11 +581,13 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
     reference: a.reference,
     blocks,
     warnings,
-    next_steps: nextSteps(verdict, [...blocks, ...warnings]),
+    next_steps: supplier ? supplierSteps(verdict, offer) : nextSteps(verdict, [...blocks, ...warnings]),
     paypal_transaction_id: aboutBill ? null : paypalTxnIn([...r.blocks, ...r.warnings].map((x) => x.message)),
-    autonomy: effectiveAutonomy(JSON.parse(biz.policyJson)),
+    autonomy: supplier ? null : effectiveAutonomy(JSON.parse(biz.policyJson)),
     checked_at: now(),
     note: "Judged against a copy of the books. Nothing was paid, saved or sent.",
+    ...(prov ? {} : { provenance_hint: PROVENANCE_HINT }),
+    ...(offer ? { counter_offer: offer } : {}),
   };
 }
 
@@ -534,9 +616,9 @@ export function whenRelease(iso: string, at = Date.now()): string {
   return `at ${hhmm}, ${mins === 0 ? "within a minute" : `in ${mins} minute${mins === 1 ? "" : "s"}`},`;
 }
 
-function describe(db: Db, id: string): StatusAnswer {
-  // The same outside view the REST API reads (src/lib/api/view.ts), so the two channels cannot drift:
-  // status and reasons come from it, reasons as fixed sentences per rule code.
+function describe(db: Db, id: string, supplier = false): StatusAnswer {
+  // The same outside view the REST API reads (src/lib/api/view.ts), so the two channels cannot drift: status, whether
+  // it is held because of bills, and which rules fail come from it. Only the wording is this channel's own.
   const v = outsideView(db, id);
   if (!v) throw new AgentInputError("No such request");
   const { ob, settled, attempt } = v;
@@ -544,9 +626,25 @@ function describe(db: Db, id: string): StatusAnswer {
   const others = otherNames(db, ob.businessId, [vendor?.name]);
   const amount = ob.amountMinor && ob.currency ? formatMoney(ob.amountMinor, ob.currency, { code: true }) : null;
   const status = v.status;
-  const reasons = v.reasons.slice(0, 6);
+  // Blocks first, then the agent layer's own provenance holds, then every other warning. A provenance hold is
+  // Checkrail's own sentence around an address the agent itself sent, so it is not redacted. A request held because of
+  // bills reads the one neutral sentence and nothing else.
+  const say = (r: { ruleId: string; message: string; ownHold: boolean }) => (r.ownHold ? r.message : clean(forAgent(r.ruleId, r.message, supplier), others, vendor?.name ?? null));
+  const reasons = v.aboutBill ? v.reasons.slice(0, 6) : v.failing.map(say).slice(0, 6);
+  const blockReasons = v.failing.filter((r) => r.severity === "block");
+  const holdReasons = v.failing.filter((r) => r.severity !== "block" && r.ownHold);
+  // A request whose counter-offer the supplier's agent disputed: a person is reviewing it, and that leads. Never on a
+  // request held because of bills: the offer's figure is tied to the bill.
+  const dispute = v.aboutBill ? undefined : db.select().from(agentOffers).where(and(or(eq(agentOffers.obligationId, id), eq(agentOffers.resultObligationId, id)), eq(agentOffers.status, "disputed"))).orderBy(desc(agentOffers.createdAt)).get();
+  const disputeLine = dispute?.disputeReason ? clean(`The supplier's agent disputes Checkrail's counter-offer of ${formatMoney(dispute.offerMinor, dispute.currency, { code: true })}, and a person is reviewing it. Its reason, its own say-so: ${dispute.disputeReason}`, others, vendor?.name ?? null) : null;
+  if (disputeLine) reasons.unshift(disputeLine);
+  if (reasons.length > 6) reasons.length = 6;
+  const firstBlock = blockReasons.length ? say(blockReasons[0]) : null;
+  const provenanceFirst = !disputeLine && blockReasons.length === 0 && holdReasons.length > 0;
   const summary =
-    status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}`
+    status === "blocked" && disputeLine ? `A person is reviewing the supplier's dispute. Until they decide, the rules still block it: ${firstBlock ?? "a rule blocks it"}.`
+    : status === "waiting_for_approval" && disputeLine ? "Waiting for a person, who is reviewing the supplier's dispute."
+    : status === "blocked" ? `Blocked: ${reasons[0] ?? "a rule blocks it"}.`
     : status === "waiting_for_evidence" ? "Waiting for supporting evidence before anyone can approve it."
     : status === "waiting_for_approval" ? `Waiting for a person to approve${reasons[0] ? `: ${reasons[0]}` : "."}`
     : status === "scheduled" ? `Autopilot sends it ${whenRelease(v.releasesAt!)} unless a person cancels before then.`
@@ -559,7 +657,10 @@ function describe(db: Db, id: string): StatusAnswer {
   return {
     request_id: id,
     status,
-    summary: clean(summary, others, vendor?.name ?? null).replace(/\.\.$/, "."),
+    summary:
+      provenanceFirst && status === "waiting_for_approval" ? `Waiting for a person to approve: ${reasons[0]}`
+      : provenanceFirst && status === "waiting_for_evidence" ? `Waiting for supporting evidence before anyone can approve it. ${reasons[0]}`
+      : clean(summary, others, vendor?.name ?? null).replace(/\.\.$/, "."),
     payee: vendor?.name ?? null,
     amount,
     reference: ob.sourceRef,
@@ -595,12 +696,40 @@ function withdraw(db: Db, id: string, agent: AgentKey, reason: string): void {
   if (state && TRANSITIONS[state].includes("cancelled")) transition(db, id, "cancelled", `mcp:${agent.name}`, "agent.request_withdrawn", { reason });
 }
 
-export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Promise<StatusAnswer & { replayed: boolean }> {
+export type RequestAnswer = StatusAnswer & {
+  replayed: boolean;
+  /** Only when the agent sent no provenance: that it may. */
+  provenance_hint?: string;
+  /** Only for a request made under a mandate: what is left under it after this one. */
+  mandate?: { mandate_id: string; remaining: string; summary: string };
+  /** Only for a supplier's agent blocked for more than the evidence or rate card supports. */
+  counter_offer?: CounterOffer;
+};
+
+/** Internal options for a request the agent layer makes on an agent's behalf (accepting or disputing an offer). */
+export interface SubmitOptions {
+  /** The amount is Checkrail's own offer, or the one already asked: trying it is not a probe. */
+  skipProbe?: boolean;
+  /** No counter-offer on this request: it is the supplier's dispute of one, for a person to decide (review AF2-S2). */
+  noOffer?: boolean;
+  /** Concerns to hold the request for a person, before the agent's own. */
+  flags?: string[];
+}
+
+export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Promise<RequestAnswer> {
+  return submitRequest(db, agent, raw, {});
+}
+
+export async function submitRequest(db: Db, agent: AgentKey, raw: unknown, opts: SubmitOptions): Promise<RequestAnswer> {
   if (!agent.scopes.includes("request")) throw new AgentInputError("This agent key may check payments but not request them");
   const a = validatePaymentArgs(raw);
   const idem = text((raw as Record<string, unknown>).idempotency_key, "idempotency_key", 80, true)!;
   if (!/^[A-Za-z0-9_.:-]{8,80}$/.test(idem)) throw new AgentInputError("idempotency_key must be 8 to 80 letters, digits, dots, colons, dashes or underscores");
+  const prov = validateProvenance((raw as Record<string, unknown>).provenance);
+  const provenanceJson = prov ? JSON.stringify(prov) : null;
+  const mandateToken = text((raw as Record<string, unknown>).mandate, "mandate", 4000);
   const biz = businessOf(db);
+  const supplier = isSupplierKey(agent);
 
   return oneAtATime(biz.id, async () => {
     // A retry, or two calls racing, gets the one request this key stands for.
@@ -612,21 +741,57 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
     } else if (existing) {
       if (existing.payee !== a.payee || existing.amountMinor !== a.amountMinor || existing.currency !== a.currency || (existing.reference ?? null) !== (a.reference ?? null)) throw new AgentInputError("idempotency_key was already used for a different payment");
       if (!existing.obligationId) throw new AgentInputError("That request is still being created; ask payment_status again in a moment");
-      return { ...describe(db, existing.obligationId), replayed: true };
+      const offerRow = supplier && !outsideBillMatch(db, existing.obligationId) ? offerOnObligation(db, existing.obligationId) : null;
+      const m = existing.mandateId ? db.select().from(agentMandates).where(eq(agentMandates.id, existing.mandateId)).get() : undefined;
+      const left = m ? Math.max(0, m.totalMinor - spentUnder(db, m.id)) : 0;
+      return {
+        ...describe(db, existing.obligationId, supplier),
+        replayed: true,
+        ...(m ? { mandate: { mandate_id: m.id, remaining: formatMoney(left, m.currency, { code: true }), summary: `${formatMoney(left, m.currency, { code: true })} left of ${formatMoney(m.totalMinor, m.currency, { code: true })} under this mandate.` } } : {}),
+        ...(offerRow ? { counter_offer: offerForAgent(offerRow) } : {}),
+      };
     }
 
     // A request that follows a run of other amounts for the same job is refused before anything is written.
     const asked = vendorNamed(db, biz.id, a.payee);
     const payeeKey = probeKeyOf(asked?.id, a.payee, a.currency, a.reference);
+    let mandate: MandateRow | null = null;
     const refuse = (summary: string): never => {
-      log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "refused", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: null, obligationId: null, idempotencyKey: idem });
+      log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "refused", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary, rulesJson: null, obligationId: null, idempotencyKey: idem, provenanceJson, mandateId: mandate?.id ?? null });
       throw new AgentInputError(`Refused, and nothing was created: ${summary}`);
     };
-    if (probing(db, agent, payeeKey, a.amountMinor, a.reference) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
+    supplierGate(db, agent, biz, a, "request_payment", { idempotencyKey: idem, provenanceJson });
+    // Provenance and the mandate are decided here, in the agent layer, before anything reaches ingest.
+    const found = assessProvenance(prov);
+    if (found.refusal) refuse(`${found.refusal}.`);
+    if (!opts.skipProbe && probing(db, agent, payeeKey, a.amountMinor, a.reference) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
+    if (mandateToken) {
+      const m = loadMandate(db, biz.id, mandateToken);
+      if (!m.ok) refuse(`${m.reason}.`);
+      else mandate = m.row;
+      const vendor = asked ? { id: asked.id, name: asked.name, role: asked.role } : null;
+      const why = outOfScope(db, mandate!, agent, a, vendor);
+      if (why) refuse(`${why}. A mandate only narrows what this agent may ask for; ask the owner for a new one.`);
+    }
 
-    // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person.
-    const concerns = disagreementsOf(db, biz.id, asked, a);
-    const claim = log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "hold", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary: "Creating the request", rulesJson: null, obligationId: null, idempotencyKey: idem });
+    // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person (AG2-1, AG2-3).
+    const concerns = [...found.holds, ...(opts.flags ?? []), ...disagreementsOf(db, biz.id, asked, a)];
+    const claimRow = { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "hold", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary: "Creating the request", rulesJson: null, obligationId: null, idempotencyKey: idem, provenanceJson, mandateId: mandate?.id ?? null } as const;
+    let claim: string;
+    if (mandate) {
+      // The budget left and this request's claim on it are one transaction, taken with the write lock, so two requests
+      // at once (here, or from another server on the same database) cannot both fit in what is left.
+      const m = mandate;
+      const out = db.transaction((tx) => {
+        const spent = spentUnder(tx as unknown as Db, m.id);
+        if (spent + a.amountMinor > m.totalMinor) return { left: Math.max(0, m.totalMinor - spent) };
+        const id = newId("agc");
+        tx.insert(agentChecks).values({ ...claimRow, id, createdAt: now() }).run();
+        return { id };
+      }, { behavior: "immediate" });
+      if ("left" in out) refuse(`the mandate has ${formatMoney(out.left, m.currency, { code: true })} left of ${formatMoney(m.totalMinor, m.currency, { code: true })}; this asks for ${formatMoney(a.amountMinor, a.currency, { code: true })}. A mandate only narrows what this agent may ask for; ask the owner for a new one.`);
+      claim = (out as { id: string }).id;
+    } else claim = log(db, claimRow);
     let id: string;
     try {
       id = await ingestObligation(db, {
@@ -634,7 +799,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
         sourceType: "operator_instruction",
         sourceRef: a.reference,
         rawInput: requestTextFor(`request ${claim}`, asked?.name ?? a.payee, a),
-        evidence: a.evidence,
+        evidence: supplier ? a.evidence.map((e) => ({ ...e, label: supplierLabel(e.label) })) : a.evidence,
         evidenceSource: evidenceSourceOf(agent),
         actor: `mcp:${agent.name}`,
         stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") },
@@ -658,19 +823,34 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
       db.update(agentChecks).set({ obligationId: id, verdict: "refused", summary: `Refused: ${why}.` }).where(eq(agentChecks.id, claim)).run();
       throw new AgentInputError(`Refused, and the request was cancelled: ${why}.`);
     }
-    const answer = describe(db, id);
+    const answer = describe(db, id, supplier);
     const verdict = answer.status === "blocked" ? "block" : answer.status === "scheduled" || answer.status === "approved" ? "pay" : "hold";
     db.update(agentChecks).set({ obligationId: id, verdict, summary: answer.summary, rulesJson: JSON.stringify(answer.reasons) }).where(eq(agentChecks.id, claim)).run();
-    return { ...answer, replayed: false };
+    // A supplier's agent asking more than the record supports gets the supported figure back, as an offer it can take.
+    let offer: CounterOffer | undefined;
+    if (supplier && !opts.noOffer && answer.status === "blocked" && asked && !outsideBillMatch(db, id)) {
+      const failing = previewPolicy(db, id).rules.filter((x) => !x.passed && x.severity === "block").map((x) => ({ rule: x.ruleId, message: x.message }));
+      const basis = counterOfferFrom(db, { businessId: biz.id, vendorId: asked.id, obligationId: id }, failing, a.amountMinor, a.currency);
+      if (basis) offer = offerForAgent(recordOffer(db, { businessId: biz.id, agent: agent.name, vendorId: asked.id, checkId: claim, obligationId: id, askedMinor: a.amountMinor, currency: a.currency, reference: a.reference, basis, request: { payee: a.payee, reference: a.reference, description: a.description, evidence: a.evidence } }));
+    }
+    const left = mandate ? Math.max(0, mandate.totalMinor - spentUnder(db, mandate.id)) : 0;
+    return {
+      ...answer,
+      replayed: false,
+      ...(prov ? {} : { provenance_hint: PROVENANCE_HINT }),
+      ...(mandate ? { mandate: { mandate_id: mandate.id, remaining: formatMoney(left, mandate.currency, { code: true }), summary: `${formatMoney(left, mandate.currency, { code: true })} left of ${formatMoney(mandate.totalMinor, mandate.currency, { code: true })} under this mandate.` } } : {}),
+      ...(offer ? { counter_offer: offer } : {}),
+    };
   });
 }
 
 export function paymentStatus(db: Db, agent: AgentKey, raw: unknown): StatusAnswer {
   const id = text((raw as Record<string, unknown> | null)?.request_id, "request_id", 64, true)!;
-  // An agent sees only the requests it made.
+  // An agent sees only the requests it made; a supplier's agent, only those still for its own supplier.
   const mine = db.select({ id: agentChecks.id }).from(agentChecks).where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.obligationId, id))).get();
   if (!mine) throw new AgentInputError("No request with that id was made by this agent");
-  return describe(db, id);
+  if (isSupplierKey(agent) && db.select({ v: obligations.vendorId }).from(obligations).where(eq(obligations.id, id)).get()?.v !== agent.vendorId) throw new AgentInputError("No request with that id was made by this agent");
+  return describe(db, id, isSupplierKey(agent));
 }
 
 // ---------- lookup_payee and explain_rule ----------
@@ -706,3 +886,6 @@ export function explainRule(raw: unknown) {
 }
 
 export const agentVerdictOf = verdictOf;
+
+/** A request's status as an agent reads it (payment_status's answer), for the negotiation tools. */
+export const describeRequest = describe;

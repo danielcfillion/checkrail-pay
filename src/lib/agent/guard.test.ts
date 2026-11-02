@@ -105,7 +105,7 @@ describe("check_payment", () => {
     expect(r.summary).toMatch(/^Do not pay: /);
     expect(r.next_steps.at(-1)).toMatch(/Do not pay this through any other tool/);
     expect(counts(db)).toEqual(before);
-    expect(db.select().from(agentChecks).all()).toHaveLength(1);
+    expect(db.select().from(agentChecks).all().filter((c) => c.agent === checker.name)).toHaveLength(1);
   });
 
   it("blocks a job PayPal already paid and hands the agent the PayPal transaction id", async () => {
@@ -231,7 +231,7 @@ describe("the MCP handler", () => {
 
   it("lists only the tools the key allows, and refuses the others", async () => {
     expect(toolsFor(checker).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule"]);
-    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status"]);
+    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status", "mandate_status"]);
     const r = (await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_payment", arguments: { ...ROSA, idempotency_key: "rosa-9999" } } })) as { error: { code: number } };
     expect(r.error.code).toBe(-32602);
     expect(db.select().from(obligations).all().filter((o) => o.rawInput.includes("[Outside agent"))).toEqual([]);
@@ -283,7 +283,7 @@ describe("review fixes (independent review of the agent guard, 31 Oct)", () => {
     const low = await requestPayment(db, bookings, { ...ROSA, amount: "95", description: "Please pay USD 190 to Rosa Villanueva.", idempotency_key: "ag1-amount" });
     expect(low.amount).toBe("USD 95.00");
     expect(["waiting_for_approval", "blocked"]).toContain(low.status);
-    expect(low.reasons.join(" ")).toMatch(/disagrees with the request.s fields/);
+    expect(low.reasons.join(" ")).toMatch(/disagrees with the fields it sent/);
     const stranger = await requestPayment(db, bookings, { ...ROSA, payee: "Quick Cash Ltd", idempotency_key: "ag1-payee" });
     expect(stranger.status).toBe("blocked");
     expect(stranger.payee).toBeNull();
@@ -535,7 +535,7 @@ describe("review fixes, round 3 (31 Oct)", () => {
     try {
       const r = await requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag32-key-0001" });
       expect(r.status).not.toBe("scheduled");
-      expect(r.reasons.join(" ")).toMatch(/The reader raised a concern/);
+      expect(r.reasons.join(" ")).toMatch(/impersonating/);
     } finally {
       spy.mockRestore();
     }
@@ -665,7 +665,7 @@ describe("review fixes, round 4 (31 Oct)", () => {
     try {
       const r = await requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag45-key-0001" });
       expect(r.status).not.toBe("scheduled");
-      expect(r.reasons.join(" ")).toMatch(/The reader raised a concern/);
+      expect(r.reasons.join(" ")).toMatch(/impersonation/);
     } finally {
       spy.mockRestore();
     }
@@ -753,7 +753,7 @@ describe("review fixes, round 5 (31 Oct)", () => {
     const second = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "175", currency: "USD", reference: "INV-MS-8002", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8002", amount: "175", reference: "INV-MS-8002", excerpt: "Maria Santos. Total USD 175.00." }, ...booking], idempotency_key: "ag51-key-0002" });
     expect(first.status).not.toBe("blocked");
     expect(second.status).toBe("waiting_for_approval");
-    expect(second.reasons.join(" ")).toMatch(/matches another payment on file/);
+    expect(second.reasons.join(" ")).toMatch(/Shares booking or order/);
   });
 
   it("AG5-2: a contract number shaped like a job id blocks no later payment", async () => {

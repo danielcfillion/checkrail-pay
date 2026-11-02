@@ -1,6 +1,7 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, paymentAttempts, settlements } from "../db/schema";
+import { auditEntries, obligations, paymentAttempts, settlements } from "../db/schema";
+import { isProvenanceHold } from "../agent/provenance";
 import { AGENT_FLAG_PREFIX, approvedByPerson, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
 import { BILL_NEUTRAL, apiReasons } from "./redact";
 
@@ -24,6 +25,15 @@ import { BILL_NEUTRAL, apiReasons } from "./redact";
 export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_approval" | "scheduled" | "approved" | "sending" | "paid" | "returned" | "cancelled" | "failed" | "disputed";
 export type Verdict = "pay" | "hold" | "block" | "approved" | "pending" | null;
 
+/** A rule that is failing on the request, for a channel to phrase: blocks first, then the guard's own holds, then the rest. */
+export interface OutsideRule {
+  ruleId: string;
+  message: string;
+  severity: string;
+  /** A provenance hold the agent layer itself stated on this request: Checkrail's own sentence, shown whole. */
+  ownHold: boolean;
+}
+
 export interface OutsideView {
   ob: typeof obligations.$inferSelect;
   status: RequestStatus;
@@ -35,11 +45,23 @@ export interface OutsideView {
   rail: string | null;
   showWithheld: boolean;
   aboutBill: boolean;
+  /** The failing rules, in the order a channel shows them. Always empty for a request held because of bills. */
+  failing: OutsideRule[];
   settled: typeof settlements.$inferSelect | undefined;
   attempt: { externalId: string | null; rail: string; status: string } | undefined;
 }
 
 const WAITING = ["blocked", "drafted", "needs_evidence", "awaiting_approval", "verified"];
+
+/** The concerns the agent layer itself stated on a request (stated.flags, as ingest recorded them). */
+export function guardFlagsOf(db: Db, id: string): Set<string> {
+  const row = db.select({ detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, id), eq(auditEntries.action, "obligation.stated"))).orderBy(desc(auditEntries.seq)).get();
+  try {
+    return new Set(((JSON.parse(row?.detail ?? "{}") as { flags?: string[] }).flags ?? []).filter((f) => typeof f === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 /** `withReasons: false` (lists) skips re-running the checks: status and the stored verdict only. Null when there is no such request. */
 export function outsideView(db: Db, id: string, opts: { withReasons?: boolean } = {}): OutsideView | null {
@@ -63,15 +85,15 @@ export function outsideView(db: Db, id: string, opts: { withReasons?: boolean } 
   const base = { ob, settled, attempt, releasesAt: scheduled ? ob.releaseAt : null };
 
   if (outsideBillMatch(db, id)) {
-    if (WAITING.includes(ob.state)) return { ...base, status: "waiting_for_approval", state: "awaiting_approval", verdict: "hold", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: null, rail: null, showWithheld: false, aboutBill: true };
+    if (WAITING.includes(ob.state)) return { ...base, status: "waiting_for_approval", state: "awaiting_approval", verdict: "hold", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: null, rail: null, showWithheld: false, aboutBill: true, failing: [] };
     // "approved" only when a person approved it. One the rules approved before a bill held it reads pending, with no
     // release time, and the rail stays hidden until the request is final.
     if (ob.state === "approved") {
       const byPerson = approvedByPerson(db, id);
-      return { ...base, status: byPerson ? status : "approved", state: ob.state, verdict: byPerson ? "approved" : "pending", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: byPerson ? base.releasesAt : null, rail: null, showWithheld: false, aboutBill: true };
+      return { ...base, status: byPerson ? status : "approved", state: ob.state, verdict: byPerson ? "approved" : "pending", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: byPerson ? base.releasesAt : null, rail: null, showWithheld: false, aboutBill: true, failing: [] };
     }
     const final = ["settled", "refunded", "cancelled", "failed", "disputed"].includes(ob.state);
-    return { ...base, status, state: ob.state, verdict: null, reasons: [], rulesFailed: [], rail: final ? settled?.rail ?? attempt?.rail ?? null : null, showWithheld: true, aboutBill: true };
+    return { ...base, status, state: ob.state, verdict: null, reasons: [], rulesFailed: [], rail: final ? settled?.rail ?? attempt?.rail ?? null : null, showWithheld: true, aboutBill: true, failing: [] };
   }
 
   const preview = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) && opts.withReasons !== false ? previewPolicy(db, id) : null;
@@ -79,6 +101,11 @@ export function outsideView(db: Db, id: string, opts: { withReasons?: boolean } 
   const checks = preview && { ...preview, rules: preview.rules.map((r) => (r.ruleId === "ai_flag" && r.message.startsWith(AGENT_FLAG_PREFIX) ? { ...r, ruleId: "agent_mismatch" } : r)) };
   const failing = (checks?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").sort((x, y) => Number(y.severity === "block") - Number(x.severity === "block"));
   const decision = checks?.decision ?? ob.policyDecision ?? null;
+  // A hold counts as the guard's own only if the guard itself stated it on this request, not because a reader wrote a
+  // sentence of that shape.
+  const stated = preview ? guardFlagsOf(db, id) : new Set<string>();
+  const rules = (preview?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => ({ ruleId: r.ruleId, message: r.message, severity: r.severity, ownHold: r.ruleId === "ai_flag" && stated.has(r.message) && isProvenanceHold(r.message) }));
+  const ordered = [...rules.filter((r) => r.severity === "block"), ...rules.filter((r) => r.severity !== "block" && r.ownHold), ...rules.filter((r) => r.severity !== "block" && !r.ownHold)];
   return {
     ...base,
     status,
@@ -89,5 +116,6 @@ export function outsideView(db: Db, id: string, opts: { withReasons?: boolean } 
     rail: ob.selectedRail ?? null,
     showWithheld: true,
     aboutBill: false,
+    failing: ordered,
   };
 }

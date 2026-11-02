@@ -3,6 +3,7 @@ import { DEFAULT_POLICY, type ApprovalPolicy } from "@/lib/domain/types";
 import { countryName, formatDate, formatMoney, formatMoneyShort, formatMoneySymbol, railLabel } from "@/lib/format";
 import { EmptyState, KeyValue, PageHeader, Panel } from "@/components/ui";
 import { AutonomyControl } from "@/components/AutonomyControl";
+import { cancelWindowText } from "@/components/cancel-window";
 import { CapMeter } from "@/components/CapMeter";
 import { autopilotStatus } from "@/lib/engine/autopilot";
 import { getDb } from "@/lib/db";
@@ -16,6 +17,7 @@ import { SUPPORTED_CURRENCIES } from "@/lib/domain/money";
 import { usingDevKey } from "@/lib/crypto/dataKey";
 import { dualControlGap } from "@/lib/engine/orchestrator";
 import { taxFeaturesOn } from "@/lib/features";
+import { XeroConnection } from "@/components/XeroConnection";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
@@ -98,7 +100,7 @@ export default async function SettingsPage() {
               />
             ) : (
               <p className="text-ink-soft">
-                {ap.level === "autopilot" ? `Autopilot${ap.paused ? " (paused)" : ""}: up to ${formatMoney(ap.perPaymentCapMinor, cur)} a payment and ${formatMoney(ap.dailyCapMinor, cur)} a day, with a ${Math.round(ap.cancelWindowSeconds / 60)} minute cancel window.` : ap.level === "review" ? "Review: a person approves and sends every payment." : "Assist: small requests the rules pass are approved for you. A person sends them."} Only the owner changes this.
+                {ap.level === "autopilot" ? `Autopilot${ap.paused ? " (paused)" : ""}: up to ${formatMoney(ap.perPaymentCapMinor, cur)} a payment and ${formatMoney(ap.dailyCapMinor, cur)} a day, with a ${cancelWindowText(ap.cancelWindowSeconds)} cancel window.` : ap.level === "review" ? "Review: a person approves and sends every payment." : "Assist: small requests the rules pass are approved for you. A person sends them."} Only the owner changes this.
               </p>
             )}
             {ap.level === "autopilot" ? (
@@ -174,6 +176,7 @@ export default async function SettingsPage() {
                 : "To change a rail or the agent, see Live mode setup in the README."}
             </p>
           </Panel>
+          <XeroConnection />
           {await import("@/components/ApiKeysCard").then(({ ApiKeysCard }) => <ApiKeysCard />)}
         </Section>
       </div>

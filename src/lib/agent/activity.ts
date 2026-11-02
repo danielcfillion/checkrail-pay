@@ -2,6 +2,7 @@ import { desc, eq, gte } from "drizzle-orm";
 import { getDb, type Db } from "../db";
 import { agentChecks, obligations } from "../db/schema";
 import { configuredAgentKeys } from "./keys";
+import { provenanceLines } from "./provenance";
 
 /** What the owner sees about outside agents: who is set up, what they asked, and what Checkrail answered. */
 
@@ -46,5 +47,16 @@ export function recentAgentChecks(db: Db = getDb(), limit = 50) {
     .orderBy(desc(agentChecks.createdAt))
     .limit(limit)
     .all()
-    .map(({ c, state }) => ({ ...c, requestState: state ?? null, rules: JSON.parse(c.rulesJson ?? "[]") as string[] }));
+    .map(({ c, state }) => ({ ...c, requestState: state ?? null, rules: JSON.parse(c.rulesJson ?? "[]") as string[], provenance: provenanceLines(c.provenanceJson) }));
+}
+
+/** What the agent guard recorded about one request: the agent's question (with its provenance) and any mandate. */
+export function agentRecordFor(db: Db, obligationId: string) {
+  return db
+    .select()
+    .from(agentChecks)
+    .where(eq(agentChecks.obligationId, obligationId))
+    .orderBy(desc(agentChecks.createdAt))
+    .all()
+    .map((c) => ({ id: c.id, agent: c.agent, tool: c.tool, createdAt: c.createdAt, mandateId: c.mandateId, provenance: provenanceLines(c.provenanceJson) }));
 }

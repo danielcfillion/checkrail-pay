@@ -510,8 +510,10 @@ export const agentChecks = sqliteTable(
     obligationId: text("obligation_id"), // request_payment only: the request it created
     idempotencyKey: text("idempotency_key"), // request_payment only: the agent's key for "this one payment"
     createdAt: text("created_at").notNull(),
+    provenanceJson: text("provenance_json"), // where the agent said the instruction and its facts came from (agent/provenance.ts)
+    mandateId: text("mandate_id"), // request_payment only: the signed mandate it was made under (agent/mandates.ts)
   },
-  (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey)]
+  (t) => [index("agent_checks_business").on(t.businessId, t.createdAt), index("agent_checks_probe").on(t.agent, t.payeeKey, t.createdAt), uniqueIndex("agent_checks_idem").on(t.agent, t.idempotencyKey), index("agent_checks_mandate").on(t.mandateId)]
 );
 
 // ---------- Onboarding and calibration ----------
@@ -685,3 +687,173 @@ export const apiKeyUsage = sqliteTable("api_key_usage", {
   lastPath: text("last_path"),
   calls: integer("calls").notNull().default(0),
 });
+
+// ---------- Agent futures: signed spending mandates and counter-offers to suppliers' agents ----------
+
+/**
+ * A signed spending mandate: what the owner allows one agent key to ask for. Signed with Checkrail's Ed25519 mandate
+ * key (src/lib/agent/mandates.ts), so the agent can present it and anyone with the public key can verify it. It only
+ * narrows what the agent may request: policy, approval and autonomy still apply to every request made under it.
+ * Revocation and the remaining budget live here, never in the token.
+ */
+export const agentMandates = sqliteTable(
+  "agent_mandates",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    agent: text("agent").notNull(), // the agent key's name it was issued to
+    payeesJson: text("payees_json").notNull(), // vendor ids the agent may ask to pay
+    rolesJson: text("roles_json").notNull(), // supplier roles the agent may ask to pay (guide, driver, ...)
+    perPaymentMinor: integer("per_payment_minor").notNull(),
+    totalMinor: integer("total_minor").notNull(),
+    currency: text("currency").notNull(),
+    purpose: text("purpose"), // null | "departures": the payment must be for a departure on file that the supplier serves
+    note: text("note"), // the owner's own words for what it is for
+    validFrom: text("valid_from").notNull(),
+    validUntil: text("valid_until").notNull(),
+    token: text("token").notNull(), // the signed token, for the owner to hand to the agent
+    tokenHash: text("token_hash").notNull(),
+    issuedBy: text("issued_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    revokedAt: text("revoked_at"),
+    revokedBy: text("revoked_by"),
+  },
+  (t) => [index("agent_mandates_business").on(t.businessId, t.createdAt), uniqueIndex("agent_mandates_token_hash").on(t.tokenHash)]
+);
+
+/**
+ * A counter-offer Checkrail made to a supplier's own agent whose check or request was blocked for more than the
+ * evidence or the rate card supports. The supplier's agent accepts it (a new request at the offered amount, through
+ * the normal ingest and still subject to rules and approval) or disputes it (a person reads its reason). Append-only
+ * apart from the outcome.
+ */
+export const agentOffers = sqliteTable(
+  "agent_offers",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    agent: text("agent").notNull(), // the supplier key's name
+    vendorId: text("vendor_id").notNull(),
+    checkId: text("check_id").notNull(), // the agent_checks row it answered
+    obligationId: text("obligation_id"), // the blocked request it answered, when it came from request_payment
+    askedMinor: integer("asked_minor").notNull(),
+    offerMinor: integer("offer_minor").notNull(),
+    currency: text("currency").notNull(),
+    reference: text("reference"),
+    basisRule: text("basis_rule").notNull(), // expected_amount | amount_matches_evidence
+    basis: text("basis").notNull(), // "rate card and departure HG-4D-0927 (4 vehicle-days x USD 200.00)"
+    requestJson: text("request_json").notNull(), // payee, description and evidence as the supplier's agent sent them
+    status: text("status").notNull(), // open | accepted | disputed (expired is open past expiresAt)
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedAt: text("decided_at"),
+    resultObligationId: text("result_obligation_id"), // the request accepting or disputing it put in the inbox
+    disputeReason: text("dispute_reason"),
+    disputeEvidenceJson: text("dispute_evidence_json"),
+  },
+  (t) => [index("agent_offers_business").on(t.businessId, t.createdAt), index("agent_offers_obligation").on(t.obligationId), index("agent_offers_agent").on(t.agent, t.vendorId)]
+);
+
+/**
+ * The live Xero connection, one per business. Tokens are encrypted with the data key (src/lib/crypto/dataKey.ts) and
+ * never leave the server: not to the browser, not to the logs. The mapping (which accounts bills, payments and fees
+ * post to) and a cached copy of the tenant's chart of accounts live here too, so a page render never calls Xero.
+ */
+export const xeroConnections = sqliteTable("xero_connections", {
+  businessId: text("business_id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  tenantName: text("tenant_name"),
+  connectionId: text("connection_id"),
+  accessTokenEnc: text("access_token_enc").notNull(),
+  refreshTokenEnc: text("refresh_token_enc").notNull(),
+  accessExpiresAt: text("access_expires_at").notNull(),
+  scopes: text("scopes"),
+  status: text("status").notNull(), // connected | needs_reconnect
+  connectedBy: text("connected_by").notNull(),
+  connectedAt: text("connected_at").notNull(),
+  /** Only what is approved from this moment on goes to Xero; earlier bills stay in the files. Kept when the same organisation reconnects. */
+  syncFrom: text("sync_from").notNull(),
+  /** Account for supplier bills whose own code (310, 320, ...) is not in this tenant's chart. */
+  expenseAccountCode: text("expense_account_code"),
+  paypalAccountCode: text("paypal_account_code"),
+  stellarAccountCode: text("stellar_account_code"),
+  /** Wise and the bank file pay from an ordinary bank account. */
+  bankAccountCode: text("bank_account_code"),
+  feeAccountCode: text("fee_account_code"),
+  /** Liability account for tax withheld, with payments enabled: the withheld part of each payment is paid from it. */
+  withholdingAccountCode: text("withholding_account_code"),
+  taxType: text("tax_type"),
+  /** Cached from Xero: accounts, tax rates, currencies, tracking categories and the base currency. */
+  chartJson: text("chart_json"),
+  chartFetchedAt: text("chart_fetched_at"),
+  /** Set from a 429's Retry-After: no call to this tenant before then. */
+  blockedUntil: text("blocked_until"),
+  lastPushAt: text("last_push_at"),
+  lastError: text("last_error"),
+  /** One push at a time across every server process: a lease with an expiry, renewed before each call. */
+  leaseOwner: text("lease_owner"),
+  leaseUntil: text("lease_until"),
+  /** Calls to Xero in the current minute, counted here so every process shares one budget. */
+  rateWindowStart: integer("rate_window_start"),
+  rateWindowCalls: integer("rate_window_calls").notNull().default(0),
+  /** Reading the chart of accounts failed this many times; the next try waits until chartRetryAt. */
+  chartAttempts: integer("chart_attempts").notNull().default(0),
+  chartRetryAt: text("chart_retry_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** A pending "Connect to Xero": single use, bound to the login that started it, short lived. Only a hash of the state is kept. */
+export const xeroOauthStates = sqliteTable("xero_oauth_states", {
+  stateHash: text("state_hash").primaryKey(),
+  businessId: text("business_id").notNull(),
+  login: text("login").notNull(),
+  actor: text("actor").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * One thing Checkrail sends to Xero (a contact, a bill, a credit note, a payment or a fee) and the id Xero gave it.
+ * The unique key makes a second push a no-op. A failure is kept here in plain words and retried; nothing on the
+ * payment path reads this table.
+ */
+export const xeroRecords = sqliteTable(
+  "xero_records",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    kind: text("kind").notNull(), // contact | bill | credit_note | payment | fee
+    /** Natural key: the contact name, contact and invoice number, or obligation, rail and provider transaction id. */
+    localKey: text("local_key").notNull(),
+    /** For a payment, the bill it pays; for a fee, the payment it belongs to. */
+    parentKey: text("parent_key"),
+    /** For a payment, the amount sent (major units), so a payment already in Xero can be recognised. */
+    amount: text("amount"),
+    label: text("label").notNull(), // what a person sees: "Bill INV-JM-1030, Jake Morrison"
+    obligationId: text("obligation_id"),
+    accountingSyncId: text("accounting_sync_id"),
+    xeroId: text("xero_id"),
+    // pending | sending | pushed | failed | skipped | voided (bill cancelled) | reversed (payout came back) | needs_person
+    status: text("status").notNull(),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    /** Part of the Idempotency-Key: moves on only after Xero gave a definite answer, so a retry after a dropped connection reuses the key. */
+    keySeq: integer("key_seq").notNull().default(0),
+    /** Written before each create call: a row still "sending" on the next pass may already be in Xero, so it is looked up first. */
+    idemKey: text("idem_key"),
+    /** For a bill: a digest of what was sent, so an amended request's bill can be updated while it is unpaid. */
+    sentHash: text("sent_hash"),
+    /** For a bill: when an amendment to its request was last compared with what was sent (after it was agreed again). */
+    amendCheckedAt: text("amend_checked_at"),
+    /** Look-ups in Xero that found nothing while the request was no longer due; on the second, a person is asked. */
+    lookupMisses: integer("lookup_misses").notNull().default(0),
+    /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
+    uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
+    nextAttemptAt: text("next_attempt_at"),
+    pushedAt: text("pushed_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("xero_records_key").on(t.businessId, t.tenantId, t.kind, t.localKey), index("xero_records_status").on(t.businessId, t.status)]
+);

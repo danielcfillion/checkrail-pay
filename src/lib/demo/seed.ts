@@ -9,6 +9,7 @@ import { approveObligation, confirmSettlement, executeObligation, ingestObligati
 import { encryptField } from "../crypto/dataKey";
 import { withMockRails } from "../rails";
 import { seedOnboarding } from "../onboarding/seed";
+import { seedAgentFutures } from "../agent/futuresSeed";
 
 /**
  * Demo data: Ridgeline Expeditions, a US tour operator running small-group
@@ -156,6 +157,8 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     await seedDeposit(db);
   }
 
+  seedAgentFutures(db, DEMO_BUSINESS_ID);
+  await (await import("../accounting/xeroSync")).resetXeroSyncState(db, DEMO_BUSINESS_ID); // Xero: forget what the old demo sent, keep the connection
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
 

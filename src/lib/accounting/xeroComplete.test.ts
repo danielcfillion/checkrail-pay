@@ -9,7 +9,7 @@ import { resolveActor } from "../engine/users";
 import { xeroBillRows } from "./xeroBills";
 
 describe("Xero bills the accountant can post", () => {
-  it("uses the invoice's own dates, a clean description, a withholding line, a prepayment account for advances, and credit notes", async () => {
+  it("uses the invoice's own dates, a clean description, no withholding line (the bill is gross), a prepayment account for advances, and credit notes", async () => {
     const db = openTestDb();
     await seedDemo(db, { history: false });
     const lan = resolveActor(db, DEMO_BUSINESS_ID, "lan", "clerk");
@@ -30,9 +30,9 @@ describe("Xero bills the accountant can post", () => {
     createBill(db, DEMO_BUSINESS_ID, lan, "ven_dao", { kind: "credit_note", reference: "CN-DML-01", totalMinor: 8_500, currency: "USD", billDate: "2026-10-20", note: "One room not used" });
     const rows = xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: true }).rows;
     const jake = rows.filter((r) => r["*InvoiceNumber"] === "INV-JM-1030");
-    expect(jake).toHaveLength(2);
+    // The bill at gross: the 24% kept back is settled as a payment from the withholding account, not a line on the bill.
+    expect(jake).toHaveLength(1);
     expect(jake[0]).toMatchObject({ "*InvoiceDate": "2026-10-03", "*DueDate": "2026-10-17", "*UnitAmount": "450.00", Description: "Content services INV-JM-1030" });
-    expect(jake[1]).toMatchObject({ "*UnitAmount": "-108.00", "*AccountCode": "825" });
     expect(rows.find((r) => r["*InvoiceNumber"] === "ADV-MS-02")).toMatchObject({ "*AccountCode": "620", Description: "Cash advance ADV-MS-02" });
     expect(rows.find((r) => r["*InvoiceNumber"] === "CN-DML-01")).toMatchObject({ "*UnitAmount": "-85.00", "*InvoiceDate": "2026-10-20", "*ContactName": "Dao Mountain Lodge" });
   });

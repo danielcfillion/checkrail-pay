@@ -3,6 +3,7 @@ import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
+import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
 
 /** Set on public vendor pages so the layout renders them without the app's navigation or business data. */
 export const PUBLIC_HEADER = "x-checkrail-public";
@@ -46,23 +47,48 @@ function tooMany(retryMs: number) {
   return new NextResponse("Too many attempts. Wait a few minutes and try again.", { status: 429, headers: { "Retry-After": String(Math.ceil(retryMs / 1000)) } });
 }
 
+/** What a vendor link opened outside the demo browser shows in sandbox mode. */
+const SANDBOX_LINK_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Open this link from the demo</title><style>:root{color-scheme:light dark}body{margin:0;font:15px/22px system-ui,sans-serif;background:#f4f6f9;color:#0a1628}main{max-width:32rem;margin:15vh auto;padding:0 16px}@media (prefers-color-scheme:dark){body{background:#0b111b;color:#e8edf3}}</style></head><body><main><h1 style="font-size:22px">Open this link from the demo</h1><p>Each visitor to this demo has a private copy of it, and this link belongs to one of them. Open it in the same browser where you are using the demo.</p></main></body></html>`;
+
+/*
+ * Sandbox mode (CHECKRAIL_SANDBOX=1, simulated rails only; src/lib/sandbox/settings.ts): each browser gets a signed,
+ * httpOnly cookie naming its own copy of the demo database, and every request it makes carries that token on to the
+ * server in SANDBOX_HEADER, where the database seam picks the copy. A client-sent copy of the header is always
+ * replaced. Off, nothing here changes.
+ */
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
+  // Render's health check: no login, no sandbox copy, no data. It only proves the server answers.
+  if (path === "/healthz") return new NextResponse("ok", { status: 200, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" } });
+  // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token, software holding an API key on
+  // /api/v1) are no visitor: no copy for them. An API key works on the shared books, never a sandbox copy.
+  const serverToServer = path === "/api/webhooks/paypal" || API_V1_PATH.test(path) || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
+  const sandbox = !serverToServer && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
   const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
   const headers = new Headers(req.headers);
-  for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER]) headers.delete(h);
+  for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER, SANDBOX_HEADER]) headers.delete(h);
+  if (sandbox) headers.set(SANDBOX_HEADER, sandbox.token);
+  const https = req.nextUrl.protocol === "https:" || req.headers.get("x-forwarded-proto")?.split(",")[0].trim() === "https";
+  const pass = () => {
+    const res = NextResponse.next({ request: { headers } });
+    if (sandbox?.fresh) res.cookies.set(SANDBOX_COOKIE, sandbox.token, { httpOnly: true, sameSite: "lax", secure: https, path: "/", maxAge: SANDBOX_COOKIE_MAX_AGE });
+    return res;
+  };
 
-  if (path === "/api/webhooks/paypal") return NextResponse.next({ request: { headers } });
+  if (path === "/api/webhooks/paypal") return pass();
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
-  if (path === "/api/mcp") return NextResponse.next({ request: { headers } });
+  if (path === "/api/mcp") return pass();
   // Other software holds an API key, not a login; each /api/v1 route checks the key itself (src/lib/api/http.ts).
-  if (API_V1_PATH.test(path)) return NextResponse.next({ request: { headers } });
+  if (API_V1_PATH.test(path)) return pass();
   // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
-  if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return NextResponse.next({ request: { headers } });
+  if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return pass();
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
     if (overLimit(tokenHits, ip, TOKEN_LIMIT, TOKEN_WINDOW_MS)) return tooMany(TOKEN_WINDOW_MS);
+    // Sandbox mode: a vendor link belongs to the copy it was made in. It opens in the browser that has that copy; a
+    // browser without one gets a plain page instead of a new copy, so these unauthenticated paths can never fill the pool.
+    if (sandbox?.fresh) return new NextResponse(SANDBOX_LINK_HTML, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     headers.set(PUBLIC_HEADER, "1");
-    return NextResponse.next({ request: { headers } });
+    return pass();
   }
 
   const users = configuredUsers();
@@ -113,7 +139,7 @@ export function middleware(req: NextRequest) {
   }
   headers.set(ACTOR_HEADER, actor);
   headers.set(ROLE_HEADER, role);
-  return NextResponse.next({ request: { headers } });
+  return pass();
 }
 
 export const config = {

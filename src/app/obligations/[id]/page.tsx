@@ -30,6 +30,8 @@ import { amountReadAs, correctionLine, RECORDED_LABEL, summaryWithoutCount } fro
 import { readingFor } from "@/lib/reading";
 import { toolCallSentence } from "@/components/tool-call-sentence";
 import { earlierPayments } from "@/lib/earlier-payment";
+import { AgentGuardRecord } from "@/components/AgentFutures";
+import { SUPPLIER_AGENT_LABEL } from "@/lib/agent/offers";
 
 export const dynamic = "force-dynamic";
 /** Tab title: "Phuong Transport, INV-2026-0152". */
@@ -220,7 +222,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                     <p className="dense text-ink-soft">
                       {evidenceKindLabel(e.kind)}
                       {e.reference ? <span className="num">, {e.reference}</span> : null}
-                      {e.provenance === "operator" ? <span className="text-attention">{d.billRecord?.evidenceIds.includes(e.id) ? `, from a bill recorded by ${humaniseActor(d.billRecord.recordedBy)}` : ", typed by operator"}</span> : null}
+                      {e.provenance === "operator" ? <span className="text-attention">{d.billRecord?.evidenceIds.includes(e.id) ? `, from a bill recorded by ${humaniseActor(d.billRecord.recordedBy)}` : e.label.startsWith(SUPPLIER_AGENT_LABEL) ? ", the supplier agent's own say-so" : ", typed by operator"}</span> : null}
                       {e.provenance === "document" && e.attachmentId ? (() => { const a = d.attachments.find((x) => x.id === e.attachmentId); return a ? <span>, read from <a className={`link ${TOUCH_INLINE}`} href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.name}</a> by {a.reader === "claude" ? "Claude" : "the text reader"}</span> : null; })() : null}
                     </p>
                     {e.excerpt ? <blockquote className="mt-1 border-l-2 pl-3 text-ink-soft hairline">{e.excerpt}</blockquote> : null}
@@ -301,6 +303,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 ) : null}
               </>
             )}
+            <AgentGuardRecord obligationId={o.id} />
             <p className="mt-3 border-t pt-2 text-xs text-ink-soft hairline">The agent proposes. It has no authority to pay.</p>
           </WorkingPanel>
 

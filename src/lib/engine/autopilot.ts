@@ -30,7 +30,8 @@ function writePolicy(db: Db, businessId: string, policy: ApprovalPolicy): void {
   db.update(businesses).set({ policyJson: JSON.stringify(policy) }).where(eq(businesses.id, businessId)).run();
 }
 
-let running: Promise<TickResult> | null = null;
+/** The pass in flight, per database: one visitor's copy (sandbox mode) never waits on, or shares, another's pass. */
+const running = new WeakMap<Db, Promise<TickResult>>();
 
 export interface TickResult {
   released: string[];
@@ -42,14 +43,16 @@ export interface TickResult {
 /**
  * One pass: schedule anything newly eligible, release whatever's cancel window has ended, and poll
  * sent payments for settlement. Safe to call often and from more than one place: overlapping calls
- * share one run.
+ * on the same database share one run.
  */
 export function runAutopilot(db: Db, opts: { businessId?: string } = {}): Promise<TickResult> {
-  if (running) return running;
-  running = tick(db, opts).finally(() => {
-    running = null;
+  const inFlight = running.get(db);
+  if (inFlight) return inFlight;
+  const pass = tick(db, opts).finally(() => {
+    running.delete(db);
   });
-  return running;
+  running.set(db, pass);
+  return pass;
 }
 
 /** True when any human approval is on record for this obligation. */
