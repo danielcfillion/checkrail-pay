@@ -283,7 +283,7 @@ describe("review fixes (independent review of the agent guard, 31 Oct)", () => {
     const low = await requestPayment(db, bookings, { ...ROSA, amount: "95", description: "Please pay USD 190 to Rosa Villanueva.", idempotency_key: "ag1-amount" });
     expect(low.amount).toBe("USD 95.00");
     expect(["waiting_for_approval", "blocked"]).toContain(low.status);
-    expect(low.reasons.join(" ")).toMatch(/disagrees with the fields it sent/);
+    expect(low.reasons.join(" ")).toMatch(/disagrees with the request.s fields/);
     const stranger = await requestPayment(db, bookings, { ...ROSA, payee: "Quick Cash Ltd", idempotency_key: "ag1-payee" });
     expect(stranger.status).toBe("blocked");
     expect(stranger.payee).toBeNull();
@@ -535,7 +535,7 @@ describe("review fixes, round 3 (31 Oct)", () => {
     try {
       const r = await requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag32-key-0001" });
       expect(r.status).not.toBe("scheduled");
-      expect(r.reasons.join(" ")).toMatch(/impersonating/);
+      expect(r.reasons.join(" ")).toMatch(/The reader raised a concern/);
     } finally {
       spy.mockRestore();
     }
@@ -665,7 +665,7 @@ describe("review fixes, round 4 (31 Oct)", () => {
     try {
       const r = await requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag45-key-0001" });
       expect(r.status).not.toBe("scheduled");
-      expect(r.reasons.join(" ")).toMatch(/impersonation/);
+      expect(r.reasons.join(" ")).toMatch(/The reader raised a concern/);
     } finally {
       spy.mockRestore();
     }
@@ -753,7 +753,7 @@ describe("review fixes, round 5 (31 Oct)", () => {
     const second = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "175", currency: "USD", reference: "INV-MS-8002", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8002", amount: "175", reference: "INV-MS-8002", excerpt: "Maria Santos. Total USD 175.00." }, ...booking], idempotency_key: "ag51-key-0002" });
     expect(first.status).not.toBe("blocked");
     expect(second.status).toBe("waiting_for_approval");
-    expect(second.reasons.join(" ")).toMatch(/Shares booking or order/);
+    expect(second.reasons.join(" ")).toMatch(/matches another payment on file/);
   });
 
   it("AG5-2: a contract number shaped like a job id blocks no later payment", async () => {

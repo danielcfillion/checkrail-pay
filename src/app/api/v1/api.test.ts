@@ -23,7 +23,7 @@ import { textPdf } from "@/lib/api/testPdf";
 import { createBill, payBill } from "@/lib/engine/bills";
 import { bills as billsTable } from "@/lib/db/schema";
 import { approveObligation, executeObligation, linkWaitingToBill, previewPolicy } from "@/lib/engine/orchestrator";
-import { checkPayment } from "@/lib/agent/guard";
+import { checkPayment, paymentStatus, requestPayment } from "@/lib/agent/guard";
 import type { AgentKey } from "@/lib/agent/keys";
 import { resolveActor } from "@/lib/engine/users";
 import { departures as departuresTable } from "@/lib/db/schema";
@@ -672,6 +672,67 @@ describe("review fixes, round 3", () => {
         expect(ob(r.json.id).billId).toBe(bill);
       });
     }
+
+    for (const [billRef, spelling] of [["ROSA-NOV", "ROSA-NOV"], ["ROSA-NOV", "Rosa_Nov"], ["ROSA-NOV", "ROSANOV"], ["A1", "A1"], ["A1", "a-1"], ["INV-ROSA-6001", "INV-ROSA-6001-R/2"], ["INV-ROSA-6001", "INV-ROSA-6001/003"]]) {
+      it(`R9: ${spelling} is held on the bill ${billRef}`, async () => {
+        await autopilot();
+        const bill = personBill(billRef, 10_000);
+        const r = await postRequest(pay(spelling, "50"), `r9-sp-${spelling.replace(/[^A-Za-z0-9]/g, "")}-${billRef.length}`, "l");
+        neutral(r.json);
+        expect(ob(r.json.id).billId).toBe(bill);
+      });
+    }
+
+    it("R9-S2: a /003 after a year is still not a part", async () => {
+      await autopilot();
+      personBill("RET-ROSA-2026", 10_000);
+      const r = await postRequest(pay("RET-ROSA-2026/003", "50"), "r9-year-00003", "l");
+      expect(ob(r.json.id).billId).toBeNull();
+    });
+
+    it("R9-M2/S1: once a person approves, both channels read approved with the neutral sentence, whatever else changes", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 20_000);
+      const agentKey = { name: "bookings", scopes: ["check", "request", "attest"] as AgentKey["scopes"], digest: Buffer.alloc(32) };
+      const sent = await requestPayment(getDb(), agentKey, { ...pay("INV-ROSA-6001", "100"), idempotency_key: "r9-mcp-0000001" });
+      const id = sent.request_id;
+      approveObligation(getDb(), id, "user:minh", "ok", ackAll(id));
+      // Hold the release so it stays approved while the bill changes.
+      getDb().update(obligations).set({ releaseAt: null }).where(eq(obligations.id, id)).run();
+      const before = paymentStatus(getDb(), agentKey, { request_id: id });
+      expect(before).toMatchObject({ status: "approved", reasons: [NEUTRAL] });
+      // Another part arrives and the bill is then closed: inside, this one no longer fits.
+      const lan = resolveActor(getDb(), DEMO_BUSINESS_ID, "lan", "clerk");
+      const billId = getDb().select().from(billsTable).all().find((b) => b.reference === "INV-ROSA-6001")!.id;
+      await payBill(getDb(), DEMO_BUSINESS_ID, lan, billId, 5_000);
+      getDb().update(billsTable).set({ status: "closed" }).where(eq(billsTable.id, billId)).run();
+      expect(insideRules(id)).toContain("bill_misfit");
+      const after = paymentStatus(getDb(), agentKey, { request_id: id });
+      expect(after).toEqual(before);
+      expect(JSON.stringify(after)).not.toMatch(/USD (?:50|150|200)\.00|open/);
+      // The REST view of an API key's approved bill request reads the same way.
+      personBill("INV-ROSA-6002", 20_000);
+      const r = await postRequest(pay("INV-ROSA-6002", "40"), "r9-rest-000001", "l");
+      approveObligation(getDb(), r.json.id as string, "user:minh", "ok", ackAll(r.json.id as string));
+      getDb().update(obligations).set({ releaseAt: null }).where(eq(obligations.id, r.json.id as string)).run();
+      expect(seen((await getRequest(r.json.id as string, "l")).json)).toMatchObject({ status: "approved", verdict: "approved", reasons: [NEUTRAL], rules_failed: ["bill_review"] });
+    });
+
+    it("R9-S1: once final, only its own status, no reasons", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 20_000);
+      const r = await postRequest(pay("INV-ROSA-6001", "100"), "r9-final-00001", "l");
+      getDb().update(obligations).set({ state: "cancelled" }).where(eq(obligations.id, r.json.id as string)).run();
+      expect(seen((await getRequest(r.json.id as string, "l")).json)).toMatchObject({ status: "cancelled", verdict: null, reasons: [], rules_failed: [] });
+    });
+
+    it("R9-N2: an outside agent or integration can never approve", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 20_000);
+      const r = await postRequest(pay("INV-ROSA-6001", "100"), "r9-gate-00001", "l");
+      for (const actor of ["api:ledger", "mcp:bookings"]) expect(() => approveObligation(getDb(), r.json.id as string, actor, "ok", ackAll(r.json.id as string))).toThrow(/cannot approve/);
+      expect(ob(r.json.id).state).toBe("awaiting_approval");
+    });
 
     it("S1: a /N after a year is a month, not a part: RET-ROSA-2026/10 and /11 do not match", async () => {
       await autopilot();
