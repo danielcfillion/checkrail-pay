@@ -36,7 +36,9 @@ export const API_REASON: Readonly<Record<string, string>> = {
   ai_missing: "The reader wants more information.",
   bill_part_repeat: "This bill already has another part; a person confirms this is a separate payment.",
   bill_part: "This request is one part of a bill.",
-  bill_misfit: "The amount or currency does not fit what is still open on the bill; a person records it by hand if it is right.",
+  bill_ambiguous: "The reference matches more than one bill of this supplier; a person records which one this pays.",
+  bill_misfit_repeated: "Several requests on this bill did not fit it recently; a person confirms this one.",
+  bill_misfit:"The amount or currency does not fit what is still open on the bill; a person records it by hand if it is right.",
 };
 
 /** For a decision that needs a person when no single rule says why (caps, dual approval, autonomy, own say-so only). */

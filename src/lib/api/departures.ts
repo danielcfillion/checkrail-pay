@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { apiDepartureRefs, departureServices, departures, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
@@ -154,11 +154,12 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
   return { departures: results, rechecked };
 }
 
-export function departuresSince(db: Db, businessId: string, since: string | null) {
+/** The departures this key sent, starting on or after `since`: a key never reads another key's or an approver's (R7-N1). */
+export function departuresSince(db: Db, businessId: string, keyName: string, since: string | null) {
   if (since !== null && !realDate(since)) throw new ApiError(422, "validation_failed", "since must be a date, YYYY-MM-DD", [{ field: "since", message: "must be a date, YYYY-MM-DD" }]);
-  const deps = listDepartures(db, businessId).filter((d) => !since || d.startDate >= since);
-  const refs = deps.length ? db.select().from(apiDepartureRefs).where(and(eq(apiDepartureRefs.businessId, businessId), inArray(apiDepartureRefs.departureId, deps.map((d) => d.id)))).all() : [];
+  const refs = db.select().from(apiDepartureRefs).where(and(eq(apiDepartureRefs.businessId, businessId), eq(apiDepartureRefs.keyName, keyName))).all();
   const refOf = new Map(refs.map((r) => [r.departureId, r]));
+  const deps = listDepartures(db, businessId).filter((d) => refOf.has(d.id) && (!since || d.startDate >= since));
   return deps
     .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.code.localeCompare(b.code))
     .slice(0, 1000)

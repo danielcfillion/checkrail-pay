@@ -18,8 +18,8 @@ export function POST(req: Request) {
 }
 
 export function GET(req: Request) {
-  return handleApi(req, { scope: "departures:write" }, ({ db, url }) => {
+  return handleApi(req, { scope: "departures:write" }, ({ db, key, url }) => {
     const biz = businessOf(db);
-    return { status: 200, body: { departures: departuresSince(db, biz.id, url.searchParams.get("since")) } };
+    return { status: 200, body: { departures: departuresSince(db, biz.id, key.name, url.searchParams.get("since")) } };
   });
 }

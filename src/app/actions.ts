@@ -7,7 +7,7 @@ import { getDb } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { businesses, obligations, paymentRunItems, paymentRuns, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, linkWaitingToBill, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -667,7 +667,12 @@ export async function returnBankLineAction(lineId: string, reason: string): Prom
 export async function createBillAction(vendorId: string, bill: { kind: string; reference: string; totalMinor: number; currency: string; dueDate?: string | null; note?: string | null }): Promise<ActionResult & { id?: string }> {
   return inRequest(async () => {
   try {
-    const id = await withBusiness((db, b, who) => createBill(db, b, who, vendorId, bill));
+    const id = await withBusiness(async (db, b, who) => {
+      const made = createBill(db, b, who, vendorId, bill);
+      // Requests from outside callers that already name this bill are put on it and checked again (API review R7-S4).
+      await linkWaitingToBill(db, made, who.id);
+      return made;
+    });
     done([`/vendors/${vendorId}`]);
     return { ok: true, message: "Recorded.", id };
   } catch (e) {
