@@ -184,7 +184,9 @@ paths:
       tags: [Requests]
       operationId: listRequests
       summary: List the requests this key made
-      description: Newest first. A key only ever sees the requests it made itself.
+      description: >-
+        Newest first, at most 25. A key only ever sees the requests it made itself. List rows carry the status and the
+        stored verdict only, with empty reasons and rules_failed; read one request for those.
       parameters:
         - name: reference
           in: query
@@ -199,7 +201,7 @@ paths:
           schema:
             type: integer
             minimum: 1
-            maximum: 100
+            maximum: 25
             default: 20
       responses:
         "200":

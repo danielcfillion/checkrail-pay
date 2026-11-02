@@ -53,7 +53,7 @@ Every call sends the key as a bearer token. Bodies are JSON. Examples use placeh
               {"vendor_id": "ven_linh", "unit": "guest_night", "quantity": 24}
             ]}]}'
 
-Departures are matched by `external_id`: sending one again replaces its dates, guests and services. A departure an approver imported from a manifest or typed in is never taken over or changed by the feed: sending its code answers 409 `departure_conflict`, and an approver changes it in Checkrail. That is because, with the rate card, a departure sets what a job may cost. Up to 200 departures a call; one invalid departure and nothing is saved. Units: `day`, `vehicle_day`, `guest_night`, `room_night`, `guest`, `trip`. Afterwards Checkrail checks again the requests waiting on the suppliers the call touched, as it does after a manifest import.
+Departures are matched by `external_id`: sending one again replaces its dates, guests and services. A departure an approver imported from a manifest or typed in is never taken over or changed by the feed: sending its code answers 409 `departure_conflict`, and an approver changes it in Checkrail. That is because, with the rate card, a departure sets what a job may cost. A departure belongs to the API key that first sent it; another key sending the same `external_id` gets 409 `departure_conflict`. Up to 200 departures a call; one invalid departure and nothing is saved. Units: `day`, `vehicle_day`, `guest_night`, `room_night`, `guest`, `trip`. Afterwards Checkrail checks again the requests waiting on the suppliers the call touched, as it does after a manifest import.
 
 Read them back, optionally from a start date:
 
@@ -81,12 +81,18 @@ A document is read and checked against the request the way a clerk's upload is, 
 
 The answer (201) is the request after the checks. `status` is one of `blocked`, `waiting_for_evidence`, `waiting_for_approval`, `scheduled` (Autopilot sends it at `releases_at` unless a person cancels), `approved`, `sending`, `paid`, `returned`, `cancelled`, `failed`, `disputed`. `verdict` is what the rules say (`pay`, `hold` or `block`), `rules_failed` gives the rule ids and `reasons` gives one fixed sentence for each, never text from the books, so nothing about other suppliers or other payments. Payout details are never included. A key without `requests:read` gets back only `id`, `status` and its own `idempotency_key`.
 
-A request on a bill that already has another part (anything not cancelled or returned, whichever came first) is never paid without a person: it waits with the rule `bill_part_repeat`, also when it is checked again, retried or due for release. The one exception is the balance, when every other part is approved by a person, being paid, paid or disputed, and the request is exactly what is left.
+A request whose reference names an existing bill of that supplier always stays on that bill. If it does not fit (more than is still open after payments and credits, another currency, or a closed or void bill) it is blocked with `bill_misfit`; a person can record such a payment by hand. A request on a bill that already has another part (anything not cancelled or returned, whichever came first) is never paid without a person: it waits with the rule `bill_part_repeat`, also when it is checked again, retried or due for release. The one exception is the balance, when every other part is approved by a person, being paid, paid or disputed, and the request is exactly what is left.
+
+Some rule codes tell you that another payment exists, without saying which: `no_duplicate` (this job matches a payment on file), `reference_other_vendor` (the reference is also on a payment to another supplier), `paypal_history` and `bill_part_repeat`. Nothing more about that payment is returned.
+
+Requests are taken one at a time per business within one Checkrail server process, so two requests for the same job sent at once are checked in turn and the second sees the first. That queue does not reach across processes; with more than one server running, the check that runs again before any payment is released is what stops a second payment.
 
 ### Read requests back
 
     curl -sS https://<your-checkrail>/api/v1/requests/<id> -H "Authorization: Bearer <erp-key>"
     curl -sS "https://<your-checkrail>/api/v1/requests?reference=HG-4D-1104" -H "Authorization: Bearer <erp-key>"
+
+The list returns at most 25 requests, with status and verdict only; read one request for its reasons.
 
 `settlement` shows whether it was sent, over which `rail`, the provider's id (such as a PayPal payout batch), when it settled, what was sent and the fee.
 

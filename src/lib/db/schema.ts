@@ -655,7 +655,7 @@ export const apiDepartureRefs = sqliteTable(
     businessId: text("business_id").notNull(),
     externalId: text("external_id").notNull(),
     departureId: text("departure_id").notNull(),
-    keyName: text("key_name").notNull(), // the API key that last sent it
+    keyName: text("key_name").notNull(), // the API key that first sent it; only that key may change it
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

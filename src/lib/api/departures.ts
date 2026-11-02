@@ -101,13 +101,15 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
     for (const d of items) {
       const ref = tx.select().from(apiDepartureRefs).where(and(eq(apiDepartureRefs.businessId, businessId), eq(apiDepartureRefs.externalId, d.externalId))).get();
       const byCode = tx.select().from(departures).where(and(eq(departures.businessId, businessId), eq(departures.code, d.code))).get();
+      // A departure belongs to the key that first sent it: another key cannot change it (review R6 nit).
+      if (ref && ref.keyName !== keyName) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId} was sent by another API key, so this key cannot change it. Nothing in this call was saved.`);
       let id: string | null = ref?.departureId ?? null;
       if (id && byCode && byCode.id !== id) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} already belongs to another departure on file. Nothing in this call was saved.`);
       if (!id && byCode) {
         // A code already on file under no external id. Another external id claiming it is a conflict; one an approver
         // imported or typed in is refused just below.
         const claimed = tx.select().from(apiDepartureRefs).where(eq(apiDepartureRefs.departureId, byCode.id)).get();
-        if (claimed) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} is already on file under external_id ${claimed.externalId}. Nothing in this call was saved.`);
+        if (claimed) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} is already on file under another external_id. Nothing in this call was saved.`);
         id = byCode.id;
       }
       const current = id ? tx.select().from(departures).where(eq(departures.id, id)).get() : undefined;
@@ -129,7 +131,7 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
         tx.insert(departureServices).values({ id: newId("dsv"), departureId: id, vendorId: s.vendorId, unit: s.unit, quantity: s.quantity }).run();
         touched.add(s.vendorId);
       }
-      if (ref) tx.update(apiDepartureRefs).set({ departureId: id, keyName, updatedAt: ts }).where(eq(apiDepartureRefs.id, ref.id)).run();
+      if (ref) tx.update(apiDepartureRefs).set({ departureId: id, updatedAt: ts }).where(eq(apiDepartureRefs.id, ref.id)).run();
       else tx.insert(apiDepartureRefs).values({ id: newId("adr"), businessId, externalId: d.externalId, departureId: id, keyName, createdAt: ts, updatedAt: ts }).run();
       results.push({ external_id: d.externalId, id, code: d.code, result: existed ? "updated" : "created" });
     }

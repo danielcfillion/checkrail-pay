@@ -10,7 +10,7 @@ import { ZERO_DECIMAL_CURRENCIES } from "../domain/money";
 import { ingestObligation, previewPolicy } from "../engine/orchestrator";
 import { uploadDocument, ALLOWED_UPLOAD_TYPES } from "../engine/attachments";
 import { formatMoney } from "../format";
-import { AgentInputError, clean, validatePaymentArgs } from "../agent/guard";
+import { AgentInputError, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
 import { apiReasons } from "./redact";
 import { ApiError, Problems, isObject, onlyFields, stable } from "./http";
@@ -183,7 +183,9 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
         up = await uploadDocument(db, { businessId, name: d.name, mimeType: d.mimeType, bytes: d.bytes, actor });
       } catch (e) {
         discardUploads();
-        throw new ApiError(422, "document_refused", `${d.name}: ${e instanceof Error ? e.message : "could not be read"}`);
+        // Never the exception's own text (review R6-2): a fixed sentence, and the detail in the server log.
+        console.error("[checkrail] api document refused", e);
+        throw new ApiError(422, "document_refused", `documents[${a.documents.indexOf(d)}] could not be stored or read. Send a PDF, PNG, JPEG, WebP, GIF or plain text file of at most 2 MB.`);
       }
       stored.push(up.attachmentId);
       const first = up.proposed[0];
@@ -213,7 +215,8 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
       if (orphan) withdraw(db, orphan.id, actor, "creating the request failed");
       discardUploads();
       db.delete(apiRequests).where(eq(apiRequests.id, claim)).run();
-      throw new ApiError(422, "request_refused", `Checkrail could not create the request: ${clean(e instanceof Error ? e.message : "an error")}. Nothing was paid.`);
+      console.error("[checkrail] api request refused", e);
+      throw new ApiError(422, "request_refused", "Checkrail could not create the request. Nothing was paid. Check the fields and try again, or ask a person.");
     }
     db.update(apiRequests).set({ obligationId: id }).where(eq(apiRequests.id, claim)).run();
     // The request in the books must be exactly what was sent.
@@ -230,17 +233,17 @@ export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_ap
 
 /**
  * A request as an integration may read it: state, verdict, reasons, amounts, rail and settlement. Never payout
- * details: no PayPal email, bank account or wallet address, and reasons are passed through the same redaction the
- * agent guard uses (emails, account numbers and payout addresses removed).
+ * details: no PayPal email, bank account or wallet address. Reasons are fixed sentences per rule code (redact.ts).
+ * `withReasons: false` (the list) skips re-running the checks: status and the stored verdict only (review R6-4).
  */
-export function describeRequest(db: Db, id: string) {
+export function describeRequest(db: Db, id: string, opts: { withReasons?: boolean } = {}) {
   const ob = db.select().from(obligations).where(eq(obligations.id, id)).get();
   if (!ob) throw new ApiError(404, "not_found", "No such request");
   const vendor = ob.vendorId ? db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId, rail: paymentAttempts.rail, status: paymentAttempts.status }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const waiting = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state);
-  const policy = waiting ? previewPolicy(db, id) : null;
+  const policy = waiting && opts.withReasons !== false ? previewPolicy(db, id) : null;
   const failing = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").sort((x, y) => Number(y.severity === "block") - Number(x.severity === "block"));
   // Built from rule codes only, never from the messages a person reads: those name other suppliers and other
   // payments, with their states and dates (review R5-M3). Once a request has left the waiting states, its status says it.
@@ -291,9 +294,12 @@ export function ownRequest(db: Db, key: ApiKey, id: string) {
   return describeRequest(db, id);
 }
 
+/** The most requests one list call returns. */
+export const LIST_LIMIT = 25;
+
 export function listOwnRequests(db: Db, key: ApiKey, reference: string | null, limit: number) {
   if (reference !== null && (reference.length < 1 || reference.length > 64)) throw new ApiError(422, "validation_failed", "reference must be 1 to 64 characters", [{ field: "reference", message: "must be 1 to 64 characters" }]);
   const rows = db.select({ obligationId: apiRequests.obligationId, reference: apiRequests.reference }).from(apiRequests).where(eq(apiRequests.keyName, key.name)).orderBy(desc(apiRequests.createdAt)).all();
   const want = reference?.trim().toUpperCase() ?? null;
-  return rows.filter((r) => !r.obligationId.startsWith(PENDING) && (want === null || (r.reference ?? "").toUpperCase() === want)).slice(0, limit).map((r) => describeRequest(db, r.obligationId));
+  return rows.filter((r) => !r.obligationId.startsWith(PENDING) && (want === null || (r.reference ?? "").toUpperCase() === want)).slice(0, Math.min(limit, LIST_LIMIT)).map((r) => describeRequest(db, r.obligationId, { withReasons: false }));
 }

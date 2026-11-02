@@ -25,7 +25,11 @@ export interface ApiContext { db: Db; key: ApiKey; body: unknown; url: URL }
 const DEFAULT_RATE_LIMIT = 120; // calls a minute per key
 const BAD_KEY_LIMIT = 20; // wrong keys per address per 15 minutes
 const IDEMPOTENCY_TTL_MS = 7 * 86_400_000;
-/** A claim still without an answer after this long belongs to a call that died. */
+/**
+ * A claim still without an answer after this long belongs to a call that died. Kept as is after review R6: a call that
+ * really runs longer (a slow document reader) could see its key reused, but a request it made is still found through
+ * the key's binding in api_requests, so a retry returns it rather than making a second one.
+ */
 const ABANDONED_CLAIM_MS = 5 * 60_000;
 let warnedMalformed = false;
 function warnMalformed(): void {

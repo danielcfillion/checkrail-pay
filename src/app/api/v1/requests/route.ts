@@ -1,6 +1,6 @@
 import { businessOf, handleApi, intParam } from "@/lib/api/http";
 import { hasScope } from "@/lib/api/keys";
-import { REQUEST_BODY_LIMIT, createRequest, listOwnRequests } from "@/lib/api/requests";
+import { LIST_LIMIT, REQUEST_BODY_LIMIT, createRequest, listOwnRequests } from "@/lib/api/requests";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,6 +24,6 @@ export function POST(req: Request) {
 export function GET(req: Request) {
   return handleApi(req, { scope: "requests:read" }, ({ db, key, url }) => {
     businessOf(db);
-    return { status: 200, body: { requests: listOwnRequests(db, key, url.searchParams.get("reference"), intParam(url, "limit", 20, 100)) } };
+    return { status: 200, body: { requests: listOwnRequests(db, key, url.searchParams.get("reference"), intParam(url, "limit", 20, LIST_LIMIT)) } };
   });
 }
