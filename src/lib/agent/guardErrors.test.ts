@@ -35,8 +35,10 @@ describe("bill rules for agents (API review R7-S3)", () => {
     createBill(db, DEMO_BUSINESS_ID, resolveActor(db, DEMO_BUSINESS_ID, "lan", "clerk"), "ven_rosa", { kind: "invoice", reference: "INV-ROSA-6001", totalMinor: 10_000, currency: "USD" });
     const bookings: AgentKey = { name: "bookings", scopes: ["check", "request", "attest"], digest: Buffer.alloc(32) };
     const r = await checkPayment(db, bookings, { payee: "Rosa Villanueva", amount: "150", currency: "USD", reference: "INV-ROSA-6001", evidence: [{ kind: "job_sheet", label: "Trip sheet INV-ROSA-6001", amount: "150", reference: "INV-ROSA-6001", excerpt: "Guide: Rosa Villanueva. Total USD 150." }] });
-    const misfit = r.blocks.find((b) => b.rule === "bill_misfit");
-    expect(misfit?.message).toBe("The amount or currency does not fit what is still open on the bill; a person records it by hand if it is right.");
+    // Round 8: one neutral hold, whether it fits or not.
+    expect(r.verdict).toBe("hold");
+    expect(r.blocks).toEqual([]);
+    expect(r.warnings).toEqual([{ rule: "bill_review", message: "This matches a bill on file. A person reviews payments against bills." }]);
     const leak = JSON.stringify(r).match(/.{0,80}(?:USD 100|100\.00).{0,40}/);
     expect(leak?.[0]).toBeUndefined();
   });
