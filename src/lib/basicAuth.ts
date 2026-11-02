@@ -66,6 +66,17 @@ export function authenticate(authorization: string | null | undefined, users: Us
   return hit;
 }
 
+/** The same check for a username and password typed into the sign-in form: every login compared, in constant time. */
+export function authenticatePassword(user: string, pass: string, users: UserCredential[]): UserCredential | null {
+  let hit: UserCredential | null = null;
+  for (const u of users) {
+    const userOk = safeEqual(user, u.user);
+    const passOk = safeEqual(pass, u.pass);
+    if (userOk && passOk && !hit) hit = u;
+  }
+  return hit;
+}
+
 /**
  * The configured credential. DUELINE_BASIC_AUTH is the variable's name from before the
  * product was renamed: it is still honoured so an existing .env does not silently switch auth off.

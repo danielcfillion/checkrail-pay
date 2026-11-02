@@ -178,6 +178,9 @@ Everything runs with zero credentials on simulated rails. To move a rail or the 
 **Logins (required in live mode)**
 
     CHECKRAIL_USERS=owner:<pw>:admin,minh:<pw>:approver,lan:<pw>:clerk,thu:<pw>:accountant
+    CHECKRAIL_SESSION_SECRET=<16+ random characters>
+
+People sign in on `/signin`, a plain form that works with JavaScript off and in embedded browsers. It sets a signed, httpOnly session cookie for 12 hours. Scripts and tests can keep sending the same login as HTTP Basic. A page request without either is sent to `/signin`; a fetch or API call gets a 401 in JSON.
 
 **PayPal sandbox.** Create an app at developer.paypal.com, enable Payouts, and tick Transaction search and Invoicing so Claude's checks and Read from PayPal work. For webhooks, set `PAYPAL_WEBHOOK_ID` and point the webhook at `/api/webhooks/paypal`.
 

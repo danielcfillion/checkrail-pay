@@ -16,13 +16,17 @@ services:
         value: "22"
       - key: DATABASE_PATH
         value: ./data/checkrail-pay.sqlite
-      # Basic auth keeps the open internet out (put the credential in the Devpost testing instructions). It does not
+      # The login keeps the open internet out (put it in the Devpost testing instructions). Visitors sign in on the
+      # /signin page; scripts may still send it as HTTP Basic. It does not
       # separate judges from each other: CHECKRAIL_SANDBOX below does, with a copy of the demo per browser.
       # Logins with roles, e.g. judge:<pw>:admin. With personas on, one login can act as each of the demo team.
       - key: CHECKRAIL_USERS
         sync: false
       - key: CHECKRAIL_DEMO_PERSONAS
         value: "1"
+      # Signs the 12-hour session cookie the /signin page sets. Render generates a random value once.
+      - key: CHECKRAIL_SESSION_SECRET
+        generateValue: true
       - key: NEXT_PUBLIC_CHECKRAIL_TIMEZONE
         value: Asia/Ho_Chi_Minh
       # Encrypts the demo vendors' full bank account numbers. Render generates a random value once.

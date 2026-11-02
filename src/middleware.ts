@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed, realMoneyEnv } from "@/lib/basicAuth";
+import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
+import { FAIL_WINDOW_MS, SESSION_COOKIE, gateAttempt, sessionKey, signInUrl, verifySession, wantsPage } from "@/lib/auth/session";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
 import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
 
@@ -13,6 +14,9 @@ export const PUBLIC_HEADER = "x-checkrail-public";
  * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login: a path with no route renders
  * the not-found page inside the app layout, which trusts the identity headers only this middleware may set.
  */
+/** The sign-in page and its two form posts. */
+export const SIGN_IN_PATHS = new Set(["/signin", "/api/signin", "/api/signout"]);
+
 export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json|requests\/[A-Za-z0-9_-]{1,64})$/;
 
 /**
@@ -20,7 +24,9 @@ export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.
  *
  *  - Logins configured (CHECKRAIL_USERS, or the single CHECKRAIL_BASIC_AUTH which is an admin): every page and
  *    server action needs one. The username becomes the audit actor and the role decides what they may do. Both
- *    headers are set here; any client-supplied copy is overwritten.
+ *    headers are set here; any client-supplied copy is overwritten. A login is either the signed session cookie the
+ *    /signin page sets (src/lib/auth/session.ts) or an HTTP Basic header (scripts, tests). Without one, a page request
+ *    is sent to /signin and anything else gets a 401 in JSON; no browser password prompt is ever asked for.
  *  - Nothing configured: allowed only in development, or when CHECKRAIL_INSECURE_DEMO=1 is set on purpose. In
  *    production or with live rails the app refuses every request rather than running open (security audit F3).
  *  - A setting present but malformed: everything is refused.
@@ -29,15 +35,13 @@ export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.
  *
  * Exempt, by exact path: the PayPal webhook (PayPal cannot send credentials; the route verifies PayPal's
  * signature itself), the agent endpoint /api/mcp (agents send an agent key, which the route checks) and the vendor onboarding and evidence pages (a vendor has no login; each link carries a
- * single-use token). Static build assets are excluded by the matcher.
+ * single-use token), and the sign-in page with its two form posts (SIGN_IN_PATHS). Static build assets are excluded by the matcher.
  */
 /*
  * A small in-memory throttle (per server process, which is what one Render instance is): ten wrong passwords from
  * one address in 15 minutes lock that address out for the rest of the window, and the token pages for vendors take
  * at most 30 requests a minute per address. It slows guessing; it is not a substitute for a strong demo password.
  */
-const FAIL_LIMIT = 10;
-const FAIL_WINDOW_MS = 15 * 60_000;
 const TOKEN_LIMIT = 30;
 const TOKEN_WINDOW_MS = 60_000;
 const failures = newThrottle();
@@ -63,7 +67,9 @@ export function middleware(req: NextRequest) {
   // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token, software holding an API key on
   // /api/v1) are no visitor: no copy for them. An API key works on the shared books, never a sandbox copy.
   const serverToServer = path === "/api/webhooks/paypal" || API_V1_PATH.test(path) || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
-  const sandbox = !serverToServer && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
+  // The sign-in page and the sign-in and sign-out posts touch no data: they never start a sandbox copy.
+  const signInPath = SIGN_IN_PATHS.has(path);
+  const sandbox = !serverToServer && !signInPath && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
   const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
   const headers = new Headers(req.headers);
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER, SANDBOX_HEADER]) headers.delete(h);
@@ -76,6 +82,11 @@ export function middleware(req: NextRequest) {
   };
 
   if (path === "/api/webhooks/paypal") return pass();
+  // The sign-in page renders bare (no navigation, no business data); the routes check Origin and passwords themselves.
+  if (signInPath) {
+    if (path === "/signin") headers.set(PUBLIC_HEADER, "1");
+    return pass();
+  }
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
   if (path === "/api/mcp") return pass();
   // Other software holds an API key, not a login; each /api/v1 route checks the key itself (src/lib/api/http.ts).
@@ -97,23 +108,25 @@ export function middleware(req: NextRequest) {
   let actor: string;
   let role: string;
   if (users.length > 0) {
-    const limited = overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS, Date.now(), false);
-    const who = authenticate(req.headers.get("authorization"), users);
-    // Only for a login that is published anyway (the judging demo, where guessing it proves nothing): a correct
-    // password gets in even when the address is over its limit, so one visitor's typos, or a proxy address shared by
-    // everyone, cannot lock every judge out. Off by default: elsewhere an over-limit address is refused whatever it sends.
-    // The setting is for a one-login judging demo only: it is ignored when real money can move or when more than one account
-    // is configured, so it can never switch the throttle off for a login that is a secret.
-    const sparesValid = process.env.CHECKRAIL_THROTTLE_SPARES_VALID === "1" && users.length === 1 && !realMoneyEnv(process.env);
-    if (limited && !(who && sparesValid)) return tooMany(FAIL_WINDOW_MS);
-    // A missing header is the browser asking for the password prompt, not a guess; only wrong passwords count.
-    if (!who && req.headers.get("authorization")) {
-      overLimit(failures, ip, FAIL_LIMIT, FAIL_WINDOW_MS);
-      // Opt-in, off by default: one wrong password on the deployed service shows which header really carries the
-      // visitor's address behind the host's proxies, so CHECKRAIL_CLIENT_IP_HEADER can be set from evidence (render.yaml).
-      if (process.env.CHECKRAIL_LOG_CLIENT_IP === "1") console.warn("[checkrail] failed login", { key: ip, xForwardedFor: req.headers.get("x-forwarded-for"), cfConnectingIp: req.headers.get("cf-connecting-ip"), trueClientIp: req.headers.get("true-client-ip"), xRealIp: req.headers.get("x-real-ip") });
+    // A valid session cookie from the sign-in page, or the Basic header that scripts and tests send.
+    const key = sessionKey(process.env);
+    const session = verifySession(req.cookies.get(SESSION_COOKIE)?.value, users, key);
+    const authorization = req.headers.get("authorization");
+    const basic = session ? null : authenticate(authorization, users);
+    // A session was signed only after a password passed this same throttle, so it is not a guess and is not held back.
+    const gate = session ? "ok" : gateAttempt({ throttle: failures, ip, users, who: basic, attempted: Boolean(authorization), headers: req.headers });
+    if (gate === "throttled") return tooMany(FAIL_WINDOW_MS);
+    const who = session ?? basic;
+    if (!who) {
+      // No form sign-in possible (production with no secret to sign sessions): the browser's own prompt, as before.
+      if (!key) return new NextResponse(AUTH_REQUIRED_HTML, { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"', "Content-Type": "text/html; charset=utf-8" } });
+      // A browser asking for a page goes to the sign-in page, with no challenge header, so no pop-up appears.
+      if (wantsPage(req.method, req.headers)) return new NextResponse(null, { status: 303, headers: { Location: signInUrl(path + req.nextUrl.search), "Cache-Control": "no-store" } });
+      // Fetches, server actions, RSC and API calls get JSON. The challenge goes only to a client that sent Basic itself.
+      const h: Record<string, string> = { "Content-Type": "application/json", "Cache-Control": "no-store" };
+      if (authorization) h["WWW-Authenticate"] = 'Basic realm="Checkrail Pay", charset="UTF-8"';
+      return new NextResponse(JSON.stringify({ error: "Sign in required.", signIn: "/signin" }), { status: 401, headers: h });
     }
-    if (!who) return new NextResponse(AUTH_REQUIRED_HTML, { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"', "Content-Type": "text/html; charset=utf-8" } });
     actor = who.user;
     role = who.role;
   } else {

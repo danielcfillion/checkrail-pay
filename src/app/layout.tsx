@@ -8,6 +8,7 @@ import { ToastProvider } from "@/components/Toast";
 import { getBusiness, getSystemModes, waitingFor } from "@/lib/queries";
 import { getViewer, isPublicPage } from "@/lib/viewer";
 import { ROLE_LABEL } from "@/lib/auth/roles";
+import { configuredUsers } from "@/lib/basicAuth";
 import { getDb } from "@/lib/db";
 import { pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
 import { listRuns } from "@/lib/engine/runs";
@@ -85,7 +86,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           <Shell
             businessName={businessName}
             system={system}
-            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks, runsToRelease } : null}
+            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks, runsToRelease, signOut: (configuredUsers()?.length ?? 0) > 0 } : null}
           >
             {children}
           </Shell>
