@@ -158,6 +158,7 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   }
 
   seedAgentFutures(db, DEMO_BUSINESS_ID);
+  await (await import("../accounting/xeroSync")).resetXeroSyncState(db, DEMO_BUSINESS_ID); // Xero: forget what the old demo sent, keep the connection
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
 

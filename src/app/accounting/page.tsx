@@ -5,6 +5,7 @@ import { EmptyState, PageHeader, RailTag } from "@/components/ui";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { DemoVisit } from "@/components/DemoProgress";
 import { ExportXeroBills } from "@/components/ExportXeroBills";
+import { XeroPushSummary } from "@/components/XeroConnection";
 import { xeroBillRows } from "@/lib/accounting/xeroBills";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
@@ -72,7 +73,9 @@ export default function AccountingPage() {
           </ul>
         </div>
       ) : null}
+      <XeroPushSummary />
       <p className="mb-3 max-w-3xl text-ink-soft">Bills go to Xero when they are approved, not when they are paid, so aged payables are right while payments wait: the bills file follows Xero&apos;s import template with the account code, tax type and a Departure tracking category. A deposit and its balance are one bill. Payments then match from the bank feed or the settlement records below.</p>
+      <p className="mb-3 max-w-3xl text-sm text-ink-soft">Changed 1 Nov 2026: bills are now at the invoice&apos;s gross amount. Tax kept back from a vendor is recorded as a second payment on the bill from the withholding account, for the settlement row&apos;s withheldAmount.</p>
       <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>
 
       {rows.length === 0 ? (
