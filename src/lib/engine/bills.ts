@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { billAllocations, bills, evidence, obligations, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
-import { newId, now, sourceRefKeys } from "../domain/ids";
+import { foldConfusables, newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef } from "../domain/money";
 import { fmt } from "../domain/policy";
 import { requirePermission, type Actor } from "./users";
@@ -94,13 +94,19 @@ export function findBill(db: Db, vendorId: string, reference: string, kind: Bill
  * (separators, case, leading zeros and look-alike letters set aside, and the original of a re-issue like "-R" or
  * "-REV2"). With `partOf`, also the original of a part number written after a slash ("INV-ROSA-6001/2"), but never
  * when what comes before the slash ends in a year ("RET-ROSA-2026/10" is October, not part 10). Numbers are never
- * shortened or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart.
+ * shortened or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart. Every reference also keys on its
+ * folded spelling, upper-cased with separators removed ("=ROSANOV"), so one with no digits or of under three
+ * characters ("ROSA-NOV", "A1"), which the comparison forms leave out, still matches when spelt the same (API review
+ * R9-M1). The part number may follow a re-issue ("INV-ROSA-6001-R/2") and have up to three digits ("/003", R9-S2).
  */
 export function billKeys(reference: string | null | undefined, partOf = false): Set<string> {
   if (!reference) return new Set();
-  const part = partOf ? reference.trim().match(/^(.*\d{3,6})\s*\/\s*\d{1,2}$/) : null;
-  const base = part && !/(?:^|\D)(?:19|20)\d{2}$/.test(part[1]) ? part[1] : null;
-  return new Set([reference, ...(base ? [base] : [])].flatMap((r) => sourceRefKeys(r).filter((k) => k.startsWith("~"))));
+  const part = partOf ? reference.trim().match(/^(.+?)\s*\/\s*\d{1,3}$/) : null;
+  // The number before the slash, with any re-issue mark after it set aside, must not be a year.
+  const core = part?.[1].replace(/[^\p{L}\p{N}]+(?:[A-Za-z]|[Rr]\d?|REV\d*|rev\d*)$/u, "");
+  const base = part && core && /\d{3,6}$/.test(core) && !/(?:^|\D)(?:19|20)\d{2}$/.test(core) ? part[1] : null;
+  const folded = (r: string) => `=${foldConfusables(r).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "")}`;
+  return new Set([reference, ...(base ? [base] : [])].flatMap((r) => [...sourceRefKeys(r).filter((k) => k.startsWith("~")), folded(r)]).filter((k) => k.length > 1));
 }
 
 /**

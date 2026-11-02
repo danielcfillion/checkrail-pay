@@ -868,6 +868,9 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
 
   // What is open for an outside caller's request: the total less credits and the other parts a person approved, or
   // that are in flight, paid or disputed. Unapproved requests do not count, so one caller cannot crowd out another.
+  // Known and left as is (review R9-N3): policy's own bill check (amount_matches_evidence in policy.ts) still counts
+  // parts awaiting approval, so unapproved requests can make a fitting one show as blocked to the person until they
+  // are cancelled. The outside caller's answer is the same either way.
   const counts = (p: (typeof others)[number]) => ["execution_pending", "sent", "settled", "disputed"].includes(p.state) || (p.state === "approved" && approvedByPerson(db, p.id));
   const committed = others.filter((p) => counts(p) && p.currency === bill.currency).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
   const open = bill.totalMinor - billBalance(db, bill.id, ob.id).creditedMinor - committed;
@@ -1033,6 +1036,8 @@ export function approvalGate(db: Db, obligationId: string, actor: string): { ref
   const policy: ApprovalPolicy = { ...DEFAULT_POLICY, ...(JSON.parse(biz.policyJson) as Partial<ApprovalPolicy>) };
   // Limits are in the base currency; a foreign amount with no rate counts as above every limit but the owner's.
   const amount = ob.amountMinor != null && ob.currency ? (toBaseMinor(ob.amountMinor, ob.currency, biz.baseCurrency) ?? Number.MAX_SAFE_INTEGER) : 0;
+  // An outside agent or an integration never approves anything, whatever path it reaches this by (API review R9-N2).
+  if (/^(mcp|api):/.test(actor)) return { refusal: "An outside agent or integration cannot approve payments. A person does.", selfApproval: false };
   // A known person approving: they need the approve permission (their own or delegated) and a limit that covers it.
   if (actor.startsWith("user:")) {
     const row = db.select().from(users).where(and(eq(users.id, actor.slice(5)), eq(users.businessId, ob.businessId))).get();
