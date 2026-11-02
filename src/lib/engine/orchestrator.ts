@@ -4,7 +4,7 @@ import { accountingSyncs, approvals, attachments, auditEntries, businesses, evid
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
 import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField, keyedDigest } from "../crypto/dataKey";
-import { billBalance, closeIfDone, createBill, findBill } from "./bills";
+import { billBalance, billKeys, billsMatching, closeIfDone, createBill, findBill } from "./bills";
 import { expectedAmount, rateCardsForPolicy } from "./rates";
 import { assertOpenPeriod } from "./books";
 import { taxFormWarning, withholdingFor } from "./taxes";
@@ -779,6 +779,12 @@ function evaluateOutcome(db: Db, obligationId: string): { outcome: PolicyOutcome
   return { outcome: withBillParts(db, ob, outcome, approvalsCount, acknowledgedWarnings), withholding };
 }
 
+/** The rules of the last recorded policy run for a request; [] when there is none. */
+function lastRules(db: Db, obligationId: string): PolicyRuleResult[] {
+  const row = db.select({ d: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "policy.evaluated"))).orderBy(desc(auditEntries.seq)).get();
+  return ((row?.d ? (JSON.parse(row.d) as { rules?: PolicyRuleResult[] }).rules : []) ?? []);
+}
+
 /** The actor who first asked for this payment: the creator, or the creator of the payment it asks for again. */
 function originOf(db: Db, obligationId: string): string {
   const row = db.select({ actor: auditEntries.actor, detail: auditEntries.detailJson }).from(auditEntries).where(and(eq(auditEntries.obligationId, obligationId), eq(auditEntries.action, "obligation.created"))).get();
@@ -802,9 +808,17 @@ function originOf(db: Db, obligationId: string): string {
  *  - A person's part carries the same note and otherwise goes as it always has.
  */
 function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome, approvalsCount: number, acknowledged: string[] | undefined): PolicyOutcome {
-  if (!ob.billId) return outcome;
-  const bill = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
-  if (!bill) return outcome;
+  if (!ob.billId) {
+    // An outside caller's reference that names more than one bill of this vendor, once compared: a person decides
+    // which, if any, it pays (API review R7-M1).
+    const matching = ob.vendorId && ob.sourceRef && /^(mcp|api):/.test(originOf(db, ob.id)) ? billsMatching(db, ob.vendorId, ob.sourceRef) : [];
+    if (matching.length < 2) return outcome;
+    const why = `Reference ${ob.sourceRef} matches ${matching.length} bills of this supplier (${matching.map((b) => b.reference).join(", ")}); a person records which one this pays`;
+    return { ...outcome, decision: "block", rules: [...outcome.rules, { ruleId: "bill_ambiguous", passed: false, severity: "block", message: why }], reasons: [why, ...outcome.reasons] };
+  }
+  const found = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
+  if (!found) return outcome;
+  const bill = found;
   const others = db
     .select({ id: obligations.id, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, createdAt: obligations.createdAt, updatedAt: obligations.updatedAt })
     .from(obligations)
@@ -820,14 +834,19 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
   // Whenever a person is asked, the reasons say which part of the bill this is.
   const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, partLine];
   const outside = /^(mcp|api):/.test(originOf(db, ob.id));
+  let holdFor: { why: string; fingerprint: string } | null = null;
   // An outside caller's part must fit the bill exactly: open, in its currency, and no more than is left after payments
   // and credits, with none of the tolerance a person's typing gets (API review R6-1). Otherwise it is blocked here; a
   // person can record such a payment by hand.
   if (outside) {
-    const bal = billBalance(db, bill.id, ob.id);
-    const open = bill.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
+    // What is open: the total less credits and every other part with money committed or moved, disputed included, so
+    // it agrees with the exact-balance arithmetic below (API review R7-S2).
+    const moved = ["awaiting_approval", "approved", "execution_pending", "sent", "settled", "disputed"];
+    const covered = others.filter((p) => moved.includes(p.state) && p.currency === bill.currency).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
+    const open = bill.totalMinor - billBalance(db, bill.id, ob.id).creditedMinor - covered;
     const misfit =
-      bill.status !== "open" ? `Bill ${bill.reference} is ${bill.status}; nothing more is paid on it without a person recording it`
+      bill.kind === "credit_note" ? `${bill.reference} is a credit note; it is set against invoices, not paid`
+      : bill.status !== "open" ? `Bill ${bill.reference} is ${bill.status}; nothing more is paid on it without a person recording it`
       : bill.currency !== ob.currency ? `Bill ${bill.reference} is in ${bill.currency}, this payment is in ${ob.currency}`
       : (ob.amountMinor ?? 0) > open ? `Requested ${fmt(ob.amountMinor ?? 0, ob.currency ?? bill.currency)} but only ${fmt(Math.max(0, open), bill.currency)} is still open on ${bill.reference} after payments and credits`
       : null;
@@ -835,15 +854,38 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
       rules.push({ ruleId: "bill_misfit", passed: false, severity: "block", message: misfit });
       return { ...outcome, decision: "block", rules, reasons: [misfit, ...outcome.reasons.filter((r) => r !== misfit), partLine] };
     }
+    // Trying amount after amount until one fits is looking for what is open (API review R7-S3): after three misfits on
+    // this bill from the same caller in ten minutes, its next requests on the bill wait for a person.
+    const mine = originOf(db, ob.id);
+    const since = new Date(Date.now() - 10 * 60_000).toISOString();
+    const misfits = others.filter((p) => p.createdAt >= since && originOf(db, p.id) === mine && lastRules(db, p.id).some((r) => r.ruleId === "bill_misfit" && !r.passed)).length;
+    if (misfits >= 3) {
+      const tries = `Repeated misfits: ${misfits} requests from this sender on bill ${bill.reference} did not fit in the last 10 minutes. A person confirms this one`;
+      const repeated: PolicyRuleResult = { ruleId: "bill_misfit_repeated", passed: false, severity: "warn", message: tries, key: `${bill.id}:${mine}` };
+      rules.push(repeated);
+      const seen = approvalsCount >= 1 && Boolean(acknowledged) && fingerprintCovered(new Set(acknowledged ?? []), warningFingerprint(repeated));
+      if (!seen) holdFor = { why: tries, fingerprint: warningFingerprint(repeated) };
+    }
   }
+  // Whatever the bill-part rule below decides, repeated misfits still need a person who saw them.
+  const gate = (o: PolicyOutcome): PolicyOutcome =>
+    holdFor && o.decision === "auto_execute"
+      ? { ...o, decision: "require_approval", reasons: [holdFor.why, ...o.reasons, partLine], unacknowledged: approvalsCount >= 1 ? [...(o.unacknowledged ?? []), holdFor.fingerprint] : o.unacknowledged }
+      : holdFor && o.decision !== "auto_execute" ? { ...o, reasons: [holdFor.why, ...o.reasons.filter((r) => r !== holdFor!.why)] } : o;
+  return gate(partsRule());
+
+  function partsRule(): PolicyOutcome {
   if (!others.length) return { ...outcome, rules, reasons };
 
   const why = `Bill ${bill.reference} already has another part (${money(others[0])}). A person confirms this is a separate payment.`;
+  if (!outside) {
+    rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
+    return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
+  }
   const note = (): PolicyOutcome => {
     rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
     return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
   };
-  if (!outside) return note();
   // The exact balance: every other part is approved by a person, in flight, paid or disputed, and this request is
   // exactly what is left of the bill after them and its credits.
   const byPerson = (id: string) => Boolean(db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, id), eq(approvals.decision, "approved"), sql`substr(${approvals.actor}, 1, 5) = 'user:'`)).get());
@@ -851,7 +893,8 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
   const left = bill.totalMinor - billBalance(db, bill.id, ob.id).creditedMinor - others.reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
   if (others.every((p) => done(p) && p.currency === bill.currency) && ob.currency === bill.currency && ob.amountMinor === left) return note();
 
-  const warning: PolicyRuleResult = { ruleId: "bill_part_repeat", passed: false, severity: "warn", message: why, key: bill.id };
+  // The fingerprint names the other parts, so an approval given before a new part arrived does not cover it (R7-N2).
+  const warning: PolicyRuleResult = { ruleId: "bill_part_repeat", passed: false, severity: "warn", message: why, key: `${bill.id}:${others.map((p) => p.id).sort().join(",")}` };
   rules.push(warning);
   if (outcome.decision === "block" || outcome.decision === "hold") return { ...outcome, rules, reasons: [...reasons, why] };
   if (approvalsCount < 1) return { ...outcome, decision: "require_approval", rules, reasons: [why, ...reasons, ...(outcome.decision === "auto_execute" ? [partLine] : [])] };
@@ -859,6 +902,33 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
     return { ...outcome, decision: "require_approval", rules, reasons: [`New since approval: ${why}`, partLine], unacknowledged: [...(outcome.unacknowledged ?? []), warningFingerprint(warning)] };
   }
   return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [why, ...reasons] };
+  }
+}
+
+/**
+ * After a bill is recorded: outside callers' requests of that vendor that name it (compared as the duplicate check
+ * compares references), are not paid yet and are on no bill, are put on it and checked again, so the bill's limit and
+ * the bill-part rule apply to them too (API review R7-S4). Nothing is approved or sent by this. Returns how many.
+ */
+export async function linkWaitingToBill(db: Db, billId: string, actor: string): Promise<number> {
+  const bill = db.select().from(bills).where(eq(bills.id, billId)).get();
+  if (!bill) return 0;
+  const keys = billKeys(bill.reference);
+  const waiting = db.select().from(obligations).where(and(eq(obligations.vendorId, bill.vendorId), isNull(obligations.billId), inArray(obligations.state, ["drafted", "needs_evidence", "verified", "blocked", "awaiting_approval", "approved"]))).all()
+    .filter((o) => /^(mcp|api):/.test(originOf(db, o.id)) && [...billKeys(o.sourceRef)].some((k) => keys.has(k)));
+  for (const o of waiting) {
+    db.update(obligations).set({ billId, paymentKind: "part", updatedAt: now() }).where(eq(obligations.id, o.id)).run();
+    audit(db, { obligationId: o.id, actor, action: "bill.linked", detail: { billId, kind: "part", after: "bill recorded" } });
+    if (o.state === "approved") {
+      const outcome = runPolicy(db, o.id);
+      if (outcome.decision !== "auto_execute") {
+        db.update(obligations).set({ releaseAt: null }).where(eq(obligations.id, o.id)).run();
+        moveTo(db, o.id, targetState(outcome, "approved"), outcome);
+      }
+    } else if (["blocked", "needs_evidence", "awaiting_approval"].includes(o.state)) await recheckObligation(db, o.id, actor);
+    else runPolicy(db, o.id);
+  }
+  return waiting.length;
 }
 
 /**
@@ -869,12 +939,17 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
 function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: EvidenceItem[]): void {
   const ob = mustGet(db, obligationId);
   if (ob.billId || !ob.vendorId || !ob.currency || !ob.amountMinor || !ob.sourceRef) return;
-  // Any payment naming a bill this vendor already has is a payment against it, whatever the request calls itself.
-  const existing = findBill(db, ob.vendorId, ob.sourceRef);
-  let billId = existing && existing.status !== "void" ? existing.id : null;
   // Who asked for this payment in the first place: for one asked again after it came back, the original asker, so a
   // person's "pay again" carries an outside caller's records at their original weight (API review R3-S2).
   const outside = /^(mcp|api):/.test(originOf(db, obligationId));
+  // Bills this vendor has under the same reference once compared like the duplicate check does: any kind, any state,
+  // however the reference is spelt (API review R7-M1, S1).
+  const matching = billsMatching(db, ob.vendorId, ob.sourceRef);
+  // Any payment naming a bill this vendor already has is a payment against it, whatever the request calls itself. A
+  // person's request is matched as it always was; an outside caller's by the compared reference, and only when exactly
+  // one bill matches (several are blocked in withBillParts for a person to sort out).
+  const existing = outside ? (matching.length === 1 ? matching[0] : null) : findBill(db, ob.vendorId, ob.sourceRef);
+  let billId = existing && existing.status !== "void" ? existing.id : null;
   // A request from an outside agent (mcp:) or an integration (api:) that names a bill of this vendor stays on that bill,
   // whatever state the bill is in and whether or not it fits: the bill check then blocks what does not fit (more than
   // is open after payments and credits, another currency, a closed or void bill), and a person can still record such a
@@ -887,7 +962,8 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
     const open = existing.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
     outsideKind = ai.paymentPart?.kind === "balance" && ob.amountMinor === open && existing.currency === ob.currency ? "balance" : ai.paymentPart?.kind === "deposit" ? "deposit" : "part";
   }
-  if (!billId && !existing && ai.paymentPart?.kind === "deposit") {
+  // No new bill is recorded while one of this vendor already has the same reference, however spelt (R7-M1).
+  if (!billId && !existing && matching.length === 0 && ai.paymentPart?.kind === "deposit") {
     // Which records may set a bill total is decided by where they came from (API review R3-S1). A supplier's own record
     // (a vendor link upload) never does, whoever asked. For a request from an outside agent or an integration, only the
     // business's own records (provenance "system", an attest key) do: its typing, its PDF and anything a person added

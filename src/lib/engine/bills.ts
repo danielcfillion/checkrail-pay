@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db";
 import { billAllocations, bills, evidence, obligations, vendors } from "../db/schema";
 import { audit } from "../domain/stateMachine";
-import { newId, now } from "../domain/ids";
+import { newId, now, sourceRefKeys } from "../domain/ids";
 import { SUPPORTED_CURRENCIES, isValidAmountMinor, isValidSourceRef } from "../domain/money";
 import { fmt } from "../domain/policy";
 import { requirePermission, type Actor } from "./users";
@@ -87,6 +87,25 @@ export function createBill(db: Db, businessId: string, by: Actor | "agent", vend
 
 export function findBill(db: Db, vendorId: string, reference: string, kind: BillKind = "invoice") {
   return db.select().from(bills).where(and(eq(bills.vendorId, vendorId), eq(bills.reference, reference.toUpperCase()), eq(bills.kind, kind))).get() ?? null;
+}
+
+/**
+ * The comparison keys a reference names a bill by (API review R7-M1): its forms as the duplicate check compares them
+ * (separators, case, leading zeros and look-alike letters set aside, and the original of a re-issue like "-R" or
+ * "-REV2"), plus the original of a part number written after a slash ("INV-ROSA-6001/2"). Numbers are never shortened
+ * or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart.
+ */
+export function billKeys(reference: string | null | undefined): Set<string> {
+  if (!reference) return new Set();
+  const part = reference.trim().match(/^(.*\d{3,6})\s*\/\s*\d{1,2}$/);
+  return new Set([reference, ...(part ? [part[1]] : [])].flatMap((r) => sourceRefKeys(r).filter((k) => k.startsWith("~"))));
+}
+
+/** Every bill of this supplier, of any kind and in any state, whose reference is the same as this one once compared. */
+export function billsMatching(db: Db, vendorId: string, reference: string | null | undefined) {
+  const mine = billKeys(reference);
+  if (!mine.size) return [];
+  return db.select().from(bills).where(eq(bills.vendorId, vendorId)).all().filter((b) => [...billKeys(b.reference)].some((k) => mine.has(k)));
 }
 
 /**
