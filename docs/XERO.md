@@ -59,7 +59,9 @@ The bills file does the same: bills are at gross with no withholding line. The s
 
 - `xero:<payment id>`: the live push has put all of it in Xero (payment, withheld part and fee). Do not enter it.
 - `xero:sending`: the live push owns it and will send it (it is waiting, or retrying after a failure shown on the Xero card). Do not enter it either.
-- `xero:returned`: the payout came back; anything of it the live push sent was removed in Xero. Nothing to enter.
+- `xero:returned`: the payout came back, and everything the live push sent for it was removed in Xero (or nothing was sent). Nothing to enter.
+- `returned:reverse-by-hand`: the payout came back and its bill is in the files: if you entered this payment in Xero, reverse it there by hand.
+- A payout that came back whose payment Xero would not delete keeps its `xero:<payment id>`; the Xero card asks a person to reverse it.
 - blank: its bill came from the file (or Xero is not connected). Record the payment from the bank feed and the `withheldAmount` as a second payment on the bill from the tax withheld account (in Xero: on the bill, Make a payment, Paid from: the tax withheld account).
 
 ### With Xero connected, the bills file leaves out the live bills
@@ -76,21 +78,22 @@ While the destination is xero and Xero is connected, Export new bills on the Acc
 
 ## How it avoids sending twice
 
+- Each create call carries an Idempotency-Key, and the record is marked "sending" with that key in the database before the call. If the answer is lost, or the server stops before saving it, the next pass looks the item up in Xero before creating it. Xero keeps an idempotency key for only six minutes, so this look-up is what covers a longer gap.
 - Each bill, payment and fee sent is recorded here with Xero's id, keyed on the contact and invoice number (bills) or on the payment and the provider's transaction id (payments and fees). A recorded one is not sent again.
 - Before a bill is created, Xero is searched for a bill with the same number for the same contact; if there is one, it is used. A bill for a different contact with the same number is never used.
 - Before a payment is created, Xero's payments are searched for its reference (the rail and the provider's transaction id); one found is used. As a last resort, if the bill in Xero holds more payments of that amount than Checkrail has recorded, one of them is taken as this payment and its fee is not booked again; the card and the Accounting page count these as skipped fees. This is what keeps a demo reset from paying the same demo bill twice.
 - A success from Xero whose answer cannot be read is treated like a lost answer.
 - One rule for anything that may already be in Xero (a lost answer, or a server that stopped mid-send): at the start of the next pass it is looked up by what it was sent as, before anything else is decided about it. Found, it is taken on under its record, so a later cancel voids it, an amendment updates it, and a returned payout removes it. Not found, it is cleared and goes again only if still due. A row left "sending" by a stopped server shows on the card until then.
 - A payment waits while its bill's amendment has not reached Xero yet, rather than being paid against the old bill.
-- Matching a payment by amount (the demo-reset case) never takes a Xero payment any record already holds, and waits while another payment on the same bill is still being looked up. Look-ups run every pass, whatever the record's own wait.
+- Matching a payment by amount (the demo-reset case) never takes a Xero payment any record already holds, and waits while another payment on the same bill is still being looked up. Look-ups run every pass, whatever the record's own send wait.
+- Look-ups take at most 15 of a pass's 40 calls, longest waiting first, so sending always has room. A look-up that fails (an error, not "not found") waits its own backoff before the next try.
 - When a look-up finds nothing and the request has since been cancelled or its payout came back, it is looked up once more; if still nothing, the card asks a person to check that bill in Xero.
+
+These cover the cases above. Something deleted or edited by hand in Xero is not detected.
 
 ### Switching to another organisation
 
-Connecting a different Xero organisation starts the live push there from that moment. Bills the previous organisation received from the live push are not copied over: their exported marks are cleared, so they appear again in the bills file (Export new bills) for you to import into the new organisation.
-- Each create call carries an Idempotency-Key, and the record is marked "sending" with that key in the database before the call. If the answer is lost, or the server stops before saving it, the next pass looks the item up in Xero before creating it. Xero keeps an idempotency key for only six minutes, so this look-up is what covers a longer gap.
-
-These cover the cases above. Something deleted or edited by hand in Xero is not detected.
+Connecting a different Xero organisation starts the live push there from that moment. Bills the previous organisation received from the live push are not copied over: their exported marks are cleared, so they appear again in the bills file (Export new bills) for you to import into the new organisation, and their settled payments go back to waiting, so Export CSV carries them too.
 
 ## When something cannot be sent
 

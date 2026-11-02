@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 import type { Db } from "../db";
-import { bills, obligations, xeroConnections, xeroOauthStates, xeroRecords } from "../db/schema";
+import { accountingSyncs, bills, obligations, xeroConnections, xeroOauthStates, xeroRecords } from "../db/schema";
 import { config } from "../config";
 import { decryptField, encryptField, usingDevKey } from "../crypto/dataKey";
 import { audit } from "../domain/stateMachine";
@@ -201,6 +201,9 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
       db.update(obligations).set({ xeroBillExportedAt: null }).where(inArray(obligations.billId, billIds)).run();
     }
     if (obIds.length) db.update(obligations).set({ xeroBillExportedAt: null }).where(inArray(obligations.id, obIds)).run();
+    // And their payments: settled records the old organisation got go back to waiting, so Export CSV carries them too.
+    const syncs = db.select({ id: xeroRecords.accountingSyncId }).from(xeroRecords).where(and(eq(xeroRecords.businessId, opts.businessId), eq(xeroRecords.tenantId, prior.tenantId), eq(xeroRecords.kind, "payment"), isNotNull(xeroRecords.accountingSyncId), isNotNull(xeroRecords.xeroId))).all().map((r) => r.id!);
+    if (syncs.length) db.update(accountingSyncs).set({ status: "pending", externalRef: null, updatedAt: ts }).where(and(inArray(accountingSyncs.id, syncs), eq(accountingSyncs.status, "synced"))).run();
   }
   const values = {
     businessId: opts.businessId,

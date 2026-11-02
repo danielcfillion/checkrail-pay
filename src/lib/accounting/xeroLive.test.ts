@@ -1575,6 +1575,102 @@ describe("Review round 6", () => {
   });
 });
 
+describe("Review round 7", () => {
+  const csvMark = (ref: string) => allRecordsCsv(db).csv.trim().split("\n").filter((l) => l.includes(ref)).map((l) => l.split(",").pop());
+  /** A bill record that may be in Xero (sent, no answer), as a stopped server would leave it. */
+  const unsureBill = (n: number) => {
+    const ts = new Date(Date.now() - 60_000 + n).toISOString();
+    db.insert(xeroRecords).values({ id: `xr_unsure${n}`, businessId: DEMO_BUSINESS_ID, tenantId: TENANT, kind: "bill", localKey: `maria santos\u0000LOST-${n}`, label: `Bill LOST-${n}, Maria Santos`, status: "failed", uncertain: true, attempts: 1, nextAttemptAt: new Date(Date.now() + 60_000).toISOString(), createdAt: ts, updatedAt: ts }).run();
+  };
+
+  it("1. a failed look-up waits its backoff; a clean miss does not", async () => {
+    await connect();
+    unsureBill(1);
+    const lookups = () => xero.api("GET", "/Invoices").filter((c) => (c.url.searchParams.get("where") ?? "").includes("LOST-1")).length;
+    xero.injections.push({ when: (c) => c.method === "GET" && (c.url.searchParams.get("where") ?? "").includes("LOST-1"), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    const t0 = Date.now();
+    await runXeroSync(db, { now: () => t0 });
+    expect(lookups()).toBe(1);
+    await runXeroSync(db, { now: () => t0 + 10_000 });
+    expect(lookups()).toBe(1); // waiting its backoff after the error
+    await runXeroSync(db, { now: () => t0 + 2 * 60_000 });
+    expect(lookups()).toBe(2); // clean miss now
+    expect(records("bill").find((r) => r.id === "xr_unsure1")).toMatchObject({ uncertain: false });
+  });
+
+  it("1. look-ups take at most a fixed share of a pass's calls, so real work still goes", async () => {
+    await connect();
+    for (let n = 0; n < 30; n++) unsureBill(n);
+    approveObligation(db, story.stellar, "user:minh");
+    const before = xero.calls.length;
+    await runXeroSync(db);
+    const lookupCalls = xero.calls.slice(before).filter((c) => c.method === "GET" && (c.url.pathname.endsWith("/Contacts") ? (c.url.searchParams.get("searchTerm") ?? "").includes("maria") : (c.url.searchParams.get("where") ?? "").includes("LOST-"))).length;
+    expect(lookupCalls).toBeLessThanOrEqual(16);
+    expect(xero.state.invoices.map((i) => i.InvoiceNumber)).toContain("JOB-PAL3D-0927");
+  });
+
+  it("2. CSV after a payout came back: xero:returned when all removed, returned:reverse-by-hand for a file-side row, the id while Xero refuses", async () => {
+    await connect();
+    // File side: approved before connecting.
+    await settle(story.paypal);
+    // Live, removed.
+    const b1 = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9701", totalMinor: 20_000, currency: "USD" });
+    const p1 = await payPart(b1, 20_000);
+    // Live, Xero refuses to remove it.
+    const b2 = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9702", totalMinor: 20_000, currency: "USD" });
+    const p2 = await payPart(b2, 20_000);
+    await runXeroSync(db);
+    const refused = records("payment").find((r) => r.label.includes("9702"))!.xeroId!;
+    xero.state.reconciled.add(refused);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), p1, "RETURN-9701");
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), p2, "RETURN-9702");
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), story.paypal, "RETURN-0921");
+    await runXeroSync(db);
+    expect(csvMark("INV-MS-9701")).toEqual(["xero:returned"]);
+    expect(csvMark("INV-MS-9702")).toEqual([`xero:${refused}`]);
+    expect(csvMark("JOB-HG4D-0921")).toEqual(["returned:reverse-by-hand"]);
+  });
+
+  it("3. on an organisation switch, payments that went to the old one wait again, so Export CSV carries them", async () => {
+    await connect();
+    await settle(story.stellar);
+    await runXeroSync(db);
+    const sync = () => db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, story.stellar)).get()!;
+    expect(sync().status).toBe("synced");
+    xero.state.access = jwt({ authentication_event_id: "evt-0", n: 9 });
+    xero.state.refresh = "rt-other";
+    const start = handleXeroConnect(req("GET", "/api/xero/connect", OWNER), db);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${state}`, OWNER), db);
+    expect(sync()).toMatchObject({ status: "pending", externalRef: null });
+    expect(exportPendingCsv(db).csv).toContain("JOB-PAL3D-0927");
+  });
+
+  it("nit. a record put to a person stops holding its settlement", async () => {
+    await connect();
+    noW9(true);
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_jake", { kind: "invoice", reference: "INV-JM-9703", totalMinor: 45_000, currency: "USD" });
+    const id = await payPart(bill, 45_000);
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Payments") && c.body.includes(':wh"'), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    await runXeroSync(db);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), id, "RETURN-9703");
+    for (let i = 0; i < 4; i++) await runXeroSync(db, { force: true });
+    expect(records("withholding")[0]).toMatchObject({ status: "needs_person", uncertain: false });
+    expect(records("settlement").find((r) => r.obligationId === id)).toMatchObject({ status: "skipped" });
+  });
+
+  it("nit. a row looked up this pass is not looked up again before it is sent", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => "network" });
+    await runXeroSync(db);
+    const before = xero.api("GET", "/Invoices").length;
+    await runXeroSync(db, { force: true });
+    expect(xero.api("GET", "/Invoices").length - before).toBe(1);
+    expect(xero.state.invoices).toHaveLength(1);
+  });
+});
+
 describe("Mapping and disconnect", () => {
   it("saves a mapping only with accounts of the right kind from this organisation", async () => {
     await connect();

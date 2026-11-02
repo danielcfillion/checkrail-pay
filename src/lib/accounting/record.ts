@@ -142,15 +142,27 @@ function withXeroPayment(db: Db, rows: Array<{ id: string; payload: AccountingPa
   const finished = new Map(mine("settlement").map((r) => [r.sync!, r.status]));
   const payments = mine("payment");
   const paymentId = new Map(payments.filter((r) => r.status === "pushed").map((r) => [r.sync!, r.id]));
+  const sentPayments = [...payments, ...mine("withholding")];
   const obIds = rows.map((r) => r.payload.obligationId).filter(Boolean);
   const returned = new Set(obIds.length ? db.select({ id: obligations.id }).from(obligations).where(and(inArray(obligations.id, obIds), eq(obligations.state, "refunded"))).all().map((o) => o.id) : []);
   const owned = live && conn ? new Map([...billApprovedAt(db, rows.map((r) => r.payload.obligationId).filter(Boolean)).entries()]) : new Map<string, string>();
   return rows.map((r) => {
     const done = finished.get(r.id);
     let mark = "";
-    // The payout came back: removed in Xero (or never sent), nothing to enter.
-    if (conn && returned.has(r.payload.obligationId) && (done !== undefined || payments.some((x) => x.sync === r.id))) mark = "xero:returned";
-    else if (done === "pushed") mark = paymentId.has(r.id) ? `xero:${paymentId.get(r.id)}` : "xero:returned";
+    const ownedLive = Boolean(live && conn && r.createdAt >= conn.syncFrom && (owned.get(r.payload.obligationId) ?? "") >= conn.syncFrom);
+    if (returned.has(r.payload.obligationId)) {
+      const mineSent = sentPayments.filter((x) => x.sync === r.id && x.id);
+      // Still in Xero (Xero would not delete it): its id, and the card asks a person to reverse it.
+      const stuck = mineSent.find((x) => x.status !== "reversed" && x.status !== "skipped");
+      if (stuck) mark = `xero:${stuck.id}`;
+      // Everything the push sent was removed, or nothing was sent: nothing to enter.
+      else if (mineSent.length || (ownedLive && done !== undefined)) mark = "xero:returned";
+      // Its bill is in the files: the payment there is reversed by hand.
+      else if (!ownedLive) mark = "returned:reverse-by-hand";
+      else mark = "xero:sending";
+      return { ...r.payload, xeroPayment: mark };
+    }
+    if (done === "pushed") mark = paymentId.has(r.id) ? `xero:${paymentId.get(r.id)}` : "xero:returned";
     else if (done === undefined && live && conn && r.createdAt >= conn.syncFrom && (owned.get(r.payload.obligationId) ?? "") >= conn.syncFrom) mark = "xero:sending";
     return { ...r.payload, xeroPayment: mark };
   });

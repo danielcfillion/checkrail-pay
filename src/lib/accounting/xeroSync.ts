@@ -48,6 +48,10 @@ export interface XeroSyncResult {
 const MAX_SETTLEMENTS_PER_PASS = 100;
 /** The most calls one pass makes; the rest wait for the next pass. Well under Xero's 60 a minute. */
 const MAX_CALLS_PER_PASS = 40;
+/** Look-ups of unsure rows take at most this many of a pass's calls, so real work always gets the rest. */
+export const LOOKUP_CALL_SHARE = 15;
+/** The start of the message a failed look-up leaves on its row; such a row waits its backoff before the next look-up. */
+const LOOKUP_FAILED = "checking it in Xero did not go through";
 /** A pass holds the lease this long and renews it before every call; a crashed process loses it when it runs out. */
 export const LEASE_MS = 90_000;
 
@@ -187,11 +191,13 @@ async function pass(db: Db, businessId: string, owner: string, force: boolean, n
   if (!live.length && !settlements.length && !upkeep.any && !unsureRows.length) return result;
 
   let budget = MAX_CALLS_PER_PASS;
+  let used = 0;
   const base = createXeroClient(db, businessId, conn.tenantId, { now });
   const client: XeroClient = {
     tenantId: base.tenantId,
     async request<T>(req: XeroRequest): Promise<T> {
       if (budget-- <= 0) throw new PassPaused();
+      used++;
       // Renew the lease; if another process holds it now (this one stalled past its expiry), stop.
       const renewed = db.update(xeroConnections).set({ leaseUntil: new Date(now() + LEASE_MS).toISOString() }).where(and(eq(xeroConnections.businessId, businessId), eq(xeroConnections.leaseOwner, owner))).run();
       if (renewed.changes !== 1) throw new PassPaused();
@@ -217,7 +223,7 @@ async function pass(db: Db, businessId: string, owner: string, force: boolean, n
       }
       conn = getXeroConnection(db, businessId)!;
     }
-    const ctx: Ctx = { db, businessId, conn, chart: parseChart(conn.chartJson), client, now, force, result, amendedBills: new Set() };
+    const ctx: Ctx = { db, businessId, conn, chart: parseChart(conn.chartJson), client, now, force, result, amendedBills: new Set(), lookedUp: new Set(), callsUsed: () => used };
     // First, anything that may already be in Xero (its answer was lost, or the server stopped mid-send) is looked up and
     // either adopted under its record or cleared, before any decision is taken about it. Then what changed since.
     if (unsureRows.length) {
@@ -268,6 +274,9 @@ interface Ctx {
   result: XeroSyncResult;
   /** Bill records whose request was amended and not yet brought into line in Xero: their payments wait. */
   amendedBills: Set<string>;
+  /** Records already looked up in Xero this pass: not looked up a second time. */
+  lookedUp: Set<string>;
+  callsUsed: () => number;
 }
 
 const recordWhere = (ctx: Ctx, kind: Kind, localKey: string) => and(eq(xeroRecords.businessId, ctx.businessId), eq(xeroRecords.tenantId, ctx.conn.tenantId), eq(xeroRecords.kind, kind), eq(xeroRecords.localKey, localKey));
@@ -345,7 +354,7 @@ async function attempt(ctx: Ctx, r: RecordRow, create: (write: Write) => Promise
   let wrote = false;
   const wasUnsure = unsure(r);
   try {
-    if (unsure(r) && lookup) {
+    if (unsure(r) && lookup && !ctx.lookedUp.has(r.id)) {
       const existing = await lookup();
       if (existing) {
         markPushed(ctx, r, existing);
@@ -511,7 +520,7 @@ async function pushBillGroup(ctx: Ctx, g: XeroBillGroup): Promise<void> {
       const contact = await contactId(ctx, contactName, { email: first.EmailAddress as string | null, country: first.POCountry as string | null });
       // Always look first: a bill already in Xero for this contact and number (imported from the file, or sent before
       // a demo reset, or before the process stopped) is used, not created again.
-      const existing = kind === "credit_note" ? await findCreditNote(ctx, number, contact) : await findBill(ctx, number, contact);
+      const existing = ctx.lookedUp.has(r.id) ? null : kind === "credit_note" ? await findCreditNote(ctx, number, contact) : await findBill(ctx, number, contact);
       const { body, hash } = billBody(ctx, g, contact);
       sentHash = hash;
       if (existing) return existing;
@@ -591,7 +600,8 @@ function findUpkeep(db: Db, conn: XeroConnectionRow): Upkeep {
 }
 
 function needsPerson(ctx: Ctx, r: RecordRow, message: string): void {
-  ctx.db.update(xeroRecords).set({ status: "needs_person", error: message, nextAttemptAt: null, updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
+  // Settled to a person: no longer "unsure", so it stops holding its settlement and the other records on its bill.
+  ctx.db.update(xeroRecords).set({ status: "needs_person", uncertain: false, error: message, nextAttemptAt: null, updatedAt: new Date(ctx.now()).toISOString() }).where(eq(xeroRecords.id, r.id)).run();
   if (!ctx.result.errors.includes(message)) ctx.result.errors.push(message);
 }
 
@@ -1006,9 +1016,15 @@ function findUnsure(db: Db, conn: XeroConnectionRow): RecordRow[] {
  * payment whose payout came back) treat it like any other. Not found: it is cleared, and goes again only if still due.
  */
 async function resolveUnsure(ctx: Ctx, rows: RecordRow[]): Promise<void> {
-  for (const r of rows) {
-    // Every pass, whatever the row's own wait: other records wait on this answer. The call budget still applies.
-    await upkeep(ctx, r, "checking it in Xero", async () => {
+  const start = ctx.callsUsed();
+  // Longest waiting first, so a capped pass reaches every row in turn.
+  for (const r of [...rows].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) {
+    if (ctx.callsUsed() - start >= LOOKUP_CALL_SHARE) break;
+    // Other records wait on this answer, so the row's own send backoff does not delay it. A look-up that failed waits
+    // its own backoff, though: an error is not retried every 15 seconds.
+    const lookupFailed = (r.error ?? "").includes(LOOKUP_FAILED);
+    await upkeep(ctx, r, LOOKUP_FAILED.replace(" did not go through", ""), async () => {
+      ctx.lookedUp.add(r.id);
       const found = await lookupRecord(ctx, r);
       const ts = new Date(ctx.now()).toISOString();
       if (found) {
@@ -1035,7 +1051,7 @@ async function resolveUnsure(ctx: Ctx, rows: RecordRow[]): Promise<void> {
         // so a retry inside Xero's window gets the first answer if its search simply had not caught up.
         ctx.db.update(xeroRecords).set({ status: r.status === "sending" ? "pending" : "failed", uncertain: false, error: r.status === "sending" ? null : "Not found in Xero: it is sent again.", updatedAt: ts }).where(eq(xeroRecords.id, r.id)).run();
       }
-    }, { ignoreWait: true });
+    }, { ignoreWait: !lookupFailed });
   }
 }
 
