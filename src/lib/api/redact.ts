@@ -1,5 +1,5 @@
 /**
- * What an integration may read about why a request is held or blocked (API review R5-M3). The text is built from the
+ * What an integration may read about why a request is held or blocked. The text is built from the
  * rule's code alone, never from the message a person sees: those messages name other suppliers, other payments, their
  * states and their dates, and no rewording of them is safe to hand out. One fixed sentence per code, no amounts or
  * names from the books.
@@ -33,9 +33,11 @@ export const API_REASON: Readonly<Record<string, string>> = {
   ai_confidence: "The reader is not confident about this request.",
   ai_flag: "The reader raised a concern; a person looks.",
   agent_mismatch: "The description disagrees with the request's fields; a person confirms which is right.",
+  reference_spread: "This key or agent has tried many different references for this supplier in a short time; a person looks.",
   ai_missing: "The reader wants more information.",
-  // Every rule about bills reads the same to an outside caller (API reviews R8, R10): see BILL_NEUTRAL.
+  // Every rule about bills reads the same to an outside caller: see BILL_NEUTRAL.
   bill_recent: "A person reviews payments to this supplier.",
+  bill_other_supplier: "A person reviews payments to this supplier.",
   bill_part_repeat: "A person reviews payments to this supplier.",
   bill_part: "A person reviews payments to this supplier.",
   bill_review: "A person reviews payments to this supplier.",
@@ -45,7 +47,7 @@ export const API_REASON: Readonly<Record<string, string>> = {
 
 /**
  * The one answer an outside caller gets for any request held because of bills, whether it names one or not and whether
- * it fits or not (API reviews R8, R10): nothing it sees may depend on whether a bill matched, nor on a bill's balance,
+ * it fits or not: nothing it sees may depend on whether a bill matched, nor on a bill's balance,
  * state or other parts.
  */
 export const BILL_NEUTRAL = API_REASON.bill_review;

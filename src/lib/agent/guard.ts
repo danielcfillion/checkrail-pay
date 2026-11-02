@@ -9,7 +9,7 @@ import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendor
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { AGENT_FLAG_PREFIX, ingestObligation, supplierBillReview } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, SPREAD_LIMIT, ingestObligation, supplierBillReview } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
@@ -28,9 +28,9 @@ import { outsideView, type RequestStatus } from "../api/view";
  *  - payment_status, lookup_payee and explain_rule only read.
  *
  * Everything an agent sends is data. The payee, amount, currency and reference the agent sends as fields are the
- * request: the reader never replaces them, so a verdict covers exactly what was sent (reviews AG-1, AG2-1). When the
+ * request: the reader never replaces them, so a verdict covers exactly what was sent. When the
  * agent's own text disagrees with its fields, a person looks (a hold), and the agent is told not to change a field to
- * match (AG2-3).
+ * match.
  * Messages coming back are trimmed, carry no internal ids, emails, account numbers or other suppliers' names, because
  * they can quote what a supplier wrote and the calling agent will read them.
  */
@@ -73,7 +73,7 @@ export function amountToMinor(v: unknown, name = "amount"): number {
   return minor;
 }
 
-/** A reference as references are written: letters, digits and . _ / # : - only, no spaces or line breaks (AG3-1, AG3-9). */
+/** A reference as references are written: letters, digits and . _ / # : - only, no spaces or line breaks. */
 function refText(v: unknown, name: string): string | null {
   const t = text(v, name, 64);
   if (t !== null && !isValidSourceRef(t)) throw new AgentInputError(`${name} must be letters and digits, with only . _ / # : - between them (no spaces), as on the invoice or job sheet`);
@@ -87,7 +87,7 @@ export function validatePaymentArgs(raw: unknown) {
   const currency = (text(a.currency, "currency", 3, true) ?? "").toUpperCase();
   if (!SUPPORTED_CURRENCIES.includes(currency)) throw new AgentInputError(`currency must be one of ${SUPPORTED_CURRENCIES.join(", ")}`);
   const amountMinor = amountToMinor(a.amount);
-  // VND has no smaller unit: "4320000.50" is a typo, not an amount (review AG2-10).
+  // VND has no smaller unit: "4320000.50" is a typo, not an amount.
   const whole = (minor: number | null, name: string) => {
     if (minor != null && ZERO_DECIMAL_CURRENCIES.has(currency) && minor % 100 !== 0) throw new AgentInputError(`${name} must be a whole number of ${currency}`);
     return minor;
@@ -120,8 +120,8 @@ const norm = (s: string) => s.normalize("NFC").toLowerCase().replace(/\s+/g, " "
 
 /**
  * The supplier the agent named: exact name, the contact email on file, or else the one supplier whose name is the same
- * once accents and punctuation are set aside ("Huong Giang Boats" for "Hương Giang Boats", review AG2-8). Never the
- * PayPal email (review AG-6).
+ * once accents and punctuation are set aside ("Huong Giang Boats" for "Hương Giang Boats"). Never the
+ * PayPal email.
  */
 function vendorNamed(db: Db, businessId: string, payee: string) {
   const all = db.select().from(vendors).where(eq(vendors.businessId, businessId)).all();
@@ -150,7 +150,7 @@ const ADDED_BEFORE = /(?:\bplus|\+|\band(?:\s+an?)?)\s*$/i;
 type Stated = { amountMinor: number; currency: string; index: number; length: number };
 
 /**
- * Does the amount sent follow from the figures stated (agent guard reviews AG3-5, AG4-7, AG5-4, AG6-9, AG6-10)?
+ * Does the amount sent follow from the figures stated?
  * The figures it may start from are the one the text asks to pay when there is one, else any. From those: the figure
  * itself, a rate times counts stated with a unit, then plus a figure added on ("plus", "+"), less a figure labelled as
  * a deposit, paid or a discount, less a stated discount percentage, or a stated percentage of it (a deposit). A part
@@ -164,7 +164,7 @@ function amountFollows(sent: number, stated: Stated[], text: string): boolean {
   const bases = asked.length ? asked : stated;
   let rest = text;
   for (const x of [...stated].sort((p, q) => q.index - p.index)) rest = `${rest.slice(0, x.index)} ${rest.slice(x.index + x.length)}`;
-  // Each stated count is used once: "USD 95 a day for 2 days" is 2 days, never 2 x 2 (AG7-8).
+  // Each stated count is used once: "USD 95 a day for 2 days" is 2 days, never 2 x 2.
   const counts = [...rest.matchAll(COUNT_RE)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => n >= 1 && n <= 366).slice(0, 6);
   const products = new Set<number>();
   for (let mask = 1; mask < 1 << counts.length; mask++) products.add(counts.reduce((acc, n, i) => (mask & (1 << i) ? acc * n : acc), 1));
@@ -174,10 +174,10 @@ function amountFollows(sent: number, stated: Stated[], text: string): boolean {
     if (RATE_AFTER.test(after(b)) || RATE_BEFORE.test(before(b, 6))) for (const n of products) values.push({ v: b.amountMinor * n, from: b });
   }
   const taken = stated.filter((x) => SUBTRACTED.test(`${before(x, 20)} ${after(x, 20)}`));
-  // A figure labelled as paid is never added on, whatever joins it ("and USD 190 already paid", AG7-8).
+  // A figure labelled as paid is never added on, whatever joins it ("and USD 190 already paid").
   const added = stated.filter((x) => !taken.includes(x) && (ADDED_BEFORE.test(before(x, 12)) || /^\s*(?:\p{L}+\s+){0,2}fee\b/iu.test(after(x))));
-  // Percentages up to 100 only: a "200% surcharge" is a penalty clause, not the payment (AG7-8). Withholding and other
-  // deductions take a percentage off (AG7-9).
+  // Percentages up to 100 only: a "200% surcharge" is a penalty clause, not the payment. Withholding and other
+  // deductions take a percentage off.
   const pcts = [...text.matchAll(/(\d{1,3})\s?%/g)].map((m) => ({ p: Number(m[1]), off: /less|minus|discount|off\b|deduct|withh?old/i.test(text.slice(Math.max(0, m.index! - 16), m.index! + m[0].length + 24)) })).filter(({ p }) => p > 0 && p <= 100);
   for (const { v, from } of values) {
     if (v === sent) return true;
@@ -193,7 +193,7 @@ const familyOf = (ref: string) => (canonicalRef(ref) ?? "").match(/^\p{L}+/u)?.[
 
 /**
  * Phrases that say who is to be paid. "Send", "transfer" and "wire" count only with money before "to" ("transfer USD 190
- * to"), so "send the receipt to Maria" and "transfer to Maria's boat" do not; "credit" only as "credit (it) to" (AG6-8).
+ * to"), so "send the receipt to Maria" and "transfer to Maria's boat" do not; "credit" only as "credit (it) to".
  */
 const PAY_PHRASE = /\b(?:pay(?:\s+out)?|paid to|payable to|payee|recipient|remit(?:\s+to)?|beneficiary(?:\s+is)?|credit(?:\s+it)?\s+to|owed to|settle with|thanh\s+to[aá]n\s+cho|tr[aả]\s+cho|chuy[eể]n\s+(?:kho[aả]n\s+|ti[eề]n\s+)?cho|payment\s+(?:goes\s+)?to|(?:money|funds|payment)\s+goes\s+to|send\s+(?:this|it)\s+to|(?:send|transfer|release|wire)\b[^.;!?\n]{0,30}?(?:\d|USD|PHP|VND|THB|EUR|\$|₱|money|payment|funds|fee|balance|\bit\b)[^.;!?\n]{0,10}?\b(?:to|into)|deposit\b[^.;!?\n]{0,30}?\binto)\b/giu;
 
@@ -201,10 +201,10 @@ const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Where the agent's own description disagrees with the fields it sent: one sentence per field, or none. Only the
- * description is read, never the header Checkrail writes from the fields (review AG2-3). It disagrees when:
+ * description is read, never the header Checkrail writes from the fields. It disagrees when:
  *  - any paying phrase names, in the same clause, a supplier who is not the payee ("do not pay Rosa; pay Maria
  *    instead", "transfer USD 190 to Maria", "pay Rosa's partner Maria"), or, with no paying phrase, the words name
- *    other suppliers and never the payee (AG5-4, AG6-8);
+ *    other suppliers and never the payee;
  *  - it states amounts, in any currency, and the amount sent does not follow from them (see amountFollows);
  *  - it names another job of the same kind as the reference sent (CEB-3D-1102 for CEB-2D-1024), however written.
  * Text is read after NFKC with zero-width characters removed, so full-width or hidden letters change nothing.
@@ -227,8 +227,8 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     [v.name, ...wordsOf(v)].some((w) => new RegExp(`(?<![\\p{L}])${escapeRe(w)}['’]s\\b(?!\\s+(?:paypal\\s+)?(?:account|wallet|paypal|bank))`, "iu").test(text));
   const payees = new Set<string>();
   // Who agreed or confirmed is not who is paid: "as agreed with Maria", "confirmed by Maria", "as Maria confirmed" are
-  // taken out before reading who a paying phrase names (AG7-9). Only these, not a bare comma or "as", so "Pay, as agreed,
-  // Maria Santos" and "Pay the fee as invoiced to Maria Santos" still name Maria (AG8-2).
+  // taken out before reading who a paying phrase names. Only these, not a bare comma or "as", so "Pay, as agreed,
+  // Maria Santos" and "Pay the fee as invoiced to Maria Santos" still name Maria.
   const attribution = /\b(?:as\s+)?(?:agreed|confirmed|approved|arranged|signed|checked|noted)\s+(?:with|by)\s+[^,.;!?\n]*|\bas\s+(?:[\p{L}'’]+\s+){1,3}(?:confirmed|agreed|said|approved|noted|checked)\b|\bas\s+(?:agreed|confirmed|noted)\b|\baccording\s+to\s+[^,.;!?\n]*/giu;
   const dPay = d.replace(attribution, " ");
   for (const m of dPay.matchAll(PAY_PHRASE)) {
@@ -237,7 +237,7 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0 && !possessive(clause, x.v)).sort((x, y) => x.at - y.at)[0];
     if (hit) payees.add(hit.v.id);
   }
-  // "Maria Santos should be paid": the last supplier named before the passive (AG7-7).
+  // "Maria Santos should be paid": the last supplier named before the passive.
   for (const m of dPay.matchAll(/\b(?:should|must|will|is\s+to|needs?\s+to|to)\s+be\s+paid\b/gi)) {
     const clause = dPay.slice(0, m.index!).split(/[.;!?\n]/).pop() ?? "";
     const hit = names.map((v) => ({ v, at: mentionAt(clause, v) })).filter((x) => x.at >= 0).sort((x, y) => y.at - x.at)[0];
@@ -262,7 +262,7 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
     const at = m.index! + m[0].indexOf(m[1]);
     stated.push({ amountMinor: minor, currency: a.currency, index: at, length: m.index! + m[0].length - at });
   }
-  // "total 190": a total with no currency is in the currency sent (AG7-8).
+  // "total 190": a total with no currency is in the currency sent.
   for (const m of dAmt.matchAll(/\btotal\s*[:=]?\s*(\d{1,3}(?:,\d{3})+|\d{2,9})(?:\.(\d{1,2}))?(?!\d|[.,]\d|\s*(?:%|\p{L}))/giu)) {
     const minor = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0") || "0");
     const at = m.index! + m[0].indexOf(m[1]);
@@ -276,7 +276,7 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
   if (a.reference) {
     const sent = new Set([...sourceRefKeys(a.reference), ...jobKeys(a.reference)].filter((k) => k.startsWith("~")));
     // Job identifiers however typed: the dashed ones jobKeys finds, and unseparated runs of letters and three or more
-    // digits like CEB3D1102 (not "CEB 2 day" or "Inv 1 of 2", AG5-4).
+    // digits like CEB3D1102 (not "CEB 2 day" or "Inv 1 of 2").
     const loose = (d.match(/\b\p{L}{2,6}[-_./]?\d[\p{L}\p{N}]*(?:[-_./]\p{L}*\d[\p{L}\p{N}]*)*\b/gu) ?? []).filter((x) => (x.match(/\d/g) ?? []).length >= 3);
     const ids = [...new Set([...jobKeys(d).filter((k) => !k.startsWith("~")), ...loose])];
     const same = (k: string) => [...sourceRefKeys(k), ...jobKeys(k)].some((x) => x.startsWith("~") && sent.has(x));
@@ -289,12 +289,12 @@ function disagreementsOf(db: Db, businessId: string, asked: { id: string; name: 
 
 /**
  * The probe key: the supplier Checkrail resolved (else the name as normalised), the currency and the reference. Trying
- * amount after amount for one job is looking for the line (review AG-7); a batch of different jobs is not (AG2-5).
+ * amount after amount for one job is looking for the line; a batch of different jobs is not.
  */
 const probeKeyOf = (vendorId: string | null | undefined, payee: string, currency: string, reference: string | null) =>
   `${vendorId ? `ven:${vendorId}` : `name:${normaliseName(payee)}`}|${currency}|${jobOfRef(reference) ?? (reference ?? "").toLowerCase()}`;
 
-/** Every comparison form of a reference, as the duplicate check sees it, so a probe is caught under any spelling (AG7-11). */
+/** Every comparison form of a reference, as the duplicate check sees it, so a probe is caught under any spelling. */
 const probeForms = (reference: string | null) => new Set([...sourceRefKeys(reference), ...jobKeys(reference)].map(bareKey).filter((k) => k.length >= 3));
 
 function probing(db: Db, agent: AgentKey, key: string, amountMinor: number, reference: string | null = null): number {
@@ -307,9 +307,19 @@ function probing(db: Db, agent: AgentKey, key: string, amountMinor: number, refe
   return new Set([...recent.map((x) => x.amountMinor), amountMinor]).size;
 }
 
+/** Different references this agent asked about for this supplier in the last ten minutes, this one aside. */
+function referenceSpread(db: Db, agent: AgentKey, key: string, reference: string | null): number {
+  const head = key.slice(0, key.indexOf("|") + 1);
+  const mine = (reference ?? "").trim().toUpperCase();
+  const rows = db.select({ reference: agentChecks.reference }).from(agentChecks)
+    .where(and(eq(agentChecks.agent, agent.name), like(agentChecks.payeeKey, `${head}%`), gte(agentChecks.createdAt, new Date(Date.now() - 10 * 60_000).toISOString())))
+    .all();
+  return new Set(rows.map((r) => (r.reference ?? "").trim().toUpperCase()).filter((r) => r && r !== mine)).size;
+}
+
 /**
  * The request text Checkrail keeps and reads: a header written from the fields, amount first and the supplier by the
- * name on file, then the agent's own words quoted, never mistaken for ours (reviews AG-8, AG2-2, AG2-9). The agent's
+ * name on file, then the agent's own words quoted, never mistaken for ours. The agent's
  * name is not in it: a name like "tour-desk" would read as a reference. The audit log records who asked.
  */
 function requestTextFor(kind: string, payeeName: string, a: ReturnType<typeof validatePaymentArgs>): string {
@@ -324,15 +334,15 @@ export function evidenceSourceOf(agent: AgentKey): "system" | "operator" {
   return agent.scopes.includes("attest") ? "system" : "operator";
 }
 
-/** A word as redaction compares it, in any script: compatibility forms and accents set aside, case ignored (AG3-8). */
+/** A word as redaction compares it, in any script: compatibility forms and accents set aside, case ignored. */
 const foldWord = (w: string) => w.normalize("NFKD").replace(/\p{M}/gu, "").replace(/đ/gi, "d").toLowerCase();
 const wordsIn = (s: string) => [...s.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, w: foldWord(m[0]) })).filter((t) => t.w.length > 0);
 
 /**
  * What goes back to an agent: no internal ids, no emails, account numbers or payout addresses, no other supplier's
- * name, no runaway length (review AG-6). `others` are the names of suppliers the agent did not ask about; `keep` the
+ * name, no runaway length. `others` are the names of suppliers the agent did not ask about; `keep` the
  * one it did. Names are matched as whole words in any script with accents set aside, and a distinctive part of a
- * name ("Maria" of "Maria Santos") counts too; the payee asked about is never cut (AG2-4, AG3-8). Reference-shaped
+ * name ("Maria" of "Maria Santos") counts too; the payee asked about is never cut. Reference-shaped
  * tokens ("INV-2026-000123") keep their digits.
  */
 export function clean(message: string, others: string[] = [], keep: string | null = null): string {
@@ -344,7 +354,7 @@ export function clean(message: string, others: string[] = [], keep: string | nul
     .replace(/[^\s*@<>"',;()]+\*[^\s*@<>"',;()]+\.[^\s*@<>"',;().]{2,}/gu, "[payout account]")
     .replace(/\b[GM][A-Z0-9]{34,75}\b/g, "[payout account]")
     .replace(/\b(?:IBAN|Iban|iban)\s*:?\s*[A-Za-z]{2}\d{2}(?:[\s-]?[0-9A-Z]){10,32}/g, "[payout account]")
-    // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account, AG5-7).
+    // An IBAN as banks write it, in groups of four (an unspaced PO number is a reference, not an account).
     .replace(/\b[A-Z]{2}\d{2}(?:[ -][A-Z0-9]{4}){2,7}(?:[ -][A-Z0-9]{1,4})?\b/g, "[payout account]")
     .replace(/\b(?:acct|account|acc\.?|a\/c)(?:\b|(?<=\.))(?:\s+(?:no\.?|number|ending(?:\s+in)?|#))?\s*[:#]?\s*\d[\d -]{2,}\d/gi, "[payout account]")
     .replace(/(?:\*{2,}|•{2,}|·{2,}|…|\.{3}|\b[xX]{3,})[-\s]?\d{2,}/g, "[payout account]")
@@ -355,7 +365,7 @@ export function clean(message: string, others: string[] = [], keep: string | nul
   const otherWordSets = others.map((n) => wordsIn(n).map((t) => t.w));
   const parts = new Set(otherWordSets.flat().filter((w) => [...w].length >= 3 && !keepWords.includes(w) && !isGenericWord(w)));
   if (fulls.length || parts.size) {
-    // A word inside a reference ("TAM" of INV-TAM-0834) is part of the reference, not a name: it stays (AG4-11).
+    // A word inside a reference ("TAM" of INV-TAM-0834) is part of the reference, not a name: it stays.
     const inRef = [...out.matchAll(/[\p{L}\p{N}]+(?:[-_/.][\p{L}\p{N}]+)+/gu)].filter((m) => /\d/.test(m[0])).map((m) => [m.index!, m.index! + m[0].length] as const);
     const tokens = wordsIn(out).filter((t) => !inRef.some(([a, b]) => t.start >= a && t.end <= b));
     // The payee asked about is never cut: another supplier called "Rosa" leaves "Rosa Villanueva" whole.
@@ -377,7 +387,7 @@ export function clean(message: string, others: string[] = [], keep: string | nul
 
 /**
  * A rule's message as an agent may read it. That a reference is on another supplier's payment is enough for an agent
- * to stop; which supplier, and how far that payment got, would let an agent map who was paid for what (AG7-14).
+ * to stop; which supplier, and how far that payment got, would let an agent map who was paid for what.
  */
 function forAgent(rule: string, message: string): string {
   if (rule === "reference_other_vendor") return "This reference is also on a payment to another supplier; a person checks who did the job";
@@ -455,14 +465,19 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   let verdict = r.verdict;
   // A payment held because of bills reads the same to an agent whether it names a bill or not and whether it fits or
   // not: hold, one neutral sentence, nothing that depends on a match or on a bill's balance, state or other parts, so no
-  // answer can be used to find a bill or what is open (API reviews R8, R10).
-  const aboutBill = Boolean(asked && supplierBillReview(db, asked.id, a.reference));
+  // answer can be used to find a bill or what is open.
+  const aboutBill = supplierBillReview(db, biz.id, asked?.id, a.reference);
   const blocks = aboutBill ? [] : r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
   const warnings = aboutBill ? [{ rule: "bill_review", message: BILL_NEUTRAL }] : r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) }));
   if (aboutBill) verdict = "hold";
 
   // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
   const distinct = probing(db, agent, payeeKey, a.amountMinor, a.reference);
+  // An agent trying reference after reference for one supplier is looking for bills on file: past the limit, a person.
+  if (!aboutBill && verdict !== "block" && referenceSpread(db, agent, payeeKey, a.reference) >= SPREAD_LIMIT) {
+    verdict = "hold";
+    warnings.unshift({ rule: "reference_spread", message: "This agent has tried many different references for this supplier in 10 minutes; a person confirms this one" });
+  }
   if (distinct >= PROBE_DISTINCT_AMOUNTS && verdict !== "block" && !aboutBill) {
     verdict = "hold";
     warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payment in 15 minutes; a person confirms this one` });
@@ -520,8 +535,8 @@ export function whenRelease(iso: string, at = Date.now()): string {
 }
 
 function describe(db: Db, id: string): StatusAnswer {
-  // The same outside view the REST API reads (src/lib/api/view.ts), so the two channels cannot drift (API review
-  // R9-M2): status and reasons come from it, reasons as fixed sentences per rule code.
+  // The same outside view the REST API reads (src/lib/api/view.ts), so the two channels cannot drift:
+  // status and reasons come from it, reasons as fixed sentences per rule code.
   const v = outsideView(db, id);
   if (!v) throw new AgentInputError("No such request");
   const { ob, settled, attempt } = v;
@@ -535,7 +550,7 @@ function describe(db: Db, id: string): StatusAnswer {
     : status === "waiting_for_evidence" ? "Waiting for supporting evidence before anyone can approve it."
     : status === "waiting_for_approval" ? `Waiting for a person to approve${reasons[0] ? `: ${reasons[0]}` : "."}`
     : status === "scheduled" ? `Autopilot sends it ${whenRelease(v.releasesAt!)} unless a person cancels before then.`
-    : status === "approved" ? (v.aboutBill ? "Approved by a person; it is sent from here." : "Approved by the rules; a person sends it.")
+    : status === "approved" ? (!v.aboutBill ? "Approved by the rules; a person sends it." : v.verdict === "approved" ? "Approved by a person; it is sent from here." : "Waiting to be sent.")
     : status === "sending" ? "Sent to the payment rail; waiting for it to confirm."
     : status === "paid" ? `Paid${settled ? ` over ${settled.rail}` : ""}.`
     : status === "returned" ? "The payment came back; a person decides what happens next."
@@ -557,7 +572,7 @@ function describe(db: Db, id: string): StatusAnswer {
 
 /**
  * One request at a time per business, in this process. Two requests for the same job racing through ingest would each
- * miss the other and both be scheduled (review AG-2); in turn, the second sees the first as committed and is blocked.
+ * miss the other and both be scheduled; in turn, the second sees the first as committed and is blocked.
  * The stdio server queues its messages too, and policy runs again at release whatever happened here.
  */
 const lanes = new Map<string, Promise<unknown>>();
@@ -591,7 +606,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
     // A retry, or two calls racing, gets the one request this key stands for.
     const existing = db.select().from(agentChecks).where(and(eq(agentChecks.agent, agent.name), eq(agentChecks.idempotencyKey, idem))).get();
     if (existing && existing.verdict === "refused" && !existing.obligationId) {
-      // Nothing was created under a refused key, so a corrected request may use it again (review AG2-10). The refusal
+      // Nothing was created under a refused key, so a corrected request may use it again. The refusal
       // stays in the log, and still counts towards the probe hold.
       db.update(agentChecks).set({ idempotencyKey: null }).where(eq(agentChecks.id, existing.id)).run();
     } else if (existing) {
@@ -600,7 +615,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
       return { ...describe(db, existing.obligationId), replayed: true };
     }
 
-    // A request that follows a run of other amounts for the same job is refused before anything is written (AG-7).
+    // A request that follows a run of other amounts for the same job is refused before anything is written.
     const asked = vendorNamed(db, biz.id, a.payee);
     const payeeKey = probeKeyOf(asked?.id, a.payee, a.currency, a.reference);
     const refuse = (summary: string): never => {
@@ -609,7 +624,7 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
     };
     if (probing(db, agent, payeeKey, a.amountMinor, a.reference) >= PROBE_DISTINCT_AMOUNTS) refuse("this agent has tried several different amounts for this payment in 15 minutes. Ask a person for the right figure and its record.");
 
-    // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person (AG2-1, AG2-3).
+    // The agent's fields are fixed on the request; its own text, where it disagrees, holds it for a person.
     const concerns = disagreementsOf(db, biz.id, asked, a);
     const claim = log(db, { businessId: biz.id, agent: agent.name, tool: "request_payment", verdict: "hold", payee: a.payee, payeeKey, amountMinor: a.amountMinor, currency: a.currency, reference: a.reference, summary: "Creating the request", rulesJson: null, obligationId: null, idempotencyKey: idem });
     let id: string;
@@ -625,11 +640,11 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
         stated: { vendorId: asked?.id ?? null, amountMinor: a.amountMinor, currency: a.currency, sourceRef: a.reference, flags: concerns, trusted: agent.scopes.includes("attest") },
       });
     } catch (e) {
-      // Nothing half-made stays behind: no stuck key, no orphan draft (review AG-4).
+      // Nothing half-made stays behind: no stuck key, no orphan draft.
       const orphan = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `%request ${claim}]%`)).get();
       if (orphan) withdraw(db, orphan.id, agent, "creating the request failed");
       db.delete(agentChecks).where(eq(agentChecks.id, claim)).run();
-      // Never the exception's own text: it can name other payments or internal ids (API review R6-2). The detail goes
+      // Never the exception's own text: it can name other payments or internal ids. The detail goes
       // to the server log.
       console.error("[checkrail] agent request could not be created", e);
       throw new AgentInputError("Checkrail could not process this request. Nothing was paid.");
@@ -665,8 +680,8 @@ export function lookupPayee(db: Db, raw: unknown) {
   const biz = businessOf(db);
   const v = vendorNamed(db, biz.id, name);
   if (!v) {
-    // Suggestions only for a real attempt at a name: four characters or more, sharing a whole word (review AG-6).
-    // Generic words ("transport", "boats") name a kind of business, not one, so they suggest nothing (AG2-6).
+    // Suggestions only for a real attempt at a name: four characters or more, sharing a whole word.
+    // Generic words ("transport", "boats") name a kind of business, not one, so they suggest nothing.
     const words = new Set(normaliseName(name).split(" ").filter((w) => w.length >= 3 && !isGenericWord(w)));
     const close = normaliseName(name).length < 4 ? [] : db.select({ name: vendors.name }).from(vendors).where(eq(vendors.businessId, biz.id)).all().map((x) => x.name).filter((n) => normaliseName(n).split(" ").some((w) => words.has(w))).slice(0, 3);
     return { known: false, name: null, suggestions: close, note: "Checkrail does not pay a payee it does not know. A person adds and verifies new suppliers." };

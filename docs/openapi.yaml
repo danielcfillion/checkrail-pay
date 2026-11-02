@@ -718,13 +718,15 @@ components:
           description: The internal state behind status.
         verdict:
           type: [string, "null"]
-          enum: [pay, hold, block, approved, null]
+          enum: [pay, hold, block, approved, pending, null]
           description: >-
             What the rules say. pay still means policy and the autonomy setting decide who sends it. A request to a
             supplier with a bill in the last 180 days, or whose reference matches a bill of the supplier, always reads
             status waiting_for_approval, state awaiting_approval, verdict hold, rules_failed [bill_review] and one fixed
-            reason while it waits, whether it matches or fits a bill or not; a person reviews it. Once a person approved it and until it is paid, refused or
-            cancelled, verdict approved with the same reason; after that, its own status only.
+            reason while it waits, whether it matches or fits a bill or not; a person reviews it. Once a person
+            approved it and until it is paid, refused or cancelled, verdict approved with the same reason; one the
+            rules approved before a bill held it reads verdict pending and status approved. After that, its own status
+            only. rail stays null until the request is final.
         reasons:
           type: array
           items:

@@ -1,28 +1,28 @@
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { obligations, paymentAttempts, settlements } from "../db/schema";
-import { AGENT_FLAG_PREFIX, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, approvedByPerson, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
 import { BILL_NEUTRAL, apiReasons } from "./redact";
 
 /**
  * What an outside caller (an API key or an outside agent) may read about a request it made: one builder for both
- * channels, so the REST API and the MCP agent tools cannot drift apart (API review R9-M2).
+ * channels, so the REST API and the MCP agent tools cannot drift apart.
  *
  * Reasons are fixed sentences per rule code (redact.ts), never the messages a person reads. A request held because of
  * bills (on one, naming one, or to a supplier with a bill in the last 180 days) reads the same whatever the bills'
- * balance, state or other parts, and whether a bill matched at all (R8, R9-S1, R10):
+ * balance, state or other parts, and whether a bill matched at all:
  *  - while it waits (blocked, waiting for evidence or for a person): waiting_for_approval, verdict hold;
  *  - once a person approved it, until it is paid, refused or cancelled: its approved or scheduled status, verdict
  *    approved;
  *  - in both, rules_failed [bill_review] and the one neutral sentence;
  *  - once it is in flight or final: its own status only, with no reasons and no rules.
- * Known and left as is (review R10-N2): an approved request whose fit changes before release (another part, a credit,
+ * Known and left as is: an approved request whose fit changes before release (another part, a credit,
  * the bill closed) goes back to waiting, so the caller sees approved and then waiting_for_approval. That says only that
  * something changed, not what, and whether it is finally paid depends on the bill anyway.
  */
 
 export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_approval" | "scheduled" | "approved" | "sending" | "paid" | "returned" | "cancelled" | "failed" | "disputed";
-export type Verdict = "pay" | "hold" | "block" | "approved" | null;
+export type Verdict = "pay" | "hold" | "block" | "approved" | "pending" | null;
 
 export interface OutsideView {
   ob: typeof obligations.$inferSelect;
@@ -64,8 +64,14 @@ export function outsideView(db: Db, id: string, opts: { withReasons?: boolean } 
 
   if (outsideBillMatch(db, id)) {
     if (WAITING.includes(ob.state)) return { ...base, status: "waiting_for_approval", state: "awaiting_approval", verdict: "hold", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: null, rail: null, showWithheld: false, aboutBill: true };
-    if (ob.state === "approved") return { ...base, status, state: ob.state, verdict: "approved", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], rail: null, showWithheld: false, aboutBill: true };
-    return { ...base, status, state: ob.state, verdict: null, reasons: [], rulesFailed: [], rail: settled?.rail ?? attempt?.rail ?? null, showWithheld: true, aboutBill: true };
+    // "approved" only when a person approved it. One the rules approved before a bill held it reads pending, with no
+    // release time, and the rail stays hidden until the request is final.
+    if (ob.state === "approved") {
+      const byPerson = approvedByPerson(db, id);
+      return { ...base, status: byPerson ? status : "approved", state: ob.state, verdict: byPerson ? "approved" : "pending", reasons: [BILL_NEUTRAL], rulesFailed: ["bill_review"], releasesAt: byPerson ? base.releasesAt : null, rail: null, showWithheld: false, aboutBill: true };
+    }
+    const final = ["settled", "refunded", "cancelled", "failed", "disputed"].includes(ob.state);
+    return { ...base, status, state: ob.state, verdict: null, reasons: [], rulesFailed: [], rail: final ? settled?.rail ?? attempt?.rail ?? null : null, showWithheld: true, aboutBill: true };
   }
 
   const preview = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) && opts.withReasons !== false ? previewPolicy(db, id) : null;

@@ -148,10 +148,10 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
   return oneAtATime(businessId, async () => {
     const payee = payeeOf(db, businessId, a.payee, a.vendorId);
     // A key already bound to a request gets that request back, whatever happened to the stored answer: a retry after
-    // an error that came after the request was created must never create a second one (review R1-6b).
+    // an error that came after the request was created must never create a second one.
     let bound = db.select().from(apiRequests).where(and(eq(apiRequests.keyName, key.name), eq(apiRequests.idemKey, idemKey))).get();
     if (bound?.obligationId.startsWith(PENDING)) {
-      // The key was bound and then the process stopped before the request id was written back (review R2-S2). The
+      // The key was bound and then the process stopped before the request id was written back. The
       // request, if ingest got that far, carries the binding's id in its header.
       const made = madeUnder(db, bound.id);
       if (made) {
@@ -171,7 +171,7 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
       return describeRequest(db, bound.obligationId);
     }
     // Documents are stored and read like a clerk's upload; what they propose becomes the evidence row. If the request
-    // is refused after that, the stored copies go too, so a refused call leaves nothing behind (review R1-7).
+    // is refused after that, the stored copies go too, so a refused call leaves nothing behind.
     const evidence: Array<{ kind: string; label: string; amountMinor: number | null; currency: string | null; reference: string | null; excerpt: string | null; attachmentId?: string | null }> = [...a.evidence];
     const stored: string[] = [];
     const discardUploads = () => {
@@ -183,7 +183,7 @@ export async function createRequest(db: Db, businessId: string, key: ApiKey, ide
         up = await uploadDocument(db, { businessId, name: d.name, mimeType: d.mimeType, bytes: d.bytes, actor });
       } catch (e) {
         discardUploads();
-        // Never the exception's own text (review R6-2): a fixed sentence, and the detail in the server log.
+        // Never the exception's own text: a fixed sentence, and the detail in the server log.
         console.error("[checkrail] api document refused", e);
         throw new ApiError(422, "document_refused", `documents[${a.documents.indexOf(d)}] could not be stored or read. Send a PDF, PNG, JPEG, WebP, GIF or plain text file of at most 2 MB.`);
       }
@@ -234,14 +234,14 @@ export type { RequestStatus } from "./view";
 /**
  * A request as an integration may read it: status, verdict, reasons, amounts, rail and settlement, from the outside
  * view both channels share (view.ts). Never payout details: no PayPal email, bank account or wallet address.
- * `withReasons: false` (the list) skips re-running the checks: status and the stored verdict only (review R6-4).
+ * `withReasons: false` (the list) skips re-running the checks: status and the stored verdict only.
  */
 export function describeRequest(db: Db, id: string, opts: { withReasons?: boolean } = {}) {
   const v = outsideView(db, id, opts);
   if (!v) throw new ApiError(404, "not_found", "No such request");
   const { ob, settled, attempt } = v;
   const vendor = ob.vendorId ? db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(eq(vendors.id, ob.vendorId)).get() ?? null : null;
-  const pending = v.aboutBill && (v.verdict === "hold" || v.verdict === "approved");
+  const pending = v.aboutBill && (v.verdict === "hold" || v.verdict === "approved" || v.verdict === "pending");
   const settlement =
     pending ? { status: "not_sent", rail: null, provider_id: null, settled_at: null, sent: null, fee: null, received: null }
     : settled ? { status: ob.state === "refunded" ? "returned" : "settled", rail: settled.rail, provider_id: settled.externalId ?? attempt?.externalId ?? null, settled_at: settled.settledAt, sent: { value: amountText(settled.grossMinor, settled.grossCurrency), currency: settled.grossCurrency }, fee: { value: amountText(settled.feeMinor, settled.grossCurrency), currency: settled.grossCurrency }, received: settled.receivedMinor != null && settled.receivedCurrency ? { value: amountText(settled.receivedMinor, settled.receivedCurrency), currency: settled.receivedCurrency } : null }

@@ -669,8 +669,8 @@ export async function createBillAction(vendorId: string, bill: { kind: string; r
   try {
     const id = await withBusiness(async (db, b, who) => {
       const made = createBill(db, b, who, vendorId, bill);
-      // Requests from outside callers that already name this bill are put on it and checked again (API review R7-S4).
-      // The bill is recorded either way: a failure here is logged, not shown to the clerk as a failed bill (R8-N1).
+      // Requests from outside callers that already name this bill are put on it and checked again.
+      // The bill is recorded either way: a failure here is logged, not shown to the clerk as a failed bill.
       try {
         await linkWaitingToBill(db, made, who.id);
       } catch (e) {
@@ -718,7 +718,7 @@ export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: 
   try {
     const r = await withBusiness(async (db, b, who) => {
       const out = settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined);
-      // The difference bill picks up outside requests already waiting that name it, as any new bill does (R9-S3).
+      // The difference bill picks up outside requests already waiting that name it, as any new bill does.
       if (out.differenceBillId) {
         try {
           await linkWaitingToBill(db, out.differenceBillId, who.id);

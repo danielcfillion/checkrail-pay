@@ -101,7 +101,7 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
     for (const d of items) {
       const ref = tx.select().from(apiDepartureRefs).where(and(eq(apiDepartureRefs.businessId, businessId), eq(apiDepartureRefs.externalId, d.externalId))).get();
       const byCode = tx.select().from(departures).where(and(eq(departures.businessId, businessId), eq(departures.code, d.code))).get();
-      // A departure belongs to the key that first sent it: another key cannot change it (review R6 nit).
+      // A departure belongs to the key that first sent it: another key cannot change it.
       if (ref && ref.keyName !== keyName) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId} was sent by another API key, so this key cannot change it. Nothing in this call was saved.`);
       let id: string | null = ref?.departureId ?? null;
       if (id && byCode && byCode.id !== id) throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: code ${d.code} already belongs to another departure on file. Nothing in this call was saved.`);
@@ -114,7 +114,7 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
       }
       const current = id ? tx.select().from(departures).where(eq(departures.id, id)).get() : undefined;
       // A departure an approver imported or typed in is theirs: with the rate card it sets what a job may cost, which
-      // only an approver or the owner may change. The feed neither takes it over nor overwrites it (review R2-S1).
+      // only an approver or the owner may change. The feed neither takes it over nor overwrites it.
       if (current && current.source !== "booking_system") {
         throw new ApiError(409, "departure_conflict", `external_id ${d.externalId}: departure ${current.code} was imported or entered by an approver in Checkrail, so the feed cannot change it. An approver updates it there. Nothing in this call was saved.`);
       }
@@ -154,7 +154,7 @@ export async function upsertDepartures(db: Db, businessId: string, keyName: stri
   return { departures: results, rechecked };
 }
 
-/** The departures this key sent, starting on or after `since`: a key never reads another key's or an approver's (R7-N1). */
+/** The departures this key sent, starting on or after `since`: a key never reads another key's or an approver's. */
 export function departuresSince(db: Db, businessId: string, keyName: string, since: string | null) {
   if (since !== null && !realDate(since)) throw new ApiError(422, "validation_failed", "since must be a date, YYYY-MM-DD", [{ field: "since", message: "must be a date, YYYY-MM-DD" }]);
   const refs = db.select().from(apiDepartureRefs).where(and(eq(apiDepartureRefs.businessId, businessId), eq(apiDepartureRefs.keyName, keyName))).all();
