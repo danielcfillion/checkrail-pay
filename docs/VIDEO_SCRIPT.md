@@ -65,6 +65,18 @@ Shortens the Daily close shot to 2:30 to 2:44 and moves the end card to 2:44 to 
 
 Prep: reseed, open Bring in your data once so the page is warm, and set the browser to 1440 wide. With live AI on, a third optional insert (cut if the video runs long): type "Add a chart of money stopped by supplier" in Ask about your setup and hold on the new widget.
 
+## Optional: Try it yourself on auto (added 2 Nov, 12 seconds, cut first if the video runs long)
+
+Records on simulated rails in a sandbox copy (it is refused on live rails), so caption it "Simulated rails" for its length. Open `/try?sample=overcharge`, press **Play**, and let it run; it advances about every four seconds and never needs a click.
+
+| Time | On screen | Crop and zoom | Action | Voiceover |
+|---|---|---|---|---|
+| +0:00 to +0:04 | Try it yourself, step 3 lit: the checks for Phuong's USD 1,100 | 1.5x on the lit panel | Auto mode submits | Try it yourself. Phuong asks eleven hundred. |
+| +0:04 to +0:08 | Step 4 lit: Correct to USD 800.00 | 2x on the button as it is pressed | Auto mode corrects | The trip sheet says eight hundred, so that is what it becomes. |
+| +0:08 to +0:12 | Step 4 result: it now waits for an approver | 1.5x | Press Pause | And someone other than the clerk signs. |
+
+Prep: Start over first, so the sample runs from a fresh copy. Press Play on step 1 and start recording at step 3, or trim. Pause before the end so the last frame is still.
+
 ## Motion to capture (added 31 Oct)
 
 Each of these moves only on a state change, so record the moment it happens, at 2x:

@@ -64,7 +64,7 @@ As of 29 Oct 2026:
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
-- **Tests:** 943 in 91 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 1,297 in 107 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -80,6 +80,16 @@ Ridgeline Expeditions LLC, a US tour operator paying guides, drivers and homesta
 | Ana Reyes, JOB-PAL3D-0927, USD 750 | Approved by a person, then sent | Above the threshold. On simulated rails it settles on Stellar, her preference. In the live sandbox run it went by PayPal and came back UNCLAIMED, and was held. |
 
 Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 overpayment plus the USD 180 duplicate). `npm run demo:replay` runs the same story in the terminal. Demo documents to upload (a clean trip sheet, a re-issued duplicate, an unusual rate) are in `docs/demo-documents/`.
+
+**Try it yourself** (`/try`, beside Take the tour on the overview, and offered at the end of the tour). A judge takes one supplier payment through the six steps a clerk takes: write the request, attach the evidence, submit and see the checks, approve, correct or reject, pay, and see it in the books. Three samples, each with a payee, rate card, departure and document in the seed:
+
+| Sample | Outcome |
+|---|---|
+| Rosa Villanueva, JOB-CEB2D-1029, USD 190 | Matches her USD 95 day rate for 2 days on departure CEB-2D-1029: every check passes, policy approves it under the USD 250 line, and it is paid on the simulated PayPal rail and lands in the books. |
+| Phuong Transport, INV-2026-0171, USD 1,100 | The trip sheet and rate card say 4 vehicle-days at USD 200: blocked, with Correct to USD 800.00. After the correction it waits for an approver, who cannot be the person who prepared it. |
+| Phuong Transport, INV-2026-0138, USD 600 | Paid 12 days earlier: blocked as a duplicate, with PayPal's own record of that payout. Cancel moves no money. |
+
+The fields come prefilled; type your own payee, amount, reference or request text and your figures go through the same checks. Guided mode dims the page except the one field or button that matters; Play runs the steps by itself, about four seconds each, with Pause and Resume. Every button calls the server action the real pages call, so permissions, separation of duties and every rule apply. It runs only in a visitor's own sandbox copy on simulated rails with the rule-based reader, is refused with live rails or real money, and allows 30 requests and 30 documents per copy.
 
 ## Autonomy
 
@@ -226,7 +236,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-943 tests in 91 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+1,297 tests in 107 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 

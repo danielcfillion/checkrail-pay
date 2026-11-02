@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ResetDemoButton } from "./ResetDemoButton";
 import { TakeTourButton } from "./tour/TakeTourButton";
+import { TryButton } from "./try/TryButton";
 
 const KEY = "checkrail.demoBanner.dismissed";
 /** Set the first time the banner is shown, so a phone folds it to one line from the second view on. */
@@ -14,8 +15,9 @@ const SEEN = "checkrail.demoBanner.seen";
  * Dismissing it is remembered in this browser only. Once dismissed it folds into a one-line chip beside the page
  * title (DS2-25), with the guide and Reset demo still one click away. `heading` is the page's own title block.
  * `tour`: the guided tour is offered, and leads. `mine`: sandbox mode, where this browser has its own copy of the demo.
+ * `tryIt`: Try it yourself is offered beside the tour (own copy, simulated rails).
  */
-export function DemoBanner({ startHref, canReset, heading, tour = false, mine = false }: { startHref: string; canReset: boolean; heading: ReactNode; tour?: boolean; mine?: boolean }) {
+export function DemoBanner({ startHref, canReset, heading, tour = false, mine = false, tryIt = false }: { startHref: string; canReset: boolean; heading: ReactNode; tour?: boolean; mine?: boolean; tryIt?: boolean }) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     try {
@@ -45,6 +47,7 @@ export function DemoBanner({ startHref, canReset, heading, tour = false, mine = 
         <section aria-label="Demo" className="flex flex-wrap items-center gap-1.5 rounded-full border bg-sheet py-1 pl-3 pr-1 text-sm hairline">
           <span className="dense text-attention">Demo</span>
           {tour ? <TakeTourButton size="sm" /> : null}
+          {tryIt ? <TryButton size="sm" /> : null}
           <Link href="/demo" className="btn btn-sm">
             Demo guide
           </Link>
@@ -74,6 +77,7 @@ export function DemoBanner({ startHref, canReset, heading, tour = false, mine = 
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {tour ? <TakeTourButton primary /> : null}
+        {tryIt ? <TryButton /> : null}
         <Link href={startHref} className={`btn ${tour ? "" : "btn-primary"}`}>
           Start with the USD 960 invoice
         </Link>

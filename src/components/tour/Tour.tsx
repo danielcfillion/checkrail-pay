@@ -136,6 +136,24 @@ export function Tour({ initial, ids, sandbox, copy }: { initial: TourState; ids:
           {f.title}
         </h2>
         <p className="mt-1 text-ink-soft">{f.body}</p>
+        {sandbox ? (
+          <div className="mt-3 rounded-lg bg-action-soft px-3 py-2">
+            <p>
+              <span className="font-medium">One more: </span>
+              take a payment through yourself, from the supplier&apos;s message to the books, with your own figures.
+            </p>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary mt-2"
+              onClick={() => {
+                setTourState({ status: "off" });
+                router.push("/try");
+              }}
+            >
+              Try it yourself
+            </button>
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
           <button type="button" className="btn btn-sm" onClick={() => go({ status: "on", index: TOUR_TOTAL - 1 })}>
             Back

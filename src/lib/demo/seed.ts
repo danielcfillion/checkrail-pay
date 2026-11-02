@@ -206,6 +206,10 @@ function seedRatesAndDepartures(db: Db): void {
   dep("HG-4D-0927", "2026-09-27", "2026-09-30", 9, [["ven_phuong", "vehicle_day", 4]]);
   dep("HG-4D-1004", "2026-10-04", "2026-10-07", 12, [["ven_linh", "guest_night", 24]]);
   dep("CEB-2D-1024", "2026-10-24", "2026-10-25", 6, [["ven_rosa", "day", 2]]);
+  // Try it yourself (src/components/try): two departures of their own, so its samples never touch the tour's story.
+  // Rosa guides 2 days (USD 190 at her day rate, under the USD 250 line); Phuong drives 4 (USD 800 at his rate).
+  dep("CEB-2D-1029", "2026-10-29", "2026-10-30", 5, [["ven_rosa", "day", 2]]);
+  dep("HG-4D-1026", "2026-10-26", "2026-10-29", 8, [["ven_phuong", "vehicle_day", 4]]);
 }
 
 /** A deposit: the lodge wants half now and half on arrival. The agent asks for USD 425, not 850, and files the invoice as a bill. */

@@ -18,6 +18,7 @@ import { DemoVisit } from "@/components/DemoProgress";
 import { waitingLine } from "@/components/waiting-line";
 import { tourEnabled } from "@/components/tour/enabled";
 import { activeSandboxId } from "@/lib/sandbox/server";
+import { tryRefusal } from "@/components/try/guard";
 
 export const dynamic = "force-dynamic";
 // The root segment does not get the layout's title template, so spell it out.
@@ -34,6 +35,8 @@ export default async function OverviewPage() {
   // Start over touches only this visitor's own copy, so every demo person may use it.
   const canReset = mayResetShared || mine;
   const tour = tourEnabled();
+  // Try it yourself runs only in this visitor's own copy, on simulated rails.
+  const tryIt = mine && tryRefusal() === null;
   const demo = Boolean(viewer?.personas) || mine;
   // The opening request of the demo story, for the banner's first button.
   const phuong = demo ? findObligationsBySourceRef(["INV-2026-0152"]).find((r) => r.vendorId === "ven_phuong") : undefined;
@@ -73,7 +76,7 @@ export default async function OverviewPage() {
     <>
       <AutoRefresh seconds={10} />
       <DemoVisit page="overview" />
-      {demo ? <DemoBanner startHref={phuong ? `/obligations/${phuong.id}` : "/demo"} canReset={canReset} heading={heading} tour={tour} mine={mine} /> : (
+      {demo ? <DemoBanner startHref={phuong ? `/obligations/${phuong.id}` : "/demo"} canReset={canReset} heading={heading} tour={tour} mine={mine} tryIt={tryIt} /> : (
         <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">{heading}</div>
           {canReset ? <ResetDemoButton mine={mine} /> : null}
