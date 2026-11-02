@@ -90,14 +90,14 @@ export function findBill(db: Db, vendorId: string, reference: string, kind: Bill
 }
 
 /**
- * The comparison keys a reference names a bill by (API review R7-M1): its forms as the duplicate check compares them
+ * The comparison keys a reference names a bill by: its forms as the duplicate check compares them
  * (separators, case, leading zeros and look-alike letters set aside, and the original of a re-issue like "-R" or
  * "-REV2"). With `partOf`, also the original of a part number written after a slash ("INV-ROSA-6001/2"), but never
  * when what comes before the slash ends in a year ("RET-ROSA-2026/10" is October, not part 10). Numbers are never
  * shortened or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart. Every reference also keys on its
  * folded spelling, upper-cased with separators removed ("=ROSANOV"), so one with no digits or of under three
- * characters ("ROSA-NOV", "A1"), which the comparison forms leave out, still matches when spelt the same (API review
- * R9-M1). The part number may follow a re-issue ("INV-ROSA-6001-R/2") and have up to three digits ("/003", R9-S2).
+ * characters ("ROSA-NOV", "A1"), which the comparison forms leave out, still matches when spelt the same. The part
+ * number may follow a re-issue ("INV-ROSA-6001-R/2") and have up to three digits ("/003").
  */
 export function billKeys(reference: string | null | undefined, partOf = false): Set<string> {
   if (!reference) return new Set();
@@ -106,25 +106,34 @@ export function billKeys(reference: string | null | undefined, partOf = false): 
   const core = part?.[1].replace(/[^\p{L}\p{N}]+(?:[A-Za-z]|[Rr]\d?|REV\d*|rev\d*)$/u, "");
   const base = part && core && /\d{3,6}$/.test(core) && !/(?:^|\D)(?:19|20)\d{2}$/.test(core) ? part[1] : null;
   // Separators go, except between two digits, which keep one "." so separate numbers stay apart ("INV-12-3" is not
-  // "INV-123"), as the duplicate check keeps them (API review R10-N1).
+  // "INV-123"), as the duplicate check keeps them.
   const folded = (r: string) => `=${foldConfusables(r).toUpperCase().replace(/[^\p{L}\p{N}]+/gu, (sep, at: number, all: string) => (/\d/.test(all[at - 1] ?? "") && /\d/.test(all[at + sep.length] ?? "") ? "." : ""))}`;
   return new Set([reference, ...(base ? [base] : [])].flatMap((r) => [...sourceRefKeys(r).filter((k) => k.startsWith("~")), folded(r)]).filter((k) => k.length > 1));
 }
 
 /**
  * Every bill of this supplier, of any kind and in any state, whose reference is the same as this one once compared. A
- * "/N" ending is read as a part number only when no bill has the reference exactly as written (API review R8-S1).
+ * "/N" ending is read as a part number only when no bill has the reference exactly as written.
  */
 export function billsMatching(db: Db, vendorId: string, reference: string | null | undefined) {
   if (!reference) return [];
-  const all = db.select().from(bills).where(eq(bills.vendorId, vendorId)).all();
+  return matchIn(db.select().from(bills).where(eq(bills.vendorId, vendorId)).all(), reference);
+}
+
+/** The same comparison over every bill of the business, whichever supplier it is from. */
+export function businessBillsMatching(db: Db, businessId: string, reference: string | null | undefined) {
+  if (!reference) return [];
+  return matchIn(db.select().from(bills).where(eq(bills.businessId, businessId)).all(), reference);
+}
+
+function matchIn(all: Array<typeof bills.$inferSelect>, reference: string) {
   const exact = all.some((b) => b.reference === reference.trim().toUpperCase());
   const mine = billKeys(reference, !exact);
   if (!mine.size) return [];
   return all.filter((b) => [...billKeys(b.reference)].some((k) => mine.has(k)));
 }
 
-/** How far back a supplier's bills make every outside request to them wait for a person (API review R10). */
+/** How far back a supplier's bills make every outside request to them wait for a person. */
 export const RECENT_BILL_DAYS = 180;
 
 /** Every bill of this supplier recorded in the last RECENT_BILL_DAYS days, of any kind and in any state, oldest first. */
