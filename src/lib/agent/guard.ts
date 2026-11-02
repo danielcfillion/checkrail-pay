@@ -395,10 +395,22 @@ export function clean(message: string, others: string[] = [], keep: string | nul
  */
 function forAgent(rule: string, message: string, supplier = false): string {
   if (rule === "reference_other_vendor") return "This reference is also on a payment to another supplier; a person checks who did the job";
+  // The duplicate check names the other payment: its id, state, date and amounts. An agent is told only that there is
+  // one, never what state it is in or when it moved.
+  if (rule === "no_duplicate") return duplicateForAgent(message);
   // A supplier's agent attaches its own records: they are its say-so, not a clerk's typing (review AF-7). They are
   // stored as operator rows so they can never set a bill ceiling (AG-5); see SUPPLIER_EVIDENCE below.
   if (supplier && rule === "evidence_provenance") return "The records attached are the supplier's own say-so; a person checks them against the business's records";
   return message;
+}
+
+/** The duplicate check's finding, by kind, without anything about the other payment. */
+function duplicateForAgent(message: string): string {
+  if (message.startsWith("Shares booking or order ")) return "Shares booking or order with another payment to this supplier; a person confirms this is another part of the job, not the same one again";
+  if (message.startsWith("Same amount as ")) return "Same amount as another payment to this supplier in the last 30 days; a person confirms this is a different job";
+  if (message.startsWith("Same job as ")) return "Same job as another payment to this supplier";
+  if (/^Reference \S+ was already used/.test(message)) return "This reference was already used by another payment to this supplier";
+  return "This matches another payment to this supplier";
 }
 
 /**
