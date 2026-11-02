@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, settlements, vendors, accountingSyncs, bills, xeroConnections, xeroRecords } from "../db/schema";
+import { obligations, settlements, vendors, accountingSyncs, bills, businesses, xeroConnections, xeroRecords } from "../db/schema";
 import { billApprovedAt } from "./xeroScope";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
@@ -128,7 +128,8 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
  *  - blank: not the live push's (its bill is in the files, or Xero is not connected): enter it as usual.
  */
 function withXeroPayment(db: Db, rows: Array<{ id: string; payload: AccountingPayload; createdAt: string }>): AccountingPayload[] {
-  const conn = db.select().from(xeroConnections).get();
+  const bizId = db.select({ id: businesses.id }).from(businesses).limit(1).get()?.id ?? "";
+  const conn = db.select().from(xeroConnections).where(eq(xeroConnections.businessId, bizId)).get();
   const live = conn && conn.status !== "disconnected" && config.accounting.destination === "xero";
   const mine = (kind: string) =>
     conn
@@ -139,12 +140,17 @@ function withXeroPayment(db: Db, rows: Array<{ id: string; payload: AccountingPa
           .all()
       : [];
   const finished = new Map(mine("settlement").map((r) => [r.sync!, r.status]));
-  const paymentId = new Map(mine("payment").filter((r) => r.status === "pushed").map((r) => [r.sync!, r.id]));
+  const payments = mine("payment");
+  const paymentId = new Map(payments.filter((r) => r.status === "pushed").map((r) => [r.sync!, r.id]));
+  const obIds = rows.map((r) => r.payload.obligationId).filter(Boolean);
+  const returned = new Set(obIds.length ? db.select({ id: obligations.id }).from(obligations).where(and(inArray(obligations.id, obIds), eq(obligations.state, "refunded"))).all().map((o) => o.id) : []);
   const owned = live && conn ? new Map([...billApprovedAt(db, rows.map((r) => r.payload.obligationId).filter(Boolean)).entries()]) : new Map<string, string>();
   return rows.map((r) => {
     const done = finished.get(r.id);
     let mark = "";
-    if (done === "pushed") mark = `xero:${paymentId.get(r.id) ?? ""}`;
+    // The payout came back: removed in Xero (or never sent), nothing to enter.
+    if (conn && returned.has(r.payload.obligationId) && (done !== undefined || payments.some((x) => x.sync === r.id))) mark = "xero:returned";
+    else if (done === "pushed") mark = paymentId.has(r.id) ? `xero:${paymentId.get(r.id)}` : "xero:returned";
     else if (done === undefined && live && conn && r.createdAt >= conn.syncFrom && (owned.get(r.payload.obligationId) ?? "") >= conn.syncFrom) mark = "xero:sending";
     return { ...r.payload, xeroPayment: mark };
   });

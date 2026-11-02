@@ -715,6 +715,8 @@ export const xeroRecords = sqliteTable(
     sentHash: text("sent_hash"),
     /** For a bill: when an amendment to its request was last compared with what was sent (after it was agreed again). */
     amendCheckedAt: text("amend_checked_at"),
+    /** Look-ups in Xero that found nothing while the request was no longer due; on the second, a person is asked. */
+    lookupMisses: integer("lookup_misses").notNull().default(0),
     /** The last attempt got no answer (network error or 5xx): look in Xero before creating again. */
     uncertain: integer("uncertain", { mode: "boolean" }).notNull().default(false),
     nextAttemptAt: text("next_attempt_at"),

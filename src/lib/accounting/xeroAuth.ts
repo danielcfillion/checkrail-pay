@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 import type { Db } from "../db";
-import { xeroConnections, xeroOauthStates } from "../db/schema";
+import { bills, obligations, xeroConnections, xeroOauthStates, xeroRecords } from "../db/schema";
 import { config } from "../config";
 import { decryptField, encryptField, usingDevKey } from "../crypto/dataKey";
 import { audit } from "../domain/stateMachine";
@@ -189,6 +189,18 @@ export async function completeXeroConnect(db: Db, opts: { businessId: string; ac
     } catch {
       // Best effort: the old token expires on its own; the new connection does not depend on it.
     }
+  }
+  // Another organisation: bills the old one's live push sent never reached this one. Their "in Xero" stamps are cleared
+  // so they come back into the bills file (approved before this connection, they are the file's from now on).
+  if (prior && !keepMapping) {
+    const sent = db.select({ src: xeroRecords.parentKey }).from(xeroRecords).where(and(eq(xeroRecords.businessId, opts.businessId), eq(xeroRecords.tenantId, prior.tenantId), inArray(xeroRecords.kind, ["bill", "credit_note"]), inArray(xeroRecords.status, ["pushed", "sending", "failed"]), isNotNull(xeroRecords.parentKey))).all().map((r) => r.src!);
+    const billIds = sent.filter((x) => x.startsWith("bill:")).map((x) => x.slice(5));
+    const obIds = sent.filter((x) => x.startsWith("ob:")).map((x) => x.slice(3));
+    if (billIds.length) {
+      db.update(bills).set({ xeroExportedAt: null }).where(inArray(bills.id, billIds)).run();
+      db.update(obligations).set({ xeroBillExportedAt: null }).where(inArray(obligations.billId, billIds)).run();
+    }
+    if (obIds.length) db.update(obligations).set({ xeroBillExportedAt: null }).where(inArray(obligations.id, obIds)).run();
   }
   const values = {
     businessId: opts.businessId,

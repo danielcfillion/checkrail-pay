@@ -12,6 +12,7 @@ import type { Role } from "../auth/roles";
 import { config } from "../config";
 import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER } from "../basicAuth";
 import { decryptField, encryptField } from "../crypto/dataKey";
+import { audit } from "../domain/stateMachine";
 import { allRecordsCsv, exportPendingCsv } from "./record";
 import { beginXeroConnect, refreshXeroToken, xeroAccessToken, DEFAULT_XERO_SCOPES } from "./xeroAuth";
 import { takeXeroCallSlot } from "./xeroClient";
@@ -1169,8 +1170,9 @@ describe("Review round 4", () => {
     expect(puts.filter((c) => !c.body.includes(':wh"'))).toHaveLength(1);
     expect(puts.filter((c) => c.body.includes(':wh"'))).toHaveLength(1);
     expect(xero.state.payments.map((x) => x.Status)).toEqual(["DELETED"]);
-    expect(records("withholding")[0]).toMatchObject({ status: "skipped" });
-    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures).toHaveLength(0);
+    // A 500 leaves it unsure: looked up twice, not found, and with the payout gone a person confirms (round 6, S3).
+    expect(records("withholding")[0]).toMatchObject({ status: "needs_person" });
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures.map((f) => f.error)).toEqual([expect.stringMatching(/Check bill INV-JM-8101 in Xero\.$/)]);
   });
 
   it("M2. approve, sync, amend, sync, approve, sync, settle, sync: the bill is updated and the payment goes", async () => {
@@ -1449,6 +1451,127 @@ describe("Review round 5", () => {
     await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${state}`, OWNER), db);
     expect(conn()).toMatchObject({ tenantId: "tenant-other" });
     expect(xero.state.revokedTokens).toEqual(["rt-1"]);
+  });
+});
+
+describe("Review round 6", () => {
+  const csvMark = (ref: string) => allRecordsCsv(db).csv.trim().split("\n").filter((l) => l.includes(ref)).map((l) => l.split(",").pop());
+
+  it("M1. deposit and balance of the same amount: a lost deposit answer is never merged into the balance", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9601", totalMinor: 40_000, currency: "USD" });
+    await payPart(bill, 20_000);
+    await payPart(bill, 20_000);
+    const t0 = Date.now();
+    // The deposit's payment lands in Xero but its answer is lost.
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Payments"), times: 1, respond: () => "network_after" });
+    await runXeroSync(db, { now: () => t0 });
+    // Within the deposit's one-minute wait, not forced: the look-up still runs.
+    await runXeroSync(db, { now: () => t0 + 10_000 });
+    await runXeroSync(db, { now: () => t0 + 20_000 });
+    const live = xero.state.payments.filter((x) => x.Status !== "DELETED");
+    expect(live).toHaveLength(2);
+    expect(new Set(records("payment").map((r) => r.xeroId)).size).toBe(2);
+    expect(xero.amountDue("INV-MS-9601")).toBe(0);
+    expect(xero.state.bankTx).toHaveLength(2);
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).skippedFees).toBe(0);
+    expect(csvMark("INV-MS-9601")).toEqual(live.map((x) => `xero:${x.PaymentID}`).sort().length === 2 ? expect.arrayContaining(live.map((x) => `xero:${x.PaymentID}`)) : []);
+  });
+
+  it("M1b. a Xero payment held by any record (here one Xero would not remove) is never adopted by amount", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9605", totalMinor: 20_000, currency: "USD" });
+    const first = await payPart(bill, 20_000);
+    await runXeroSync(db);
+    const firstId = xero.state.payments[0].PaymentID;
+    xero.state.reconciled.add(String(firstId));
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), first, "RETURN-9605");
+    await runXeroSync(db);
+    expect(records("payment")[0]).toMatchObject({ status: "needs_person", xeroId: firstId });
+    await payPart(bill, 20_000);
+    await runXeroSync(db, { force: true });
+    const second = records("payment").find((r) => r.status !== "needs_person")!;
+    expect(second.xeroId).not.toBe(firstId);
+    expect(second.error).toMatch(/exceeds the amount outstanding/);
+  });
+
+  it("S1. a payment waits while its bill's amendment is pending, even when the invoice number is unchanged", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    await runXeroSync(db);
+    // An amendment that keeps the number (the due date), recorded as the app records one.
+    db.update(obligations).set({ dueDate: "2026-12-31" }).where(eq(obligations.id, story.stellar)).run();
+    audit(db, { obligationId: story.stellar, actor: "user:lan", action: "obligation.amended", detail: { patch: { dueDate: "2026-12-31" } } });
+    await executeObligation(db, story.stellar, { actor: "user:minh" });
+    await confirmSettlement(db, story.stellar);
+    xero.injections.push({ when: (c) => c.method === "POST" && /\/Invoices\/[^/]+$/.test(c.url.pathname), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    await runXeroSync(db);
+    expect(xero.api("PUT", "/Payments")).toHaveLength(0);
+    await runXeroSync(db, { force: true });
+    expect(xero.state.invoices[0].DueDate).toBe("2026-12-31");
+    expect(xero.state.payments).toHaveLength(1);
+  });
+
+  it("S2. a fee found in Xero after its payout came back gets the note", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9602", totalMinor: 20_000, currency: "USD" });
+    const id = await payPart(bill, 20_000);
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/BankTransactions"), times: 1, respond: () => "network_after" });
+    await runXeroSync(db);
+    expect(records("fee")[0]).toMatchObject({ uncertain: true });
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), id, "RETURN-9602");
+    // The fee's look-up fails this time, so the payment is removed before the fee is known.
+    xero.injections.push({ when: (c) => c.method === "GET" && c.url.pathname.endsWith("/BankTransactions"), times: 1, respond: () => xero.res(500, { Title: "Server error" }) });
+    await runXeroSync(db, { force: true });
+    expect(xero.state.payments[0].Status).toBe("DELETED");
+    await runXeroSync(db, { force: true });
+    expect(records("fee")[0]).toMatchObject({ status: "pushed" });
+    expect(xeroCardView(db, DEMO_BUSINESS_ID).failures.map((f) => f.label)).toContain("Fee on INV-MS-9602 (paypal), payout came back");
+  });
+
+  it("S3. a lost bill not found in Xero after the request was rejected: looked up again, then put to a person", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/Invoices"), times: 1, respond: () => "network" });
+    await runXeroSync(db);
+    expect(records("bill")[0]).toMatchObject({ uncertain: true });
+    rejectObligation(db, story.stellar, "user:minh", "Trip cancelled");
+    await runXeroSync(db, { force: true });
+    expect(records("bill")[0]).toMatchObject({ uncertain: true, lookupMisses: 1 });
+    await runXeroSync(db, { force: true });
+    const f = xeroCardView(db, DEMO_BUSINESS_ID).failures.find((x) => x.label.includes("0927"))!;
+    expect(f).toMatchObject({ needsPerson: true });
+    expect(f.error).toMatch(/could not confirm in Xero whether it went before the request was cancelled or returned\. Check bill JOB-PAL3D-0927 in Xero\.$/);
+    expect(xero.state.invoices).toHaveLength(0);
+  });
+
+  it("S4. connecting another organisation puts the old one's live bills back in the bills file", async () => {
+    await connect();
+    approveObligation(db, story.stellar, "user:minh");
+    await runXeroSync(db);
+    expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: true }).rows.map((r) => r["*InvoiceNumber"])).not.toContain("JOB-PAL3D-0927");
+    xero.state.access = jwt({ authentication_event_id: "evt-0", n: 9 });
+    xero.state.refresh = "rt-other";
+    const start = handleXeroConnect(req("GET", "/api/xero/connect", OWNER), db);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    await handleXeroCallback(req("GET", `/api/xero/callback?code=good-code&state=${state}`, OWNER), db);
+    expect(conn()).toMatchObject({ tenantId: "tenant-other" });
+    expect(xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: true }).rows.map((r) => r["*InvoiceNumber"])).toContain("JOB-PAL3D-0927");
+  });
+
+  it("nit. a returned payout's CSV row says xero:returned, never an empty id or xero:sending", async () => {
+    await connect();
+    const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9603", totalMinor: 20_000, currency: "USD" });
+    const a = await payPart(bill, 20_000);
+    await runXeroSync(db);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), a, "RETURN-9603");
+    await runXeroSync(db);
+    const bill2 = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9604", totalMinor: 20_000, currency: "USD" });
+    const b = await payPart(bill2, 20_000);
+    markReturnedByHand(db, DEMO_BUSINESS_ID, as("thu"), b, "RETURN-9604");
+    await runXeroSync(db);
+    expect(csvMark("INV-MS-9603")).toEqual(["xero:returned"]);
+    expect(csvMark("INV-MS-9604")).toEqual(["xero:returned"]);
   });
 });
 

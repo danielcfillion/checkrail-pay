@@ -60,6 +60,7 @@ CREATE TABLE `xero_records` (
 	`idem_key` text,
 	`sent_hash` text,
 	`amend_checked_at` text,
+	`lookup_misses` integer DEFAULT 0 NOT NULL,
 	`uncertain` integer DEFAULT false NOT NULL,
 	`next_attempt_at` text,
 	`pushed_at` text,
