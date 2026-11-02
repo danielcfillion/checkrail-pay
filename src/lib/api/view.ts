@@ -8,13 +8,17 @@ import { BILL_NEUTRAL, apiReasons } from "./redact";
  * What an outside caller (an API key or an outside agent) may read about a request it made: one builder for both
  * channels, so the REST API and the MCP agent tools cannot drift apart (API review R9-M2).
  *
- * Reasons are fixed sentences per rule code (redact.ts), never the messages a person reads. A request about a bill
- * (on one, or naming one) reads the same whatever the bill's balance, state or other parts (R8, R9-S1):
+ * Reasons are fixed sentences per rule code (redact.ts), never the messages a person reads. A request held because of
+ * bills (on one, naming one, or to a supplier with a bill in the last 180 days) reads the same whatever the bills'
+ * balance, state or other parts, and whether a bill matched at all (R8, R9-S1, R10):
  *  - while it waits (blocked, waiting for evidence or for a person): waiting_for_approval, verdict hold;
  *  - once a person approved it, until it is paid, refused or cancelled: its approved or scheduled status, verdict
  *    approved;
  *  - in both, rules_failed [bill_review] and the one neutral sentence;
  *  - once it is in flight or final: its own status only, with no reasons and no rules.
+ * Known and left as is (review R10-N2): an approved request whose fit changes before release (another part, a credit,
+ * the bill closed) goes back to waiting, so the caller sees approved and then waiting_for_approval. That says only that
+ * something changed, not what, and whether it is finally paid depends on the bill anyway.
  */
 
 export type RequestStatus = "blocked" | "waiting_for_evidence" | "waiting_for_approval" | "scheduled" | "approved" | "sending" | "paid" | "returned" | "cancelled" | "failed" | "disputed";

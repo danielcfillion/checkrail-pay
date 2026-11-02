@@ -34,17 +34,19 @@ export const API_REASON: Readonly<Record<string, string>> = {
   ai_flag: "The reader raised a concern; a person looks.",
   agent_mismatch: "The description disagrees with the request's fields; a person confirms which is right.",
   ai_missing: "The reader wants more information.",
-  // Every rule about a bill reads the same to an outside caller (API review R8): see BILL_NEUTRAL.
-  bill_part_repeat: "This matches a bill on file. A person reviews payments against bills.",
-  bill_part: "This matches a bill on file. A person reviews payments against bills.",
-  bill_review: "This matches a bill on file. A person reviews payments against bills.",
-  bill_ambiguous: "This matches a bill on file. A person reviews payments against bills.",
-  bill_misfit: "This matches a bill on file. A person reviews payments against bills.",
+  // Every rule about bills reads the same to an outside caller (API reviews R8, R10): see BILL_NEUTRAL.
+  bill_recent: "A person reviews payments to this supplier.",
+  bill_part_repeat: "A person reviews payments to this supplier.",
+  bill_part: "A person reviews payments to this supplier.",
+  bill_review: "A person reviews payments to this supplier.",
+  bill_ambiguous: "A person reviews payments to this supplier.",
+  bill_misfit: "A person reviews payments to this supplier.",
 };
 
 /**
- * The one answer an outside caller gets for any request about a bill, whether it fits or not (API review R8): nothing
- * it sees may depend on the bill's balance, its state or its other parts.
+ * The one answer an outside caller gets for any request held because of bills, whether it names one or not and whether
+ * it fits or not (API reviews R8, R10): nothing it sees may depend on whether a bill matched, nor on a bill's balance,
+ * state or other parts.
  */
 export const BILL_NEUTRAL = API_REASON.bill_review;
 

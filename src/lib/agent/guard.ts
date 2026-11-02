@@ -9,14 +9,13 @@ import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendor
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { AGENT_FLAG_PREFIX, ingestObligation } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, ingestObligation, supplierBillReview } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
 import { guideFor } from "./rules";
 import { BILL_NEUTRAL } from "../api/redact";
 import { outsideView, type RequestStatus } from "../api/view";
-import { billsMatching } from "../engine/bills";
 
 /**
  * The agent guard: what outside agents may ask Checkrail, and nothing more.
@@ -454,9 +453,10 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
-  // A payment about a bill reads the same to an agent whether it fits or not: hold, one neutral sentence, nothing that
-  // depends on the bill's balance, state or other parts, so no answer can be used to find what is open (API review R8).
-  const aboutBill = Boolean(asked && a.reference && billsMatching(db, asked.id, a.reference).length);
+  // A payment held because of bills reads the same to an agent whether it names a bill or not and whether it fits or
+  // not: hold, one neutral sentence, nothing that depends on a match or on a bill's balance, state or other parts, so no
+  // answer can be used to find a bill or what is open (API reviews R8, R10).
+  const aboutBill = Boolean(asked && supplierBillReview(db, asked.id, a.reference));
   const blocks = aboutBill ? [] : r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
   const warnings = aboutBill ? [{ rule: "bill_review", message: BILL_NEUTRAL }] : r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) }));
   if (aboutBill) verdict = "hold";

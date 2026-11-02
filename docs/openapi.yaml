@@ -126,9 +126,10 @@ paths:
         Goes through the same ingest as a clerk's request, with the payee, amount, currency and reference fixed as
         sent, and is recorded as coming from this key (audit actor api:<key name>). Policy and the autonomy setting
         decide: it may be blocked, wait for evidence or a person, or be scheduled by Autopilot inside the owner's caps
-        with a cancel window. The answer is the request as it stands after the checks. A request whose reference
-        matches a bill of the supplier (however spelt, any kind, any state) is never paid without a person, and is
-        answered the same whether it fits the bill or not.
+        with a cancel window. The answer is the request as it stands after the checks. A request to a supplier with
+        any bill recorded in the last 180 days, or whose reference matches a bill of the supplier (however spelt, any
+        kind, any state), is never paid without a person, and is answered the same whether it matches a bill or not
+        and whether it fits or not.
 
 
         What the key attaches (evidence rows) is its own say-so, as a clerk's typed record is, so a person approves
@@ -719,10 +720,10 @@ components:
           type: [string, "null"]
           enum: [pay, hold, block, approved, null]
           description: >-
-            What the rules say. pay still means policy and the autonomy setting decide who sends it. A request whose
-            reference matches a bill of the supplier always reads status waiting_for_approval, state
-            awaiting_approval, verdict hold, rules_failed [bill_review] and one fixed reason while it waits, whether it
-            fits the bill or not; a person reviews it. Once a person approved it and until it is paid, refused or
+            What the rules say. pay still means policy and the autonomy setting decide who sends it. A request to a
+            supplier with a bill in the last 180 days, or whose reference matches a bill of the supplier, always reads
+            status waiting_for_approval, state awaiting_approval, verdict hold, rules_failed [bill_review] and one fixed
+            reason while it waits, whether it matches or fits a bill or not; a person reviews it. Once a person approved it and until it is paid, refused or
             cancelled, verdict approved with the same reason; after that, its own status only.
         reasons:
           type: array
