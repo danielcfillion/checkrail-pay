@@ -5,7 +5,7 @@ import { POST as signInPost } from "@/app/api/signin/route";
 import { POST as signOutPost } from "@/app/api/signout/route";
 import { ACTOR_HEADER, PERSONA_HEADER, ROLE_HEADER, configuredUsers } from "../basicAuth";
 import { SANDBOX_COOKIE } from "../sandbox/settings";
-import { SESSION_COOKIE, SESSION_MAX_AGE, safeNext, sessionKey, signInUrl, signSession, verifySession } from "./session";
+import { FAIL_LIMIT, SESSION_COOKIE, SESSION_MAX_AGE, safeNext, sessionKey, signInUrl, signSession, verifySession } from "./session";
 
 const KEYS = ["CHECKRAIL_USERS", "CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_SESSION_SECRET", "CHECKRAIL_SANDBOX_SECRET", "CHECKRAIL_DATA_KEY", "CHECKRAIL_SANDBOX", "CHECKRAIL_DEMO_PERSONAS", "CHECKRAIL_THROTTLE_SPARES_VALID", "CHECKRAIL_LOG_CLIENT_IP", "PAYPAL_ENV", "RAIL_MODE", "AI_MODE"] as const;
 const env = process.env as Record<string, string | undefined>;
@@ -212,6 +212,43 @@ describe("POST /api/signin", () => {
     expect(spared.headers.get("location")).toBe("/");
     expect(spared.headers.get("set-cookie")).toContain(SESSION_COOKIE);
     expect((await wrong()).headers.get("location")).toContain("error=throttled");
+  });
+});
+
+describe("the two counters together", () => {
+  it("halves each limit, so form and Basic guesses from one address stay at the old total of ten or so per window", async () => {
+    expect(FAIL_LIMIT).toBe(5);
+    const ip = "203.0.113.170";
+    const formWrong = () => signInPost(form({ username: "judge", password: "nope" }, { "x-forwarded-for": ip }));
+    const basicWrong = () => middleware(page("/", { accept: "*/*", authorization: `Basic ${Buffer.from("judge:nope").toString("base64")}`, "x-forwarded-for": ip }));
+    const first = await formWrong();
+    expect([first.status, first.headers.get("location")]).toEqual([303, "/signin?error=wrong"]);
+    let formTries = 1;
+    while ((await formWrong()).headers.get("location")?.includes("error=wrong")) formTries++;
+    let basicTries = 0;
+    while (basicWrong().status === 401) basicTries++;
+    // Each store counts up to its limit plus the attempt that crosses it; the next one is refused.
+    expect(formTries).toBe(FAIL_LIMIT + 1);
+    expect(basicTries).toBe(FAIL_LIMIT + 1);
+    expect(formTries + basicTries).toBeLessThanOrEqual(12);
+    expect(basicWrong().status).toBe(429);
+  });
+});
+
+describe("the sign-in page itself", () => {
+  it("sends a visitor who is already signed in straight on to next", () => {
+    const res = middleware(page("/signin?next=%2Fruns", { cookie: `${SESSION_COOKIE}=${cookieFor()}` }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/runs");
+    expect(middleware(page("/signin?next=https%3A%2F%2Fevil.example", { cookie: `${SESSION_COOKIE}=${cookieFor()}` })).headers.get("location")).toBe("/");
+  });
+
+  it("answers Origin null with a friendly page, not a bare 403", async () => {
+    const res = await signInPost(form({ username: "judge", password: "a-long-enough-pass" }, { origin: "null" }));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("Sign in again");
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 });
 

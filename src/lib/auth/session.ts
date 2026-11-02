@@ -25,8 +25,11 @@ export const SESSION_COOKIE = "checkrail_session";
 export const SESSION_MAX_AGE = 12 * 3600;
 export const MIN_SESSION_SECRET = 16;
 
-/** The wrong-password throttle: ten wrong passwords from one address in 15 minutes lock that address for the window. */
-export const FAIL_LIMIT = 10;
+/**
+ * The wrong-password throttle. The edge middleware (Basic) and the Node sign-in route (form) cannot share a counter,
+ * so each allows five wrong passwords per address in 15 minutes: ten in all, as before, however they are split.
+ */
+export const FAIL_LIMIT = 5;
 export const FAIL_WINDOW_MS = 15 * 60_000;
 
 type Env = Record<string, string | undefined>;

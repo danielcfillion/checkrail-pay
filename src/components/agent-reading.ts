@@ -30,13 +30,16 @@ export function amountAsRead(audit: AuditLike[], current: { amountMinor: number 
  * (withRecordedConfidence in src/lib/ai/agent.ts), so the page and the policy rule agree (except a reading marked reflectsLiveAccount).
  */
 export function selectRecordedReading(
-  i: { engine: "claude" | "rules" | null | undefined; vendorId: string | null | undefined; sourceRef: string | null | undefined; readAmountMinor: number | null; readCurrency: string | null; newestForReference: boolean },
+  i: { engine: "claude" | "rules" | null | undefined; vendorId: string | null | undefined; sourceRef: string | null | undefined; readAmountMinor: number | null; readCurrency: string | null; newestForReference: boolean; storedConfidence?: number | null },
   find: (vendorId: string | null | undefined, sourceRef: string | null | undefined) => RecordedReading | null = recordedReadingFor,
 ): RecordedReading | null {
   if (i.engine !== "rules" || !i.newestForReference) return null;
   const r = find(i.vendorId, i.sourceRef);
   if (!r) return null;
   if (i.readAmountMinor !== null && (r.amountMinor !== i.readAmountMinor || (i.readCurrency && r.currency !== i.readCurrency))) return null;
+  // Policy checked the stored confidence. A replayed reading whose figure is not that one (a resubmission the rules
+  // scored lower) is not shown, so the page never quotes a confidence policy did not check.
+  if (!r.reflectsLiveAccount && i.storedConfidence != null && i.storedConfidence !== r.confidence) return null;
   return r;
 }
 

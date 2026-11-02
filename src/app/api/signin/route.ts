@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { authenticatePassword, configuredUsers } from "@/lib/basicAuth";
 import { FAIL_WINDOW_MS, SESSION_COOKIE, SESSION_MAX_AGE, gateAttempt, safeNext, sameOrigin, sessionKey, signInUrl, signSession } from "@/lib/auth/session";
+import { crossOriginPage } from "@/lib/auth/crossOrigin";
 import { clientIp, newThrottle } from "@/lib/throttle";
 
 /**
@@ -8,8 +9,8 @@ import { clientIp, newThrottle } from "@/lib/throttle";
  * on to the page that was asked for (with the session cookie set) or back to /signin with a short error code.
  *
  * The same protections as Basic auth in the middleware: the per-address wrong-password throttle (this route keeps its
- * own counter, as the edge middleware and this Node route do not share memory; each allows ten wrong passwords per
- * address in 15 minutes), the constant-time compare, and the opt-in failed-login log line. The form must come from
+ * own counter, as the edge middleware and this Node route do not share memory; each allows five wrong passwords per
+ * address in 15 minutes, so ten in all), the constant-time compare, and the opt-in failed-login log line. The form must come from
  * this site (Origin), so another site cannot sign a visitor in to an account of its choosing.
  */
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ function back(location: string, extra?: Record<string, string>): NextResponse {
 }
 
 export async function POST(req: NextRequest) {
-  if (!sameOrigin(req.headers, req.url)) return new NextResponse("Sign-in is accepted only from this site's own sign-in page.", { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  if (!sameOrigin(req.headers, req.url)) return crossOriginPage();
   let form: FormData;
   try {
     form = await req.formData();

@@ -17,7 +17,7 @@ export function readingFor(d: Pick<Detail, "obligation" | "audit" | "agentRun" |
   const o = d.obligation;
   const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
   const newer = o.vendorId && o.sourceRef ? db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.vendorId, o.vendorId), eq(obligations.sourceRef, o.sourceRef), gt(obligations.createdAt, o.createdAt))).get() : undefined;
-  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer, storedConfidence: o.aiConfidence });
   const reader: ReaderView | null = recorded
     ? { confidence: recorded.confidence, concerns: recorded.flags, missing: recorded.missing, recorded: true }
     : o.aiConfidence !== null

@@ -4,7 +4,7 @@ The hosted demo gives every visitor a private copy of the demo business, Ridgeli
 
 ## Start
 
-1. Open the hosted demo and sign in on its sign-in page with the login from the Devpost testing instructions. It is an ordinary form, so it works in embedded and in-app browsers too; you stay signed in for 12 hours, and **Sign out** is under "Signed in as" in the sidebar.
+1. Open the hosted demo and sign in on its sign-in page with the login from the Devpost testing instructions. It is an ordinary form, so it works in embedded and in-app browsers too; you stay signed in for 12 hours, and **Sign out** is under "Signed in as" in the sidebar. Sign out clears this browser only; changing the password ends every session.
 2. On the overview, press **Take the tour**. It is also on the Demo guide (`/demo`).
 3. A small card opens at the bottom right (a sheet at the bottom on a phone). Each step says what you are looking at, what to press, and rings the part of the page it is about. **Next** takes you to the next step's page; **Back** goes back. **Hide** (or Escape) folds the card to a small button that opens it again. **Skip tour** closes it; Take the tour starts it again from step 1.
 

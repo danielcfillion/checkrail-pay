@@ -54,12 +54,15 @@ Rules:
  * sandbox account that this demo's books do not hold). The rest of the rule-based reading (vendor, amount, flags) is unchanged. Only on the rule-based
  * path, where no model call is made; a live Claude run always uses its own confidence.
  */
-export function withRecordedConfidence(i: AiInterpretation, input: Pick<AgentInput, "vendorHistory">): AiInterpretation {
+export function withRecordedConfidence(i: AiInterpretation, input: Pick<AgentInput, "vendorHistory" | "rawInput">): AiInterpretation {
   const r = recordedReadingFor(i.vendorId, i.sourceRef);
   if (!r || r.reflectsLiveAccount || r.amountMinor !== i.amountMinor || r.currency !== i.currency) return i;
+  // Only the request Claude actually read: a resubmission under the same reference (new words, added urgency) is not it.
+  if (input.rawInput.trim() !== r.requestText.trim()) return i;
   // A reading of a repeat request is not the reading of the first one, which Claude never saw.
   if (r.onlyAsRepeat && !(i.vendorId && input.vendorHistory?.(i.vendorId).some((h) => h.sourceRef === r.sourceRef))) return i;
-  return { ...i, confidence: r.confidence };
+  // Never more confident than the rules: a resubmission that adds urgency or other concerns keeps its lower figure.
+  return { ...i, confidence: Math.min(i.confidence, r.confidence) };
 }
 
 export async function runObligationAgent(input: AgentInput): Promise<AgentRun> {

@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const ERRORS: Record<string, string> = {
   wrong: "That username and password do not match a login. Check both and try again.",
   throttled: "Too many wrong passwords from this address. Wait 15 minutes and try again.",
-  unavailable: "Sign-in is not set up on this server: CHECKRAIL_SESSION_SECRET is missing.",
+  unavailable: "Sign-in is not set up on this server yet. Ask the person who runs it.",
   invalid: "The form could not be read. Try again.",
 };
 
