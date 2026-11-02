@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, authenticate, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
-import { FAIL_WINDOW_MS, SESSION_COOKIE, gateAttempt, sessionKey, signInUrl, verifySession, wantsPage } from "@/lib/auth/session";
+import { FAIL_WINDOW_MS, SESSION_COOKIE, gateAttempt, safeNext, sessionKey, signInUrl, verifySession, wantsPage } from "@/lib/auth/session";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
 import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
 
@@ -38,7 +38,7 @@ export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.
  * single-use token), and the sign-in page with its two form posts (SIGN_IN_PATHS). Static build assets are excluded by the matcher.
  */
 /*
- * A small in-memory throttle (per server process, which is what one Render instance is): ten wrong passwords from
+ * A small in-memory throttle (per server process, which is what one Render instance is): five wrong passwords (and five more by the sign-in form, src/lib/auth/session.ts) from
  * one address in 15 minutes lock that address out for the rest of the window, and the token pages for vendors take
  * at most 30 requests a minute per address. It slows guessing; it is not a substitute for a strong demo password.
  */
@@ -84,7 +84,14 @@ export function middleware(req: NextRequest) {
   if (path === "/api/webhooks/paypal") return pass();
   // The sign-in page renders bare (no navigation, no business data); the routes check Origin and passwords themselves.
   if (signInPath) {
-    if (path === "/signin") headers.set(PUBLIC_HEADER, "1");
+    if (path === "/signin") {
+      // Already signed in: straight on to the page they asked for.
+      const signedIn = configuredUsers();
+      if (signedIn?.length && verifySession(req.cookies.get(SESSION_COOKIE)?.value, signedIn, sessionKey(process.env))) {
+        return new NextResponse(null, { status: 303, headers: { Location: safeNext(req.nextUrl.searchParams.get("next")), "Cache-Control": "no-store" } });
+      }
+      headers.set(PUBLIC_HEADER, "1");
+    }
     return pass();
   }
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
