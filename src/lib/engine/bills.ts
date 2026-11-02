@@ -92,20 +92,28 @@ export function findBill(db: Db, vendorId: string, reference: string, kind: Bill
 /**
  * The comparison keys a reference names a bill by (API review R7-M1): its forms as the duplicate check compares them
  * (separators, case, leading zeros and look-alike letters set aside, and the original of a re-issue like "-R" or
- * "-REV2"), plus the original of a part number written after a slash ("INV-ROSA-6001/2"). Numbers are never shortened
- * or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart.
+ * "-REV2"). With `partOf`, also the original of a part number written after a slash ("INV-ROSA-6001/2"), but never
+ * when what comes before the slash ends in a year ("RET-ROSA-2026/10" is October, not part 10). Numbers are never
+ * shortened or run into each other, so INV-ROSA-60030 and INV-ROSA-6003 stay apart.
  */
-export function billKeys(reference: string | null | undefined): Set<string> {
+export function billKeys(reference: string | null | undefined, partOf = false): Set<string> {
   if (!reference) return new Set();
-  const part = reference.trim().match(/^(.*\d{3,6})\s*\/\s*\d{1,2}$/);
-  return new Set([reference, ...(part ? [part[1]] : [])].flatMap((r) => sourceRefKeys(r).filter((k) => k.startsWith("~"))));
+  const part = partOf ? reference.trim().match(/^(.*\d{3,6})\s*\/\s*\d{1,2}$/) : null;
+  const base = part && !/(?:^|\D)(?:19|20)\d{2}$/.test(part[1]) ? part[1] : null;
+  return new Set([reference, ...(base ? [base] : [])].flatMap((r) => sourceRefKeys(r).filter((k) => k.startsWith("~"))));
 }
 
-/** Every bill of this supplier, of any kind and in any state, whose reference is the same as this one once compared. */
+/**
+ * Every bill of this supplier, of any kind and in any state, whose reference is the same as this one once compared. A
+ * "/N" ending is read as a part number only when no bill has the reference exactly as written (API review R8-S1).
+ */
 export function billsMatching(db: Db, vendorId: string, reference: string | null | undefined) {
-  const mine = billKeys(reference);
+  if (!reference) return [];
+  const all = db.select().from(bills).where(eq(bills.vendorId, vendorId)).all();
+  const exact = all.some((b) => b.reference === reference.trim().toUpperCase());
+  const mine = billKeys(reference, !exact);
   if (!mine.size) return [];
-  return db.select().from(bills).where(eq(bills.vendorId, vendorId)).all().filter((b) => [...billKeys(b.reference)].some((k) => mine.has(k)));
+  return all.filter((b) => [...billKeys(b.reference)].some((k) => mine.has(k)));
 }
 
 /**
