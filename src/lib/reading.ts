@@ -11,7 +11,7 @@ type Detail = NonNullable<ReturnType<typeof getObligationDetail>>;
 /**
  * The reading a request page leads with, and the same reading as the view the check statement takes. One function for
  * the request page, the autopilot countdown and Daily close, so none of them can show less than the page does.
- * `recorded` is a replayed live Claude run (display only; policy never sees it).
+ * `recorded` is a replayed live Claude run; policy checked its confidence unless it reflects the live account (src/lib/ai/agent.ts, withRecordedConfidence).
  */
 export function readingFor(d: Pick<Detail, "obligation" | "audit" | "agentRun" | "aiFlags" | "aiMissing">, db: Db = getDb()): { recorded: RecordedReading | null; reader: ReaderView | null } {
   const o = d.obligation;

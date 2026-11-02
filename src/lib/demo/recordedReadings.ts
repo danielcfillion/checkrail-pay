@@ -1,11 +1,13 @@
 /**
  * Claude's readings of the six opening demo requests, recorded from a live run (claude-sonnet-5-5, PayPal sandbox,
  * 28 Oct 2026) and replayed on the hosted demo so judges can see what the model reads and which tools it calls,
- * without a model call. Display only: on simulated rails the decision still comes from the rule-based reader and the
- * deterministic policy. Internal request ids were removed from the text. Tool results are the stored 200-character previews.
+ * without a model call. On simulated rails the decision still comes from the rule-based reader and the deterministic
+ * policy, but a replayed reading's confidence is the one policy checks (src/lib/ai/agent.ts, withRecordedConfidence),
+ * so the page and the policy rule quote the same figure, except for the two marked reflectsLiveAccount. Internal request ids were removed from the text. Tool results are the stored 200-character previews.
  *
  * Two readings (JOB-HG4D-0921 and JOB-PAL3D-0927) found real PayPal sandbox payouts made on 12 Oct 2026 for the same
- * jobs: that is what the live account held when they were recorded, and the page says so.
+ * jobs: that is what the live account held when they were recorded, and the page says so. They are marked
+ * reflectsLiveAccount: shown, but their confidence is not the one policy checks.
  */
 
 export interface RecordedReading {
@@ -21,6 +23,14 @@ export interface RecordedReading {
   toolCalls: Array<{ name: string; input: string; resultPreview: string }>;
   amountMinor: number;
   currency: string;
+  /** Claude read the repeat of a request already paid: it applies only when the reference is in the vendor's settled history. */
+  onlyAsRepeat?: boolean;
+  /**
+   * The reading turned on the live PayPal sandbox account's own state (payouts made there on 12 Oct 2026 that this
+   * demo's books do not hold). It is still shown, with its concerns, but its confidence is not handed to policy: the
+   * page says "The rules did not see this run." for these. Using it would hold the demo's ready-to-pay requests.
+   */
+  reflectsLiveAccount?: boolean;
 }
 
 export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
@@ -69,6 +79,7 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "onlyAsRepeat": true,
     "sourceRef": "JOB-HG4D-0914",
     "vendorId": "ven_maria",
     "summary": "Maria Santos invoices USD 180 for 4 days on JOB-HG4D-0914, which matches the trip sheet (4 x USD 45). However, vendor history shows this same job was already paid USD 180 on 2026-10-11, so this looks like a duplicate request.",
@@ -110,6 +121,7 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "reflectsLiveAccount": true,
     "sourceRef": "JOB-HG4D-0921",
     "vendorId": "ven_maria",
     "summary": "Maria Santos is a known vendor, and the USD 180.00 request matches the signed-off trip sheet (4 days × USD 45) and her usual 4-day rate. However, PayPal already shows a settled USD 180.00 payment from Checkrail Pay on 2026-10-12 with the note JOB-HG4D-0921, so this job may already have been paid.",
@@ -152,6 +164,7 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "reflectsLiveAccount": true,
     "sourceRef": "JOB-PAL3D-0927",
     "vendorId": "ven_ana",
     "summary": "Ana Reyes is owed USD 750.00 for the 3-day Palawan private trip. The amount matches the trip sheet (3 × USD 250) and her usual rate. However, PayPal already shows a USD 750 payment to ana.reyes@example.com referencing JOB-PAL3D-0927 (initiated 12 Oct, status pending), so this may be a duplicate.",

@@ -27,6 +27,28 @@ describe("what the countdown and Daily close show about a scheduled request's re
     expect(checkStatement({ rules: d.policyRules, reader }).chip).toBe(notes[maria].chip);
   });
 
+  it("policy checks the confidence the page shows for a replayed reading (Phuong Transport, USD 960)", async () => {
+    const db = openTestDb();
+    await seedDemo(db, { history: true });
+    const phuong = findObligationsBySourceRef(["INV-2026-0152"], db).find((r) => r.state !== "cancelled")!.id;
+    const d = getObligationDetail(phuong, db)!;
+    const { recorded, reader } = readingFor(d, db);
+    expect(recorded?.confidence).toBe(15);
+    expect(reader).toMatchObject({ recorded: true, confidence: 15 });
+    const rule = d.policyRules.find((r) => r.ruleId === "ai_confidence")!;
+    expect(rule.message).toBe("Agent confidence 15% is below the 75% threshold");
+    expect(rule.message).toContain(`${reader!.confidence}%`);
+    // Every seeded request whose page replays a reading, other than the two marked as reflecting the live account, agrees too.
+    for (const ref of ["JOB-HG4D-0914", "HS-1027", "INV-DML-1010"]) {
+      for (const row of findObligationsBySourceRef([ref], db)) {
+        const od = getObligationDetail(row.id, db)!;
+        const shown = readingFor(od, db);
+        const conf = od.policyRules.find((r) => r.ruleId === "ai_confidence");
+        if (shown.recorded && conf && /Agent confidence/.test(conf.message)) expect(conf.message).toContain(`Agent confidence ${shown.reader!.confidence}%`);
+      }
+    }
+  });
+
   it("leaves out a request whose reading is clear, and an id that does not exist", async () => {
     const db = openTestDb();
     await seedDemo(db, { history: true });

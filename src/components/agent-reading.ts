@@ -26,7 +26,8 @@ export function amountAsRead(audit: AuditLike[], current: { amountMinor: number 
  * request was read by the rule-based reader (so no model call was made), the recording is for the same vendor and
  * reference, and it read the same amount the reader saw (a new request that reuses a reference is not the one Claude
  * read), and it is the newest request with that vendor and reference (an older one that request duplicates was not
- * what Claude read). Display only: the caller never passes it to policy.
+ * what Claude read). Its confidence is also what policy checked: the rule-based reader takes it over at the source
+ * (withRecordedConfidence in src/lib/ai/agent.ts), so the page and the policy rule agree (except a reading marked reflectsLiveAccount).
  */
 export function selectRecordedReading(
   i: { engine: "claude" | "rules" | null | undefined; vendorId: string | null | undefined; sourceRef: string | null | undefined; readAmountMinor: number | null; readCurrency: string | null; newestForReference: boolean },
