@@ -9,15 +9,13 @@ import { distinctiveWords, isGenericWord, normaliseName } from "../domain/vendor
 import { amountsIn } from "../ai/extractor";
 import { TRANSITIONS, effectiveAutonomy, type ObligationState } from "../domain/types";
 import { transition } from "../domain/stateMachine";
-import { AGENT_FLAG_PREFIX, ingestObligation, previewPolicy } from "../engine/orchestrator";
+import { AGENT_FLAG_PREFIX, ingestObligation, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
 import { formatMoney } from "../format";
 import { evaluatePayment, verdictOf, type Verdict } from "../check/evaluate";
 import type { AgentKey } from "./keys";
 import { guideFor } from "./rules";
-import { API_REASON } from "../api/redact";
-
-/** Bill rules an agent reads as a fixed sentence, never with amounts (API review R7-S3). */
-const BILL_FIXED: Readonly<Record<string, string>> = Object.fromEntries(["bill_misfit", "bill_part_repeat", "bill_ambiguous", "bill_misfit_repeated"].map((k) => [k, API_REASON[k]]));
+import { BILL_NEUTRAL } from "../api/redact";
+import { billsMatching } from "../engine/bills";
 
 /**
  * The agent guard: what outside agents may ask Checkrail, and nothing more.
@@ -455,16 +453,16 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
   const others = otherNames(db, biz.id, [asked?.name]);
   const keep = asked?.name ?? null;
   let verdict = r.verdict;
-  // The bill rules answer agents with fixed sentences, no amounts: "only USD 100 is open" would let an agent find the
-  // open balance by trying (API review R7-S3). On a bill, the amount check's own message says the same, so it too.
-  const onBill = [...r.blocks, ...r.warnings].some((x) => x.rule in BILL_FIXED);
-  const fixed = (rule: string) => BILL_FIXED[rule] ?? (onBill && rule === "amount_matches_evidence" ? BILL_FIXED.bill_misfit : undefined);
-  const blocks = r.blocks.map((b) => ({ rule: b.rule, message: fixed(b.rule) ?? clean(forAgent(b.rule, b.message), others, keep) }));
-  const warnings = r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: fixed(w.rule) ?? clean(forAgent(w.rule, w.message), others, keep) }));
+  // A payment about a bill reads the same to an agent whether it fits or not: hold, one neutral sentence, nothing that
+  // depends on the bill's balance, state or other parts, so no answer can be used to find what is open (API review R8).
+  const aboutBill = Boolean(asked && a.reference && billsMatching(db, asked.id, a.reference).length);
+  const blocks = aboutBill ? [] : r.blocks.map((b) => ({ rule: b.rule, message: clean(forAgent(b.rule, b.message), others, keep) }));
+  const warnings = aboutBill ? [{ rule: "bill_review", message: BILL_NEUTRAL }] : r.warnings.map((w) => ({ rule: w.rule === "ai_flag" && w.message.startsWith(AGENT_FLAG_PREFIX) ? "agent_mismatch" : w.rule, message: clean(forAgent(w.rule, w.message), others, keep) }));
+  if (aboutBill) verdict = "hold";
 
   // An agent trying amount after amount for one job is looking for the line. It does not get a "pay" that way.
   const distinct = probing(db, agent, payeeKey, a.amountMinor, a.reference);
-  if (distinct >= PROBE_DISTINCT_AMOUNTS && verdict !== "block") {
+  if (distinct >= PROBE_DISTINCT_AMOUNTS && verdict !== "block" && !aboutBill) {
     verdict = "hold";
     warnings.unshift({ rule: "agent_probing", message: `This agent has tried ${distinct} different amounts for this payment in 15 minutes; a person confirms this one` });
   }
@@ -488,7 +486,7 @@ export async function checkPayment(db: Db, agent: AgentKey, raw: unknown): Promi
     blocks,
     warnings,
     next_steps: nextSteps(verdict, [...blocks, ...warnings]),
-    paypal_transaction_id: paypalTxnIn([...r.blocks, ...r.warnings].map((x) => x.message)),
+    paypal_transaction_id: aboutBill ? null : paypalTxnIn([...r.blocks, ...r.warnings].map((x) => x.message)),
     autonomy: effectiveAutonomy(JSON.parse(biz.policyJson)),
     checked_at: now(),
     note: "Judged against a copy of the books. Nothing was paid, saved or sent.",
@@ -529,11 +527,13 @@ function describe(db: Db, id: string): StatusAnswer {
   const settled = db.select().from(settlements).where(eq(settlements.obligationId, id)).orderBy(desc(settlements.settledAt)).get();
   const attempt = db.select({ externalId: paymentAttempts.externalId }).from(paymentAttempts).where(eq(paymentAttempts.obligationId, id)).orderBy(desc(paymentAttempts.createdAt)).get();
   const policy = ["blocked", "needs_evidence", "awaiting_approval", "approved"].includes(ob.state) ? previewPolicy(db, id) : null;
-  const onBill = Boolean(ob.billId) || (policy?.rules ?? []).some((r) => r.ruleId in BILL_FIXED);
-  const reasons = (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => BILL_FIXED[r.ruleId] ?? (onBill && r.ruleId === "amount_matches_evidence" ? BILL_FIXED.bill_misfit : clean(forAgent(r.ruleId, r.message), others, vendor?.name ?? null))).slice(0, 6);
+  // A request about a bill, while it waits, reads the same to the agent whether it fits or not (API review R8).
+  const aboutBill = ["blocked", "drafted", "needs_evidence", "awaiting_approval", "verified"].includes(ob.state) && outsideBillMatch(db, id);
+  const reasons = aboutBill ? [BILL_NEUTRAL] : (policy?.rules ?? []).filter((r) => !r.passed && r.severity !== "info").map((r) => clean(forAgent(r.ruleId, r.message), others, vendor?.name ?? null)).slice(0, 6);
   const scheduled = ob.state === "approved" && ob.releaseAt && !ob.autopilotCancelledAt;
   const status: RequestStatus =
-    ob.state === "blocked" ? "blocked"
+    aboutBill ? "waiting_for_approval"
+    : ob.state === "blocked" ? "blocked"
     : ob.state === "drafted" || ob.state === "needs_evidence" ? "waiting_for_evidence"
     : ob.state === "awaiting_approval" || ob.state === "verified" ? "waiting_for_approval"
     : scheduled ? "scheduled"

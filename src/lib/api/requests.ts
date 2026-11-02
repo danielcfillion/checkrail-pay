@@ -7,12 +7,12 @@ import { TRANSITIONS, type ObligationState, type SourceType } from "../domain/ty
 import { transition } from "../domain/stateMachine";
 import { normaliseName } from "../domain/vendorNames";
 import { ZERO_DECIMAL_CURRENCIES } from "../domain/money";
-import { ingestObligation, previewPolicy } from "../engine/orchestrator";
+import { ingestObligation, outsideBillMatch, previewPolicy } from "../engine/orchestrator";
 import { uploadDocument, ALLOWED_UPLOAD_TYPES } from "../engine/attachments";
 import { formatMoney } from "../format";
 import { AgentInputError, validatePaymentArgs } from "../agent/guard";
 import { hasScope, type ApiKey } from "./keys";
-import { apiReasons } from "./redact";
+import { BILL_NEUTRAL, apiReasons } from "./redact";
 import { ApiError, Problems, isObject, onlyFields, stable } from "./http";
 
 /**
@@ -263,6 +263,27 @@ export function describeRequest(db: Db, id: string, opts: { withReasons?: boolea
     : "failed";
   const decision = policy?.decision ?? ob.policyDecision ?? null;
   const verdict = decision === "auto_execute" ? "pay" : decision === "block" ? "block" : decision ? "hold" : null;
+  // A request about a bill reads the same to its sender whether it fits or not: waiting for a person, one neutral
+  // sentence, nothing that depends on the bill's balance, state or other parts (API review R8).
+  if (["blocked", "waiting_for_evidence", "waiting_for_approval"].includes(status) && outsideBillMatch(db, id)) {
+    return {
+      id: ob.id,
+      status: "waiting_for_approval" as RequestStatus,
+      state: "awaiting_approval",
+      verdict: "hold",
+      reasons: [BILL_NEUTRAL],
+      rules_failed: ["bill_review"],
+      payee: vendor ? { id: vendor.id, name: vendor.name } : null,
+      amount: ob.amountMinor != null && ob.currency ? { value: amountText(ob.amountMinor, ob.currency), currency: ob.currency, display: formatMoney(ob.amountMinor, ob.currency, { code: true }) } : null,
+      withheld: null,
+      reference: ob.sourceRef,
+      rail: null,
+      releases_at: null,
+      settlement: { status: "not_sent", rail: null, provider_id: null, settled_at: null, sent: null, fee: null, received: null },
+      created_at: ob.createdAt,
+      updated_at: ob.createdAt,
+    };
+  }
   const settlement =
     settled ? { status: ob.state === "refunded" ? "returned" : "settled", rail: settled.rail, provider_id: settled.externalId ?? attempt?.externalId ?? null, settled_at: settled.settledAt, sent: { value: amountText(settled.grossMinor, settled.grossCurrency), currency: settled.grossCurrency }, fee: { value: amountText(settled.feeMinor, settled.grossCurrency), currency: settled.grossCurrency }, received: settled.receivedMinor != null && settled.receivedCurrency ? { value: amountText(settled.receivedMinor, settled.receivedCurrency), currency: settled.receivedCurrency } : null }
     : attempt ? { status: status === "sending" ? "sending" : status === "returned" ? "returned" : attempt.status === "failed" ? "failed" : "sending", rail: attempt.rail, provider_id: attempt.externalId ?? null, settled_at: null, sent: null, fee: null, received: null }

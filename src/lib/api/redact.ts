@@ -34,12 +34,19 @@ export const API_REASON: Readonly<Record<string, string>> = {
   ai_flag: "The reader raised a concern; a person looks.",
   agent_mismatch: "The description disagrees with the request's fields; a person confirms which is right.",
   ai_missing: "The reader wants more information.",
-  bill_part_repeat: "This bill already has another part; a person confirms this is a separate payment.",
-  bill_part: "This request is one part of a bill.",
-  bill_ambiguous: "The reference matches more than one bill of this supplier; a person records which one this pays.",
-  bill_misfit_repeated: "Several requests on this bill did not fit it recently; a person confirms this one.",
-  bill_misfit:"The amount or currency does not fit what is still open on the bill; a person records it by hand if it is right.",
+  // Every rule about a bill reads the same to an outside caller (API review R8): see BILL_NEUTRAL.
+  bill_part_repeat: "This matches a bill on file. A person reviews payments against bills.",
+  bill_part: "This matches a bill on file. A person reviews payments against bills.",
+  bill_review: "This matches a bill on file. A person reviews payments against bills.",
+  bill_ambiguous: "This matches a bill on file. A person reviews payments against bills.",
+  bill_misfit: "This matches a bill on file. A person reviews payments against bills.",
 };
+
+/**
+ * The one answer an outside caller gets for any request about a bill, whether it fits or not (API review R8): nothing
+ * it sees may depend on the bill's balance, its state or its other parts.
+ */
+export const BILL_NEUTRAL = API_REASON.bill_review;
 
 /** For a decision that needs a person when no single rule says why (caps, dual approval, autonomy, own say-so only). */
 export const API_NEEDS_PERSON = "A person approves this payment under the business's rules.";

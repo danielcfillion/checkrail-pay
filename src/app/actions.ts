@@ -670,7 +670,12 @@ export async function createBillAction(vendorId: string, bill: { kind: string; r
     const id = await withBusiness(async (db, b, who) => {
       const made = createBill(db, b, who, vendorId, bill);
       // Requests from outside callers that already name this bill are put on it and checked again (API review R7-S4).
-      await linkWaitingToBill(db, made, who.id);
+      // The bill is recorded either way: a failure here is logged, not shown to the clerk as a failed bill (R8-N1).
+      try {
+        await linkWaitingToBill(db, made, who.id);
+      } catch (e) {
+        console.error("[checkrail] linking waiting requests to a new bill failed", e);
+      }
       return made;
     });
     done([`/vendors/${vendorId}`]);
