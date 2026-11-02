@@ -819,6 +819,23 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
   const rules: PolicyRuleResult[] = [...outcome.rules, { ruleId: "bill_part", passed: true, severity: "info", message: partLine }];
   // Whenever a person is asked, the reasons say which part of the bill this is.
   const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, partLine];
+  const outside = /^(mcp|api):/.test(originOf(db, ob.id));
+  // An outside caller's part must fit the bill exactly: open, in its currency, and no more than is left after payments
+  // and credits, with none of the tolerance a person's typing gets (API review R6-1). Otherwise it is blocked here; a
+  // person can record such a payment by hand.
+  if (outside) {
+    const bal = billBalance(db, bill.id, ob.id);
+    const open = bill.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
+    const misfit =
+      bill.status !== "open" ? `Bill ${bill.reference} is ${bill.status}; nothing more is paid on it without a person recording it`
+      : bill.currency !== ob.currency ? `Bill ${bill.reference} is in ${bill.currency}, this payment is in ${ob.currency}`
+      : (ob.amountMinor ?? 0) > open ? `Requested ${fmt(ob.amountMinor ?? 0, ob.currency ?? bill.currency)} but only ${fmt(Math.max(0, open), bill.currency)} is still open on ${bill.reference} after payments and credits`
+      : null;
+    if (misfit) {
+      rules.push({ ruleId: "bill_misfit", passed: false, severity: "block", message: misfit });
+      return { ...outcome, decision: "block", rules, reasons: [misfit, ...outcome.reasons.filter((r) => r !== misfit), partLine] };
+    }
+  }
   if (!others.length) return { ...outcome, rules, reasons };
 
   const why = `Bill ${bill.reference} already has another part (${money(others[0])}). A person confirms this is a separate payment.`;
@@ -826,7 +843,7 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
     rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
     return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
   };
-  if (!/^(mcp|api):/.test(originOf(db, ob.id))) return note();
+  if (!outside) return note();
   // The exact balance: every other part is approved by a person, in flight, paid or disputed, and this request is
   // exactly what is left of the bill after them and its credits.
   const byPerson = (id: string) => Boolean(db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, id), eq(approvals.decision, "approved"), sql`substr(${approvals.actor}, 1, 5) = 'user:'`)).get());
@@ -858,17 +875,19 @@ function linkToBill(db: Db, obligationId: string, ai: AiInterpretation, ev: Evid
   // Who asked for this payment in the first place: for one asked again after it came back, the original asker, so a
   // person's "pay again" carries an outside caller's records at their original weight (API review R3-S2).
   const outside = /^(mcp|api):/.test(originOf(db, obligationId));
-  // A request from an outside agent (mcp:) or an integration (api:) joins an existing bill only when it fits what is
-  // still open, in the bill's currency; otherwise it is checked as a payment of its own. It is the balance only when it
-  // is exactly what is open; whatever else it calls itself, it is an ordinary part (API review R4).
+  // A request from an outside agent (mcp:) or an integration (api:) that names a bill of this vendor stays on that bill,
+  // whatever state the bill is in and whether or not it fits: the bill check then blocks what does not fit (more than
+  // is open after payments and credits, another currency, a closed or void bill), and a person can still record such a
+  // payment by hand. It is never checked as if no bill existed (API review R6-1). It is the balance only when it is
+  // exactly what is open; whatever else it calls itself, it is an ordinary part (API review R4).
   let outsideKind: string | null = null;
-  if (billId && existing && outside) {
+  if (existing && outside) {
+    billId = existing.id;
     const bal = billBalance(db, existing.id, obligationId);
     const open = existing.totalMinor - bal.paidMinor - bal.pendingMinor - bal.creditedMinor;
-    if (existing.currency !== ob.currency || ob.amountMinor > open) billId = null;
-    else outsideKind = ai.paymentPart?.kind === "balance" && ob.amountMinor === open ? "balance" : ai.paymentPart?.kind === "deposit" ? "deposit" : "part";
+    outsideKind = ai.paymentPart?.kind === "balance" && ob.amountMinor === open && existing.currency === ob.currency ? "balance" : ai.paymentPart?.kind === "deposit" ? "deposit" : "part";
   }
-  if (!billId && ai.paymentPart?.kind === "deposit") {
+  if (!billId && !existing && ai.paymentPart?.kind === "deposit") {
     // Which records may set a bill total is decided by where they came from (API review R3-S1). A supplier's own record
     // (a vendor link upload) never does, whoever asked. For a request from an outside agent or an integration, only the
     // business's own records (provenance "system", an attest key) do: its typing, its PDF and anything a person added
