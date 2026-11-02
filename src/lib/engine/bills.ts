@@ -105,7 +105,9 @@ export function billKeys(reference: string | null | undefined, partOf = false): 
   // The number before the slash, with any re-issue mark after it set aside, must not be a year.
   const core = part?.[1].replace(/[^\p{L}\p{N}]+(?:[A-Za-z]|[Rr]\d?|REV\d*|rev\d*)$/u, "");
   const base = part && core && /\d{3,6}$/.test(core) && !/(?:^|\D)(?:19|20)\d{2}$/.test(core) ? part[1] : null;
-  const folded = (r: string) => `=${foldConfusables(r).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "")}`;
+  // Separators go, except between two digits, which keep one "." so separate numbers stay apart ("INV-12-3" is not
+  // "INV-123"), as the duplicate check keeps them (API review R10-N1).
+  const folded = (r: string) => `=${foldConfusables(r).toUpperCase().replace(/[^\p{L}\p{N}]+/gu, (sep, at: number, all: string) => (/\d/.test(all[at - 1] ?? "") && /\d/.test(all[at + sep.length] ?? "") ? "." : ""))}`;
   return new Set([reference, ...(base ? [base] : [])].flatMap((r) => [...sourceRefKeys(r).filter((k) => k.startsWith("~")), folded(r)]).filter((k) => k.length > 1));
 }
 
@@ -120,6 +122,18 @@ export function billsMatching(db: Db, vendorId: string, reference: string | null
   const mine = billKeys(reference, !exact);
   if (!mine.size) return [];
   return all.filter((b) => [...billKeys(b.reference)].some((k) => mine.has(k)));
+}
+
+/** How far back a supplier's bills make every outside request to them wait for a person (API review R10). */
+export const RECENT_BILL_DAYS = 180;
+
+/** Every bill of this supplier recorded in the last RECENT_BILL_DAYS days, of any kind and in any state, oldest first. */
+export function recentBills(db: Db, vendorId: string | null | undefined) {
+  if (!vendorId) return [];
+  const since = new Date(Date.now() - RECENT_BILL_DAYS * 86_400_000).toISOString();
+  return db.select().from(bills).where(eq(bills.vendorId, vendorId)).all()
+    .filter((b) => b.createdAt >= since)
+    .sort((x, y) => x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
 }
 
 /**

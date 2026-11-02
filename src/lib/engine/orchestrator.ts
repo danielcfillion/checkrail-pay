@@ -4,7 +4,7 @@ import { accountingSyncs, approvals, attachments, auditEntries, businesses, evid
 import { actorCan, approversFor, preparersOf, resolveActor, whoIs } from "./users";
 import { toBaseMinor, toBaseOrZero } from "../fx";
 import { decryptField, keyedDigest } from "../crypto/dataKey";
-import { billBalance, billsMatching, closeIfDone, createBill, findBill } from "./bills";
+import { RECENT_BILL_DAYS, billBalance, billsMatching, closeIfDone, createBill, findBill, recentBills } from "./bills";
 import { expectedAmount, rateCardsForPolicy } from "./rates";
 import { assertOpenPeriod } from "./books";
 import { taxFormWarning, withholdingFor } from "./taxes";
@@ -443,6 +443,7 @@ export async function recheckObligation(db: Db, obligationId: string, actor: str
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.recheck", { reason: "checked again" });
   else audit(db, { obligationId, actor, action: "review.recheck", detail: {} });
   await refreshPayPalHistory(db, obligationId);
+  relinkOutside(db, obligationId, actor);
   const outcome = runPolicy(db, obligationId);
   const fresh = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, fresh.businessId)).get()!;
@@ -801,76 +802,82 @@ function approvedByPerson(db: Db, id: string): boolean {
 }
 
 /**
- * Whether an outside caller's request is about a bill: it is on one, or its reference matches one or more bills of its
- * supplier. Such a request always waits for a person, and what the caller is told never depends on the bill (API
- * review R8). Used by the API and agent views.
+ * Whether an outside caller's payment to this supplier under this reference always waits on a person because of bills:
+ * the supplier has a bill recorded in the last RECENT_BILL_DAYS days, or the reference matches any bill of theirs (API
+ * reviews R8, R10). Match or no match reads the same to the caller.
+ */
+export function supplierBillReview(db: Db, vendorId: string | null | undefined, reference: string | null | undefined): boolean {
+  if (!vendorId) return false;
+  return recentBills(db, vendorId).length > 0 || Boolean(reference && billsMatching(db, vendorId, reference).length);
+}
+
+/**
+ * Whether an outside caller's request waits for a person because of bills: it is on one, or supplierBillReview holds.
+ * What the caller is told then never depends on the bills (API reviews R8, R10). Used by the API and agent views.
  */
 export function outsideBillMatch(db: Db, obligationId: string): boolean {
   const ob = db.select({ billId: obligations.billId, vendorId: obligations.vendorId, sourceRef: obligations.sourceRef }).from(obligations).where(eq(obligations.id, obligationId)).get();
   if (!ob || !/^(mcp|api):/.test(originOf(db, obligationId))) return false;
-  return Boolean(ob.billId) || Boolean(ob.vendorId && ob.sourceRef && billsMatching(db, ob.vendorId, ob.sourceRef).length);
+  return Boolean(ob.billId) || supplierBillReview(db, ob.vendorId, ob.sourceRef);
 }
 
 /**
- * Parts of one bill (API reviews R4 to R8). Policy does not compare parts of one bill with each other as duplicates,
- * which is how a deposit and its balance both get paid. So, in plain words:
+ * Bills and outside callers (API reviews R4 to R10). Policy does not compare parts of one bill with each other as
+ * duplicates, which is how a deposit and its balance both get paid. So, in plain words:
  *
  *  - Every part of a bill says which part it is and lists the other parts, so an approver always sees the bill.
- *  - A request from an outside agent (mcp:) or an integration (api:) whose reference matches any bill of its supplier
- *    (one or several, any kind, any state), or that is put on one later, is never paid without a person. There are no
- *    exceptions. Autopilot cannot schedule or release it, and an approval counts only if the approver saw the warning,
- *    which names the other parts. It runs wherever policy runs: on create, on every re-check, on retry and at release.
- *  - The person sees whether it fits: what is open after credits and the other parts a person approved, or that are
- *    in flight, paid or disputed. A request that does not fit (more than is open, another currency, a credit note, a
- *    closed or void bill) is blocked, so it cannot be approved; a person can record such a payment by hand. A
- *    reference that matches several bills is blocked until a person records which one it pays.
- *  - The outside caller is told the same either way (src/lib/api/requests.ts, src/lib/agent/guard.ts).
+ *  - Fail closed (R10): a request from an outside agent (mcp:) or an integration (api:) to a supplier with any bill
+ *    recorded in the last RECENT_BILL_DAYS days (any kind, any state) is never paid without a person, whatever its
+ *    reference says. No spelling of a reference gets past this, since it does not depend on the reference at all.
+ *    The same holds for a request that is on a bill, or whose reference matches one, however old. Autopilot cannot
+ *    schedule or release it, and an approval counts only if the approver saw the warning, whose fingerprint names the
+ *    supplier's recent bills and the bill's other parts. It runs wherever policy runs: on create, on every re-check,
+ *    on retry and at release.
+ *  - Reference matching only adds what the person sees and hard blocks. A matched bill is checked for fit: what is open
+ *    after credits and the other parts a person approved, or that are in flight, paid or disputed. One that does not
+ *    fit (more than is open, another currency, a credit note, a closed or void bill) is blocked, so it cannot be
+ *    approved; a person can record such a payment by hand. A reference that matches several bills is blocked until a
+ *    person records which one it pays. When nothing matches, the person is told the request names none of the
+ *    supplier's recent bills, and may approve it as unbilled work. Either way they see those bills and what is open.
+ *  - The outside caller is told the same in every one of these cases (src/lib/api/view.ts), so it cannot tell a match
+ *    from no match.
  *  - A person's part carries a note and otherwise goes as it always has.
  */
 function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome, approvalsCount: number, acknowledged: string[] | undefined): PolicyOutcome {
   const outside = /^(mcp|api):/.test(originOf(db, ob.id));
-  if (!ob.billId) {
-    const matching = outside && ob.vendorId && ob.sourceRef ? billsMatching(db, ob.vendorId, ob.sourceRef) : [];
-    if (!matching.length) return outcome;
-    // Not on a bill but naming one or more: several are for a person to choose between; one (not yet linked, as
-    // when a bill matches only after it was recorded) still waits for a person.
-    const why = matching.length > 1
-      ? `Reference ${ob.sourceRef} matches ${matching.length} bills of this supplier (${matching.map((b) => b.reference).join(", ")}); a person records which one this pays`
-      : `Reference ${ob.sourceRef} matches bill ${matching[0].reference}; a person reviews payments against bills`;
-    const rule: PolicyRuleResult = { ruleId: matching.length > 1 ? "bill_ambiguous" : "bill_review", passed: false, severity: matching.length > 1 ? "block" : "warn", message: why, key: matching.map((b) => b.id).sort().join(",") };
-    return needsPerson(outcome, rule, approvalsCount, acknowledged, []);
-  }
-  const found = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
-  if (!found) return outcome;
-  const bill = found;
-  const others = db
-    .select({ id: obligations.id, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, createdAt: obligations.createdAt, updatedAt: obligations.updatedAt })
-    .from(obligations)
-    .where(and(eq(obligations.billId, ob.billId), ne(obligations.id, ob.id)))
-    .all()
-    .filter((p) => p.state !== "cancelled" && p.state !== "refunded")
-    .sort((x, y) => x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
-  const money = (p: { amountMinor: number | null; currency: string | null }) => (p.amountMinor != null ? fmt(p.amountMinor, p.currency ?? bill.currency) : "an amount");
-  const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
-  const position = others.filter((p) => p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.id < ob.id)).length + 1;
-  const partLine = `Part ${position} of bill ${bill.reference}; other parts: ${others.length ? others.map((p) => `${money(p)}, ${p.state.replace(/_/g, " ")} ${day(p.updatedAt)}`).join("; ") : "none"}`;
-  const partRule: PolicyRuleResult = { ruleId: "bill_part", passed: true, severity: "info", message: partLine };
+  if (!outside) return ob.billId ? personPart(db, ob, outcome) : outcome;
 
-  if (!outside) {
-    // A person's part: the note, and otherwise as before.
-    const rules = [...outcome.rules, partRule];
-    const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, partLine];
-    if (!others.length) return { ...outcome, rules, reasons };
-    const why = `Bill ${bill.reference} already has another part (${money(others[0])}). A person confirms this is a separate payment.`;
-    rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
-    return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
+  // What the approver sees about the supplier's recent bills, and what their approval must have covered.
+  const recent = recentBills(db, ob.vendorId);
+  const recentKey = recent.map((b) => b.id).sort().join(",");
+  const recentLine = recent.length
+    ? `This supplier's bills in the last ${RECENT_BILL_DAYS} days: ${recent.map((b) => `${b.reference} (${b.kind.replace("_", " ")}, ${b.status}, ${fmt(billBalance(db, b.id, ob.id).openMinor, b.currency)} open)`).join("; ")}`
+    : null;
+  const recentRule: PolicyRuleResult[] = recentLine ? [{ ruleId: "bill_recent", passed: true, severity: "info", message: recentLine }] : [];
+
+  const matching = ob.billId ? [] : ob.vendorId && ob.sourceRef ? billsMatching(db, ob.vendorId, ob.sourceRef) : [];
+  if (!ob.billId && matching.length > 1) {
+    const why = `Reference ${ob.sourceRef} matches ${matching.length} bills of this supplier (${matching.map((b) => b.reference).join(", ")}); a person records which one this pays`;
+    return needsPerson(outcome, { ruleId: "bill_ambiguous", passed: false, severity: "block", message: why, key: `${matching.map((b) => b.id).sort().join(",")};recent=${recentKey}` }, approvalsCount, acknowledged, recentRule);
+  }
+  const billId = ob.billId ?? matching[0]?.id ?? null;
+  const bill = billId ? db.select().from(bills).where(eq(bills.id, billId)).get() : undefined;
+  if (!bill) {
+    if (!recent.length) return outcome;
+    // Names none of the supplier's recent bills: a person says whether it is unbilled work.
+    const why = "This request names none of this supplier's recent bills. A person checks it is not one of them before approving it as unbilled work.";
+    return needsPerson(outcome, { ruleId: "bill_review", passed: false, severity: "warn", message: why, key: `none;recent=${recentKey}` }, approvalsCount, acknowledged, recentRule);
   }
 
+  const others = partsOf(db, bill.id, ob.id);
+  const partRule: PolicyRuleResult = { ruleId: "bill_part", passed: true, severity: "info", message: partLine(ob, bill, others) };
   // What is open for an outside caller's request: the total less credits and the other parts a person approved, or
   // that are in flight, paid or disputed. Unapproved requests do not count, so one caller cannot crowd out another.
   // Known and left as is (review R9-N3): policy's own bill check (amount_matches_evidence in policy.ts) still counts
   // parts awaiting approval, so unapproved requests can make a fitting one show as blocked to the person until they
-  // are cancelled. The outside caller's answer is the same either way.
+  // are cancelled. The outside caller's answer is the same either way. The same count means a large unapproved outside
+  // request can hold up a person's own balance payment on the bill until someone cancels it (review R10-N4, left as is:
+  // it only ever holds money back, and the person sees both requests).
   const counts = (p: (typeof others)[number]) => ["execution_pending", "sent", "settled", "disputed"].includes(p.state) || (p.state === "approved" && approvedByPerson(db, p.id));
   const committed = others.filter((p) => counts(p) && p.currency === bill.currency).reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
   const open = bill.totalMinor - billBalance(db, bill.id, ob.id).creditedMinor - committed;
@@ -880,12 +887,47 @@ function withBillParts(db: Db, ob: typeof obligations.$inferSelect, outcome: Pol
     : bill.currency !== ob.currency ? `Bill ${bill.reference} is in ${bill.currency}, this payment is in ${ob.currency}`
     : (ob.amountMinor ?? 0) > open ? `Requested ${fmt(ob.amountMinor ?? 0, ob.currency ?? bill.currency)} but only ${fmt(Math.max(0, open), bill.currency)} is open on ${bill.reference} after credits and the parts a person approved`
     : null;
-  // The fingerprint names the other parts, so an approval given before a new part arrived does not cover it.
-  const key = `${bill.id}:${others.map((p) => p.id).sort().join(",")}`;
+  // The fingerprint names the other parts and the supplier's recent bills, so an approval given before a new part or a
+  // new bill arrived does not cover it.
+  const key = `${bill.id}:${others.map((p) => p.id).sort().join(",")};recent=${recentKey}`;
   const rule: PolicyRuleResult = misfit
     ? { ruleId: "bill_misfit", passed: false, severity: "block", message: misfit, key }
-    : { ruleId: "bill_review", passed: false, severity: "warn", message: `Request on bill ${bill.reference}: ${fmt(ob.amountMinor ?? 0, bill.currency)} of ${fmt(Math.max(0, open), bill.currency)} open. A person reviews payments against bills.`, key };
-  return needsPerson(outcome, rule, approvalsCount, acknowledged, [partRule]);
+    : { ruleId: "bill_review", passed: false, severity: "warn", message: `Request on bill ${bill.reference}: ${fmt(ob.amountMinor ?? 0, bill.currency)} of ${fmt(Math.max(0, open), bill.currency)} open. A person reviews payments to this supplier.`, key };
+  return needsPerson(outcome, rule, approvalsCount, acknowledged, [partRule, ...recentRule]);
+}
+
+/** The other live parts of a bill, in the order they came in. */
+function partsOf(db: Db, billId: string, exceptId: string) {
+  return db
+    .select({ id: obligations.id, amountMinor: obligations.amountMinor, currency: obligations.currency, state: obligations.state, createdAt: obligations.createdAt, updatedAt: obligations.updatedAt })
+    .from(obligations)
+    .where(and(eq(obligations.billId, billId), ne(obligations.id, exceptId)))
+    .all()
+    .filter((p) => p.state !== "cancelled" && p.state !== "refunded")
+    .sort((x, y) => x.createdAt.localeCompare(y.createdAt) || x.id.localeCompare(y.id));
+}
+
+/** "Part 2 of bill INV-1; other parts: ..." */
+function partLine(ob: typeof obligations.$inferSelect, bill: typeof bills.$inferSelect, others: ReturnType<typeof partsOf>): string {
+  const money = (p: { amountMinor: number | null; currency: string | null }) => (p.amountMinor != null ? fmt(p.amountMinor, p.currency ?? bill.currency) : "an amount");
+  const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  const position = others.filter((p) => p.createdAt < ob.createdAt || (p.createdAt === ob.createdAt && p.id < ob.id)).length + 1;
+  return `Part ${position} of bill ${bill.reference}; other parts: ${others.length ? others.map((p) => `${money(p)}, ${p.state.replace(/_/g, " ")} ${day(p.updatedAt)}`).join("; ") : "none"}`;
+}
+
+/** A person's part: the note, and otherwise as before. */
+function personPart(db: Db, ob: typeof obligations.$inferSelect, outcome: PolicyOutcome): PolicyOutcome {
+  const bill = db.select().from(bills).where(eq(bills.id, ob.billId!)).get();
+  if (!bill) return outcome;
+  const others = partsOf(db, bill.id, ob.id);
+  const line = partLine(ob, bill, others);
+  const rules: PolicyRuleResult[] = [...outcome.rules, { ruleId: "bill_part", passed: true, severity: "info", message: line }];
+  const reasons = outcome.decision === "auto_execute" ? [...outcome.reasons] : [...outcome.reasons, line];
+  if (!others.length) return { ...outcome, rules, reasons };
+  const money = others[0].amountMinor != null ? fmt(others[0].amountMinor, others[0].currency ?? bill.currency) : "an amount";
+  const why = `Bill ${bill.reference} already has another part (${money}). A person confirms this is a separate payment.`;
+  rules.push({ ruleId: "bill_part_repeat", passed: false, severity: "info", message: why });
+  return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? reasons : [...reasons, why] };
 }
 
 /** Add a rule that needs a person: a block blocks; a warning needs an approval that saw it. */
@@ -900,6 +942,23 @@ function needsPerson(outcome: PolicyOutcome, rule: PolicyRuleResult, approvalsCo
     return { ...outcome, decision: "require_approval", rules, reasons: [`New since approval: ${rule.message}`, ...extra.map((r) => r.message)], unacknowledged: [...(outcome.unacknowledged ?? []), warningFingerprint(rule)] };
   }
   return { ...outcome, rules, reasons: outcome.decision === "auto_execute" ? outcome.reasons : [...rest, ...lines] };
+}
+
+/**
+ * Put an outside caller's request on the one bill of its supplier its reference names, in whatever state the bill is,
+ * as linkToBill does when the request is first read (API review R10-M2). Run before policy whenever a request is checked
+ * again or corrected, so a reference or payee changed onto a void or closed bill is checked against that bill and
+ * blocked. A request on a bill whose corrected reference names exactly one other bill moves to it. Nothing else changes.
+ */
+function relinkOutside(db: Db, obligationId: string, actor: string): void {
+  const ob = mustGet(db, obligationId);
+  if (!ob.vendorId || !ob.sourceRef || !/^(mcp|api):/.test(originOf(db, obligationId))) return;
+  const matching = billsMatching(db, ob.vendorId, ob.sourceRef);
+  if (matching.length !== 1 || matching[0].id === ob.billId) return;
+  const billId = matching[0].id;
+  const kind = ob.paymentKind === "deposit" ? "deposit" : "part";
+  db.update(obligations).set({ billId, paymentKind: kind, updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
+  audit(db, { obligationId, actor, action: "bill.linked", detail: { billId, kind, previous: ob.billId, after: "checked again" } });
 }
 
 /**
@@ -1204,6 +1263,7 @@ export async function amendObligation(db: Db, obligationId: string, actor: strin
   db.update(obligations).set({ ...patch, aiFlagsJson: JSON.stringify(flags), updatedAt: now() }).where(eq(obligations.id, obligationId)).run();
   audit(db, { obligationId, actor, action: "obligation.amended", detail: { patch, note: note ?? null, previous: { amountMinor: ob.amountMinor, currency: ob.currency, sourceRef: ob.sourceRef, vendorId: ob.vendorId } } });
   if (ob.state === "blocked") transition(db, obligationId, "verified", actor, "review.resolved", { note: note ?? null });
+  relinkOutside(db, obligationId, actor);
   const outcome = runPolicy(db, obligationId);
   const fresh = mustGet(db, obligationId);
   const biz = db.select().from(businesses).where(eq(businesses.id, fresh.businessId)).get()!;
