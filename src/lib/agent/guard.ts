@@ -634,7 +634,10 @@ export async function requestPayment(db: Db, agent: AgentKey, raw: unknown): Pro
       const orphan = db.select({ id: obligations.id }).from(obligations).where(like(obligations.rawInput, `%request ${claim}]%`)).get();
       if (orphan) withdraw(db, orphan.id, agent, "creating the request failed");
       db.delete(agentChecks).where(eq(agentChecks.id, claim)).run();
-      throw new AgentInputError(`Checkrail could not create the request: ${clean(e instanceof Error ? e.message : "an error")}. Nothing was paid.`);
+      // Never the exception's own text: it can name other payments or internal ids (API review R6-2). The detail goes
+      // to the server log.
+      console.error("[checkrail] agent request could not be created", e);
+      throw new AgentInputError("Checkrail could not process this request. Nothing was paid.");
     }
 
     // The request in the books must be exactly what was sent. Fixed fields make that so; this is the belt to those braces.

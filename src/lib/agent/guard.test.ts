@@ -315,7 +315,7 @@ describe("review fixes (independent review of the agent guard, 31 Oct)", () => {
       return real(...args);
     });
     try {
-      await expect(requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag4-key-0001" })).rejects.toThrow(/could not create the request/);
+      await expect(requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag4-key-0001" })).rejects.toThrow(/^Checkrail could not process this request\. Nothing was paid\.$/);
     } finally {
       spy.mockRestore();
     }
