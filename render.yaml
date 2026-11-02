@@ -5,10 +5,10 @@ services:
   - type: web
     name: checkrail-pay
     runtime: node
-    plan: free
+    plan: starter
     region: singapore
     buildCommand: npm ci && npm run build
-    # The free plan has no persistent disk: every restart reseeds the demo story, which is what a judge wants.
+    # Starter ($7 a month, set 2 Nov 2026 for judging; review 2 Jan 2027): no sleeping, but still no persistent disk, so every deploy reseeds the demo story, which is what a judge wants.
     startCommand: npm run db:seed && npm run start -- -p $PORT
     healthCheckPath: /healthz
     envVars:
@@ -34,7 +34,7 @@ services:
       # A private copy of the demo per visitor (docs/JUDGES.md): each browser gets its own copy of the seeded
       # database, so two judges at once never see each other's clicks. Simulated rails only; refused otherwise.
       # At most 50 copies, each deleted after 120 minutes idle (when full, only a copy idle for 30 minutes makes room; otherwise a new visitor sees a busy page). The copies
-      # live in ./data/sandboxes, which the free plan's disk loses on restart, as it should.
+      # live in ./data/sandboxes, which a redeploy wipes, as it should.
       - key: CHECKRAIL_SANDBOX
         value: "1"
       - key: CHECKRAIL_SANDBOX_MAX
