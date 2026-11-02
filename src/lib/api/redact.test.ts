@@ -5,7 +5,7 @@ import { OBLIGATION_STATES } from "../domain/types";
 import { API_NEEDS_PERSON, apiReasonFor, apiReasons } from "./redact";
 
 /**
- * Review R5-M3: what an API key reads about why a request waits is one fixed sentence per rule code, never text from
+ * What an API key reads about why a request waits is one fixed sentence per rule code, never text from
  * the books. Every code policy and the orchestrator can produce is checked here, read from their source, so a new rule
  * cannot slip through with its internal message.
  */

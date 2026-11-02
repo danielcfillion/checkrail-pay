@@ -180,7 +180,7 @@ describe("authentication", () => {
 describe("the middleware", () => {
   const EXEMPT = ["/api/v1/departures", "/api/v1/requests", "/api/v1/requests/obl_abc123", "/api/v1/vendors", "/api/v1/openapi.json"];
   // Paths with no route: Next renders the not-found page inside the app layout, which trusts the identity headers, so
-  // the middleware must run on them and strip any forged ones (review R1-1).
+  // the middleware must run on them and strip any forged ones.
   const NOT_EXEMPT = [
     "/settings", "/api/v1", "/api/v1/", "/api/v1/other", "/api/v1/requests/a/b", "/api/v1/vendorsx", "/api/v2/vendors",
     "/api/v1/vendors/x", "/api/v1/departures/x", "/api/v1/openapi.json/x", "/api/v1/vendors/", "/api/v1/departures/", "/api/v1/requests/",
@@ -749,7 +749,7 @@ describe("review fixes, round 3", () => {
       personBill("INV-ROSA-6003", 10_000);
       const r = await postRequest(pay("INV-ROSA-60030", "100"), "r8-n3-0000001", "l");
       expect(ob(r.json.id).billId).toBeNull();
-      // Not matched, but this supplier has a recent bill, so a person still looks (R10).
+      // Not matched, but this supplier has a recent bill, so a person still looks.
       neutral(r.json);
     });
 
@@ -880,6 +880,91 @@ describe("review fixes, round 3", () => {
       const folded = (r: string) => [...billKeys(r)].filter((k) => k.startsWith("="));
       expect(folded("INV-12-3")).not.toEqual(folded("INV-123"));
       expect(folded("ROSA-NOV")).toEqual(folded("rosa_nov"));
+    });
+
+    // ---- Last pass before merge.
+    const payTo = (payee: string, reference: string, amount = "50") => ({ payee, amount, currency: "USD", reference, description: `${payee}, guiding, USD ${amount}, invoice ${reference}.`, evidence: [{ kind: "job_sheet", label: `Trip sheet ${reference}`, amount, reference, excerpt: `Guide: ${payee}. Total USD ${amount}.` }] });
+
+    it("another supplier's bill: a request to Maria naming Rosa's bill is blocked, reads neutral, and stays blocked after Rosa's bill was paid", async () => {
+      await autopilot();
+      const bill = personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(payTo("Maria Santos", "INV-ROSA-6001"), "fin-sib-000001", "l");
+      const id = r.json.id as string;
+      expect(ob(id).vendorId).toBe("ven_maria");
+      expect(ob(id).state).toBe("blocked");
+      expect(inside(id).rules.find((x) => x.ruleId === "bill_other_supplier")?.message).toBe("Reference INV-ROSA-6001 names bill INV-ROSA-6001 of supplier Rosa Villanueva; a person checks who this pays");
+      expect(() => approveObligation(getDb(), id, "user:minh", "ok", ackAll(id))).toThrow();
+      neutral((await getRequest(id, "l")).json);
+      // Rosa is paid on her bill; the same request to Maria is still blocked.
+      const lan = resolveActor(getDb(), DEMO_BUSINESS_ID, "lan", "clerk");
+      const rosa = await payBill(getDb(), DEMO_BUSINESS_ID, lan, bill, 10_000);
+      approveObligation(getDb(), rosa, "user:minh", "ok", inside(rosa).rules.filter((x) => x.severity === "warn" && !x.passed).map((x) => `${x.ruleId}|${x.key ?? x.message}`));
+      await executeObligation(getDb(), rosa, { actor: "user:minh" });
+      expect(["sent", "settled", "execution_pending"]).toContain(ob(rosa).state);
+      const again = await postRequest(payTo("Maria Santos", "INV_ROSA_6001"), "fin-sib-000002", "l");
+      expect(ob(again.json.id).state).toBe("blocked");
+      expect(insideRules(again.json.id)).toContain("bill_other_supplier");
+      neutral(again.json);
+    });
+
+    it("reference spread: after 10 different references for one supplier in 10 minutes, the key's next request waits for a person", async () => {
+      await autopilot();
+      for (let i = 0; i < 10; i++) {
+        const r = await postRequest(pay(`TRIP-ROSA-${String(7100 + i)}`, "20"), `fin-spr-${String(i).padStart(6, "0")}`, "l");
+        expect(insideRules(r.json.id), `request ${i + 1}`).not.toContain("reference_spread");
+      }
+      const next = await postRequest(pay("TRIP-ROSA-7199", "20"), "fin-spr-000099", "l");
+      const id = next.json.id as string;
+      expect(insideRules(id)).toContain("reference_spread");
+      expect(ob(id).releaseAt).toBeNull();
+      expect(next.json.status).not.toBe("scheduled");
+      // Another key is not held by this one's spread.
+      const other = await postRequest(pay("TRIP-ROSA-7299", "20"), "fin-spr-000100", "e");
+      expect(insideRules(other.json.id)).not.toContain("reference_spread");
+      // A person can approve it.
+      approveObligation(getDb(), id, "user:minh", "Checked", ackAll(id));
+      expect(inside(id).rules.find((x) => x.ruleId === "reference_spread")).toBeTruthy();
+      expect(inside(id).decision).not.toBe("block");
+    });
+
+    it("reference spread: an MCP agent's check_payment holds past the limit", async () => {
+      await autopilot();
+      const agentKey = { name: "spreader", scopes: ["check"] as AgentKey["scopes"], digest: Buffer.alloc(32) };
+      for (let i = 0; i < 10; i++) expect((await checkPayment(getDb(), agentKey, pay(`TRIP-ROSA-${7300 + i}`, "20"))).warnings.map((w) => w.rule)).not.toContain("reference_spread");
+      const c = await checkPayment(getDb(), agentKey, pay("TRIP-ROSA-7399", "20"));
+      expect(c.verdict).toBe("hold");
+      expect(c.warnings.map((w) => w.rule)).toContain("reference_spread");
+    });
+
+    it("an outside request the rules approved before a bill held it reads pending and Waiting to be sent, not approved by a person", async () => {
+      await autopilot();
+      const agentKey = { name: "bookings", scopes: ["check", "request", "attest"] as AgentKey["scopes"], digest: Buffer.alloc(32) };
+      const sent = await requestPayment(getDb(), agentKey, { ...pay("TRIP-ROSA-7401", "20"), idempotency_key: "fin-pend-00001" });
+      const rest = await postRequest(pay("TRIP-ROSA-7402", "20"), "fin-pend-00002", "l");
+      // The agent's request as the rules leave one they pre-approve: approved, scheduled, no person involved.
+      for (const id of [sent.request_id, rest.json.id as string]) getDb().update(obligations).set({ state: "approved", releaseAt: new Date(Date.now() + 3_600_000).toISOString() }).where(eq(obligations.id, id)).run();
+      personBill("INV-ROSA-6001", 10_000);
+      expect(paymentStatus(getDb(), agentKey, { request_id: sent.request_id })).toMatchObject({ status: "approved", summary: "Waiting to be sent.", releases_at: null });
+      expect(seen((await getRequest(rest.json.id as string, "l")).json)).toMatchObject({ status: "approved", verdict: "pending", reasons: [NEUTRAL], rail: null, releases_at: null });
+    });
+
+    it("rail stays null while a bill request is in flight", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(pay("INV-ROSA-6001", "50"), "fin-rail-00001", "l");
+      const id = r.json.id as string;
+      approveObligation(getDb(), id, "user:minh", "ok", ackAll(id));
+      await executeObligation(getDb(), id, { actor: "user:minh" });
+      getDb().update(obligations).set({ state: "sent" }).where(eq(obligations.id, id)).run();
+      expect(seen((await getRequest(id, "l")).json)).toMatchObject({ status: "sending", rail: null });
+    });
+
+    it("a bare bill_review acknowledgement no longer covers a bill warning", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(pay("INV-ROSA-6001", "50"), "fin-bare-00001", "l");
+      expect(() => approveObligation(getDb(), r.json.id as string, "user:minh", "ok", ["bill_review"])).toThrow(/Something changed/);
+      expect(ob(r.json.id).state).toBe("awaiting_approval");
     });
 
     it("the ERP key, without attest, reads the same neutral answer and no other part's state", async () => {

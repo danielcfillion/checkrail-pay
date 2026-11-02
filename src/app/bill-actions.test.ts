@@ -19,7 +19,7 @@ import { createBill, payBill } from "@/lib/engine/bills";
 import { resolveActor } from "@/lib/engine/users";
 import { settleAdvanceAction } from "./actions";
 
-/** Review R9-S3: a bill recorded by settling an advance picks up the outside requests already naming it. */
+/** A bill recorded by settling an advance picks up the outside requests already naming it. */
 
 let db: Db;
 beforeEach(async () => {
