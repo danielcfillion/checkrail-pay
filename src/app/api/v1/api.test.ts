@@ -529,7 +529,7 @@ describe("review fixes, round 3", () => {
 
   // ---- Round 8: an outside request about a bill always waits for a person, and its sender is told the same either way.
   describe("round 8: outside requests about a bill", () => {
-    const NEUTRAL = "This matches a bill on file. A person reviews payments against bills.";
+    const NEUTRAL = "A person reviews payments to this supplier.";
     const pay = (reference: string, amount = "100", currency = "USD", description = `Rosa Villanueva, guiding, ${currency} ${amount}, invoice ${reference}.`) => ({ payee: "Rosa Villanueva", amount, currency, reference, description, evidence: [{ kind: "job_sheet", label: `Trip sheet ${reference}`, amount, reference, excerpt: `Guide: Rosa Villanueva. Total ${currency} ${amount}.` }] });
     const ob = (id: unknown) => getDb().select().from(obligations).where(eq(obligations.id, id as string)).get()!;
     const inside = (id: unknown) => previewPolicy(getDb(), id as string);
@@ -551,7 +551,7 @@ describe("review fixes, round 3", () => {
       neutral(r.json);
       expect(ob(r.json.id).state).toBe("awaiting_approval");
       expect(ob(r.json.id).releaseAt).toBeNull();
-      expect(inside(r.json.id).rules.find((x) => x.ruleId === "bill_review")?.message).toBe("Request on bill INV-ROSA-6001: USD 100.00 of USD 100.00 open. A person reviews payments against bills.");
+      expect(inside(r.json.id).rules.find((x) => x.ruleId === "bill_review")?.message).toBe("Request on bill INV-ROSA-6001: USD 100.00 of USD 100.00 open. A person reviews payments to this supplier.");
       const id = r.json.id as string;
       approveObligation(getDb(), id, "user:minh", "Checked against the bill", ackAll(id));
       expect(ob(id).state).toBe("approved");
@@ -734,12 +734,12 @@ describe("review fixes, round 3", () => {
       expect(ob(r.json.id).state).toBe("awaiting_approval");
     });
 
-    it("S1: a /N after a year is a month, not a part: RET-ROSA-2026/10 and /11 do not match", async () => {
+    it("S1: a /N after a year is a month, not a part: RET-ROSA-2026/10 and /11 do not match (and R10: it is held anyway)", async () => {
       await autopilot();
       personBill("RET-ROSA-2026/10", 10_000);
       const r = await postRequest(pay("RET-ROSA-2026/11", "100"), "r8-year-00001", "l");
       expect(ob(r.json.id).billId).toBeNull();
-      expect(r.json.status).toBe("scheduled");
+      neutral(r.json);
       const { billsMatching } = await import("@/lib/engine/bills");
       expect(billsMatching(getDb(), "ven_rosa", "RET-ROSA-2026/10").map((b) => b.reference)).toEqual(["RET-ROSA-2026/10"]);
     });
@@ -749,7 +749,137 @@ describe("review fixes, round 3", () => {
       personBill("INV-ROSA-6003", 10_000);
       const r = await postRequest(pay("INV-ROSA-60030", "100"), "r8-n3-0000001", "l");
       expect(ob(r.json.id).billId).toBeNull();
-      expect(r.json.status).toBe("scheduled");
+      // Not matched, but this supplier has a recent bill, so a person still looks (R10).
+      neutral(r.json);
+    });
+
+    // ---- Round 10: fail closed. Any bill of the supplier in the last 180 days holds every outside request for a person.
+    for (const [billRef, spelling] of [
+      ["ROSA-NOV", "ROSA-NOV/2"], ["A1", "A1/2"], ["INV-12", "INV-12/2"], ["INV-ROSA-6001", "INV-ROSA-6001-COPY/2"],
+      ["INV-ROSA-6001", "INV-ROSA-6001-2"], ["INV-ROSA-6001", "INV-ROSA-6001.2"], ["INV-ROSA-6001", "INV-ROSA-6001_2"], ["INV-ROSA-6001", "INV-ROSA-6001#2"],
+      ["INV-ROSA-6001", "INV-ROSA-6001:2"], ["INV-ROSA-6001", "INV-ROSA-6001/0002"], ["INV-ROSA-6001", "INV-ROSA-6001/2/1"], ["INV-ROSA-6001", "INV-ROSA-6001-P2"],
+      ["INV-ROSA-6001", "INV-ROSA-6001-RE"],
+    ]) {
+      it(`R10-S1: ${spelling} next to bill ${billRef} is held for a person, not scheduled`, async () => {
+        await autopilot();
+        personBill(billRef, 10_000);
+        const r = await postRequest(pay(spelling, "50"), `r10-sp-${spelling.replace(/[^A-Za-z0-9]/g, "")}-${billRef.length}`, "l");
+        neutral(r.json);
+        expect(ob(r.json.id).releaseAt).toBeNull();
+        expect(insideRules(r.json.id).some((x) => x.startsWith("bill_"))).toBe(true);
+        const { runAutopilot } = await import("@/lib/engine/autopilot");
+        await runAutopilot(getDb());
+        expect(getDb().select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, r.json.id as string)).all()).toHaveLength(0);
+      });
+    }
+
+    for (const [billRef, spelling] of [["INV-ROSA-2050", "INV-ROSA-2050/2"], ["RET-ROSA-2026", "RET-ROSA-2026/11"]]) {
+      it(`R10-S2: ${spelling} is not a part of ${billRef} (a year), but is held for a person anyway`, async () => {
+        await autopilot();
+        personBill(billRef, 10_000);
+        const r = await postRequest(pay(spelling, "50"), `r10-yr-${spelling.replace(/[^A-Za-z0-9]/g, "")}`, "l");
+        expect(ob(r.json.id).billId).toBeNull();
+        neutral(r.json);
+        expect(ob(r.json.id).state).toBe("awaiting_approval");
+      });
+    }
+
+    it("R10: naming none of the recent bills, the person is told so, sees the bills and what is open, and may approve it as unbilled work", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      const r = await postRequest(pay("TRIP-ROSA-0042", "50"), "r10-none-00001", "l");
+      neutral(r.json);
+      const id = r.json.id as string;
+      const rules = inside(id).rules;
+      expect(rules.find((x) => x.ruleId === "bill_review")?.message).toMatch(/names none of this supplier's recent bills/);
+      expect(rules.find((x) => x.ruleId === "bill_recent")?.message).toBe("This supplier's bills in the last 180 days: INV-ROSA-6001 (invoice, open, USD 100.00 open)");
+      approveObligation(getDb(), id, "user:minh", "Unbilled work, checked", ackAll(id));
+      expect(inside(id).decision).toBe("auto_execute");
+      // A bill recorded after the approval is new to the approver: the approval no longer covers it.
+      personBill("INV-ROSA-6002", 10_000);
+      expect(inside(id).decision).toBe("require_approval");
+    });
+
+    it("R10: a match and no match read the same to the caller, on REST and MCP (no enumeration)", async () => {
+      await autopilot();
+      personBill("INV-ROSA-6001", 10_000);
+      const agentKey = { name: "bookings", scopes: ["check", "request", "attest"] as AgentKey["scopes"], digest: Buffer.alloc(32) };
+      const answers: string[][] = [[], []];
+      for (const ref of ["INV-ROSA-6001", "TRIP-ROSA-0043"]) {
+        const c = await checkPayment(getDb(), agentKey, pay(ref, "50"));
+        answers[0].push(JSON.stringify({ verdict: c.verdict, summary: c.summary, blocks: c.blocks, warnings: c.warnings, next_steps: c.next_steps }));
+        const r = await postRequest(pay(ref, "50"), `r10-enum-${ref.replace(/[^A-Za-z0-9]/g, "")}`, "l");
+        answers[1].push(JSON.stringify(seen(r.json)));
+      }
+      expect(new Set(answers[0]).size).toBe(1);
+      expect(new Set(answers[1]).size).toBe(1);
+      expect(answers[0][0]).toContain("A person reviews payments to this supplier.");
+    });
+
+    it("R10 control: a bill older than 180 days does not hold an unbilled request", async () => {
+      await autopilot();
+      const old = personBill("INV-ROSA-5001", 10_000);
+      getDb().update(billsTable).set({ createdAt: new Date(Date.now() - 181 * 86_400_000).toISOString() }).where(eq(billsTable.id, old)).run();
+      expect((await postRequest(pay("TRIP-ROSA-0044", "50"), "r10-old-00001", "l")).json.status).toBe("scheduled");
+    });
+
+    it("R10 demo seed: only Dao Mountain Lodge has a bill, so outside requests to the other suppliers keep the normal rules", async () => {
+      await seedDemo(getDb());
+      const billVendors = new Set(getDb().select().from(billsTable).all().map((b) => getDb().select().from(vendors).where(eq(vendors.id, b.vendorId)).get()?.name));
+      expect([...billVendors]).toEqual(["Dao Mountain Lodge"]);
+    });
+
+    it("R10-M2: a reference amended onto a void bill puts the request on it, blocked; a person cannot approve", async () => {
+      await autopilot();
+      const v = personBill("INV-ROSA-6003", 10_000);
+      getDb().update(billsTable).set({ status: "void" }).where(eq(billsTable.id, v)).run();
+      const r = await postRequest(pay("TRIP-ROSA-0045", "50"), "r10-amd-00001", "l");
+      const id = r.json.id as string;
+      expect(ob(id).billId).toBeNull();
+      const { amendObligation } = await import("@/lib/engine/orchestrator");
+      await amendObligation(getDb(), id, "user:minh", { sourceRef: "INV-ROSA-6003" });
+      expect(ob(id).billId).toBe(v);
+      expect(ob(id).state).toBe("blocked");
+      expect(insideRules(id)).toContain("bill_misfit");
+      expect(() => approveObligation(getDb(), id, "user:minh", "ok", ackAll(id))).toThrow();
+      neutral((await getRequest(id, "l")).json);
+    });
+
+    it("R10-M2: a payee amended to a supplier with a closed matching bill puts the request on it, blocked; a person cannot approve", async () => {
+      await autopilot();
+      const closed = personBill("INV-ROSA-6004", 10_000);
+      getDb().update(billsTable).set({ status: "closed" }).where(eq(billsTable.id, closed)).run();
+      const r = await postRequest(pay("INV-ROSA-6004", "50"), "r10-amd-00002", "l");
+      const id = r.json.id as string;
+      // As if the payee had not been resolved when it came in.
+      getDb().update(obligations).set({ vendorId: null, billId: null, state: "blocked" }).where(eq(obligations.id, id)).run();
+      const { amendObligation } = await import("@/lib/engine/orchestrator");
+      await amendObligation(getDb(), id, "user:minh", { vendorId: "ven_rosa" });
+      expect(ob(id).billId).toBe(closed);
+      expect(ob(id).state).toBe("blocked");
+      expect(insideRules(id)).toContain("bill_misfit");
+      expect(() => approveObligation(getDb(), id, "user:minh", "ok", ackAll(id))).toThrow();
+    });
+
+    it("R10-M2: a re-check puts the request on the bill it names before policy", async () => {
+      await autopilot();
+      const r = await postRequest(pay("INV-ROSA-6006", "50"), "r10-rck-00001", "l");
+      const id = r.json.id as string;
+      // A bill written straight in, with no linking step, and voided.
+      const v = personBill("INV-ROSA-6006", 10_000);
+      getDb().update(billsTable).set({ status: "void" }).where(eq(billsTable.id, v)).run();
+      getDb().update(obligations).set({ state: "awaiting_approval", releaseAt: null }).where(eq(obligations.id, id)).run();
+      const { recheckObligation } = await import("@/lib/engine/orchestrator");
+      await recheckObligation(getDb(), id, "user:minh");
+      expect(ob(id).billId).toBe(v);
+      expect(ob(id).state).toBe("blocked");
+    });
+
+    it("R10-N1: the folded key keeps separate numbers apart (INV-12-3 is not INV-123)", async () => {
+      const { billKeys } = await import("@/lib/engine/bills");
+      const folded = (r: string) => [...billKeys(r)].filter((k) => k.startsWith("="));
+      expect(folded("INV-12-3")).not.toEqual(folded("INV-123"));
+      expect(folded("ROSA-NOV")).toEqual(folded("rosa_nov"));
     });
 
     it("the ERP key, without attest, reads the same neutral answer and no other part's state", async () => {

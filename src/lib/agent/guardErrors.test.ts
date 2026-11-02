@@ -38,7 +38,7 @@ describe("bill rules for agents (API review R7-S3)", () => {
     // Round 8: one neutral hold, whether it fits or not.
     expect(r.verdict).toBe("hold");
     expect(r.blocks).toEqual([]);
-    expect(r.warnings).toEqual([{ rule: "bill_review", message: "This matches a bill on file. A person reviews payments against bills." }]);
+    expect(r.warnings).toEqual([{ rule: "bill_review", message: "A person reviews payments to this supplier." }]);
     const leak = JSON.stringify(r).match(/.{0,80}(?:USD 100|100\.00).{0,40}/);
     expect(leak?.[0]).toBeUndefined();
   });
