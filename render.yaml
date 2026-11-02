@@ -10,7 +10,7 @@ services:
     buildCommand: npm ci && npm run build
     # The free plan has no persistent disk: every restart reseeds the demo story, which is what a judge wants.
     startCommand: npm run db:seed && npm run start -- -p $PORT
-    healthCheckPath: /
+    healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
         value: "22"

@@ -93,6 +93,16 @@ describe("middleware", () => {
     warn.mockRestore();
   });
 
+  it("answers Render's health check at /healthz without a login, a sandbox copy or any data", async () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const res = middleware(req({}, "/healthz"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    // Every other page still needs the login.
+    expect(middleware(req({}, "/")).status).toBe(401);
+  });
+
   it("answers a missing login with a static HTML page and the same 401 and challenge (DES-13)", async () => {
     env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
     const res = middleware(req());

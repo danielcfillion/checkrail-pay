@@ -51,6 +51,8 @@ const SANDBOX_LINK_HTML = `<!doctype html><html lang="en"><head><meta charset="u
  */
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
+  // Render's health check: no login, no sandbox copy, no data. It only proves the server answers.
+  if (path === "/healthz") return new NextResponse("ok", { status: 200, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" } });
   // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token) are no visitor: no copy for them.
   const serverToServer = path === "/api/webhooks/paypal" || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
   const sandbox = !serverToServer && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
