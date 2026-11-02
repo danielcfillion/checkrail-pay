@@ -23,14 +23,27 @@ export const TRY_LIMIT_PER_COPY = 30;
  */
 export class TryBudget {
   private used = new Map<string, number>();
-  constructor(private readonly limit: number = TRY_LIMIT_PER_COPY) {}
+  constructor(
+    private readonly limit: number = TRY_LIMIT_PER_COPY,
+    private readonly maxCopies: number = 5000,
+  ) {}
 
-  /** Takes one from this copy's budget; false when it is spent. */
+  /** True while this copy has budget left. Check before the work; take() after it succeeded. */
+  has(copy: string): boolean {
+    return (this.used.get(copy) ?? 0) < this.limit;
+  }
+
+  /** Takes one from this copy's budget; false when it is spent. Past MAX_COPIES the least recently used copy is dropped. */
   take(copy: string): boolean {
     const n = this.used.get(copy) ?? 0;
     if (n >= this.limit) return false;
-    if (this.used.size > 5000) this.used.clear();
+    this.used.delete(copy); // re-inserted last, so Map order runs least recently used first
     this.used.set(copy, n + 1);
+    while (this.used.size > this.maxCopies) {
+      const oldest = this.used.keys().next().value;
+      if (oldest === undefined) break;
+      this.used.delete(oldest);
+    }
     return true;
   }
 

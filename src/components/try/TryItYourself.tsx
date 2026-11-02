@@ -120,16 +120,19 @@ export function TryItYourself({ initialSample = "clean", startGuided = true }: {
   };
 
   /** Auto mode: what a staff member does on arriving at a step. */
-  const actOn = async (index: number) => {
+  /** Returns false when the step's action failed: auto mode then pauses with the error on screen. */
+  const actOn = async (index: number): Promise<boolean> => {
     const { evidence: ev, status: st } = live.current;
     const id = TRY_STEPS[index]?.id;
     const decision = (sampleById(live.current.sampleId) ?? sample).decision;
-    if (id === "evidence" && !ev) await attach();
-    else if (id === "submit" && !st) await submit();
-    else if (id === "decide" && st) {
-      if (st.state === "blocked" && decision === "correct" && st.action?.kind === "amend_amount") await correct((st.action.amountMinor / 100).toFixed(2));
-      else if (st.state === "blocked" && decision === "reject") await reject();
-    } else if (id === "pay" && st?.state === "approved") await pay();
+    if (id === "evidence" && !ev) return attach();
+    if (id === "submit" && !st) return submit();
+    if (id === "decide" && st) {
+      if (st.state === "blocked" && decision === "correct" && st.action?.kind === "amend_amount") return correct((st.action.amountMinor / 100).toFixed(2));
+      if (st.state === "blocked" && decision === "reject") return reject();
+    }
+    if (id === "pay" && st?.state === "approved") return pay();
+    return true;
   };
 
   const player = useRef<AutoPlayer | null>(null);
@@ -147,8 +150,7 @@ export function TryItYourself({ initialSample = "clean", startGuided = true }: {
       }
       navRef.current = { status: "on", index: next };
       setNav(navRef.current);
-      await actOnRef.current(next);
-      return true;
+      return (await actOnRef.current(next)) ? true : "pause";
     }, setAuto);
     player.current = p;
     return () => p.stop();
@@ -337,7 +339,11 @@ export function TryItYourself({ initialSample = "clean", startGuided = true }: {
         <Section n={6} title="In the books and the Daily close" target="books">
           {status?.settled ? (
             <div className="text-sm">
-              <p>The payment is in the ledger, and a bill and payment record {status.books ? `waits for export to the accountant (${status.books.destination === "xero" ? "Xero" : "CSV"})` : "is on its way to the accountant"}. The Daily close lists it under what people sent today.</p>
+              {status.books ? (
+                <p>The payment is in the ledger, and a bill and payment record waits for export to the accountant ({status.books.destination === "xero" ? "Xero" : "CSV"}). The Daily close lists it under what people sent today.</p>
+              ) : (
+                <p>Paid, but not in the books yet: no accounting record has been made for it. The Daily close lists it under what people sent today.</p>
+              )}
             </div>
           ) : status ? (
             <p className="text-sm">Nothing reaches the books until it is paid. {state === "blocked" || state === "cancelled" ? "The Daily close lists what was stopped." : ""}</p>
@@ -434,13 +440,19 @@ export function Spotlight(p: { index: number; title: string; note: string; targe
   const heading = useRef<HTMLHeadingElement>(null);
   const [box, setBox] = useState<Box | null>(null);
   const last = p.index === TRY_TOTAL - 1;
+  // Set on Escape: the follow loop stops at once, so no scroll or measurement lands after the guide has closed.
+  const cancelled = useRef(false);
+  const onExit = useRef(p.onExit);
+  useLayoutEffect(() => {
+    onExit.current = p.onExit;
+  });
 
   // Follow the lit element: scroll it into the space above the card once per step, then track it.
   useLayoutEffect(() => {
     let stopped = false;
     let scrolled = false;
     const update = () => {
-      if (stopped) return;
+      if (stopped || cancelled.current) return;
       const el = document.querySelector<HTMLElement>(`[data-try="${p.target}"]`);
       if (!el) return setBox(null);
       const r = el.getBoundingClientRect();
@@ -475,7 +487,10 @@ export function Spotlight(p: { index: number; title: string; note: string; targe
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        p.onExit();
+        cancelled.current = true;
+        // A smooth scroll still under way would carry on after the guide closed: stop it where it is.
+        window.scrollTo({ top: window.scrollY, behavior: "auto" });
+        onExit.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -489,7 +504,7 @@ export function Spotlight(p: { index: number; title: string; note: string; targe
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [p]);
+  }, [p.target]);
 
   const pad = 8;
   const hole = box ? { top: Math.max(0, box.top - pad), left: Math.max(0, box.left - pad), right: box.left + box.width + pad, bottom: box.top + box.height + pad } : null;

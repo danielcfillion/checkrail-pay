@@ -54,12 +54,13 @@ export async function tryAttachAction(sampleId: string): Promise<TryResult<TryEv
   const sample = sampleById(sampleId);
   if (!sample) return { ok: false, message: "No such sample." };
   const key = copyKey();
-  if (!key || !tryBudgets().documents.take(key)) return { ok: false, message: `This copy of the demo has attached ${TRY_LIMIT_PER_COPY} documents, the most it may. Start over for a fresh copy.` };
+  if (!key || !tryBudgets().documents.has(key)) return { ok: false, message: `This copy of the demo has attached ${TRY_LIMIT_PER_COPY} documents, the most it may. Start over for a fresh copy.` };
   const bytes = fs.readFileSync(path.join(process.cwd(), "public", "demo-documents", sample.document.file));
   const form = new FormData();
   form.append("file", new File([new Uint8Array(bytes)], sample.document.file, { type: "application/pdf" }));
   const r = await uploadEvidenceAction(form);
   if (!r.ok || !r.upload) return { ok: false, message: r.message };
+  tryBudgets().documents.take(key);
   return { ok: true, message: r.message, data: { attachmentId: r.upload.attachmentId, label: sample.document.label, reader: r.upload.reader, rows: r.upload.proposed } };
 }
 
@@ -71,7 +72,7 @@ export async function trySubmitAction(input: { text: string; evidence: TryEviden
   if (!text) return { ok: false, message: "Write the request first." };
   if (text.length > 2000) return { ok: false, message: "Keep the request under 2,000 characters." };
   const key = copyKey();
-  if (!key || !tryBudgets().requests.take(key)) return { ok: false, message: `This copy of the demo has made ${TRY_LIMIT_PER_COPY} requests, the most Try it yourself allows. Start over for a fresh copy.` };
+  if (!key || !tryBudgets().requests.has(key)) return { ok: false, message: `This copy of the demo has made ${TRY_LIMIT_PER_COPY} requests, the most Try it yourself allows. Start over for a fresh copy.` };
   const ev = input.evidence;
   const r = await ingestAction({
     sourceType: "invoice",
@@ -79,6 +80,7 @@ export async function trySubmitAction(input: { text: string; evidence: TryEviden
     evidence: ev ? ev.rows.map((row) => ({ ...row, attachmentId: ev.attachmentId })) : [],
   });
   if (!r.ok || !r.id) return { ok: false, message: r.message };
+  tryBudgets().requests.take(key);
   const status = statusOf(r.id);
   return status ? { ok: true, message: r.message, data: status } : { ok: false, message: "The request was created but could not be read back." };
 }

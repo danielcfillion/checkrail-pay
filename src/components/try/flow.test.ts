@@ -99,6 +99,33 @@ describe("auto mode timer", () => {
     expect(at).toBe(1);
   });
 
+  it("pauses on a failed step and stays paused, so the error stays on screen", async () => {
+    let calls = 0;
+    const states: string[] = [];
+    const p = new AutoPlayer(() => (++calls === 2 ? "pause" : true), (s) => states.push(s), AUTO_STEP_MS, () => Date.now());
+    p.play();
+    await vi.advanceTimersByTimeAsync(AUTO_STEP_MS * 2);
+    expect(calls).toBe(2);
+    expect(p.state).toBe("paused");
+    await vi.advanceTimersByTimeAsync(AUTO_STEP_MS * 10);
+    expect(calls).toBe(2);
+    p.play(); // Resume after the judge read the error
+    await vi.advanceTimersByTimeAsync(AUTO_STEP_MS);
+    expect(calls).toBe(3);
+    expect(states).toEqual(["playing", "paused", "playing"]);
+    p.stop();
+  });
+
+  it("a step that throws pauses too", async () => {
+    const p = new AutoPlayer(() => {
+      throw new Error("server said no");
+    }, undefined, AUTO_STEP_MS, () => Date.now());
+    p.play();
+    await vi.advanceTimersByTimeAsync(AUTO_STEP_MS);
+    expect(p.state).toBe("paused");
+    p.stop();
+  });
+
   it("waits for a slow step before starting the next wait, so steps never overlap", async () => {
     let started = 0;
     let finished = 0;

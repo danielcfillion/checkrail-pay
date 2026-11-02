@@ -60,6 +60,7 @@ export function progressLabel(index: number): string {
  * Auto mode: every `stepMs` it calls `step()`, which does the current step's work and moves on, and returns false when
  * there is nothing left. A step that takes time (a server action) is awaited before the next wait starts, so a slow
  * reply never overlaps the next step. Pause stops the clock and remembers how long was left; Resume waits only that.
+ * A step that failed returns "pause": the player pauses there, so the error stays on screen until the judge resumes.
  */
 export class AutoPlayer {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -70,7 +71,7 @@ export class AutoPlayer {
   state: "idle" | "playing" | "paused" | "finished" = "idle";
 
   constructor(
-    private readonly step: () => Promise<boolean> | boolean,
+    private readonly step: () => Promise<boolean | "pause"> | boolean | "pause",
     private readonly onChange: (state: AutoPlayer["state"]) => void = () => {},
     private readonly stepMs: number = AUTO_STEP_MS,
     private readonly now: () => number = () => Date.now(),
@@ -120,15 +121,20 @@ export class AutoPlayer {
   private async fire(): Promise<void> {
     this.timer = null;
     this.busy = true;
-    let more = false;
+    let more: boolean | "pause" = false;
     try {
       more = await this.step();
     } catch {
-      more = false;
+      more = "pause";
     } finally {
       this.busy = false;
     }
     if (this.stopped) return;
+    if (more === "pause") {
+      this.left = this.stepMs;
+      if (this.state === "playing") this.set("paused");
+      return;
+    }
     if (!more) {
       this.set("finished");
       return;

@@ -172,4 +172,25 @@ describe("rate limit per copy", () => {
     expect(b.left("a")).toBe(0);
     expect(tryBudgets().requests).not.toBe(tryBudgets().documents);
   });
+
+  it("a refused request does not use up the budget", async () => {
+    state.headers = new Headers({ [ACTOR_HEADER]: "thu", [ROLE_HEADER]: "accountant" });
+    const key = `sbx_judge:${state.copiedAt}`;
+    const before = tryBudgets().requests.left(key);
+    expect((await trySubmitAction({ text: "Please pay Rosa Villanueva, USD 95.", evidence: null })).ok).toBe(false);
+    expect(tryBudgets().requests.left(key)).toBe(before);
+  });
+
+  it("forgets the least recently used copy first, not all of them", () => {
+    const b = new TryBudget(2, 2);
+    b.take("a");
+    b.take("a");
+    b.take("b");
+    b.take("a"); // refused: a is spent, and stays remembered
+    b.take("c"); // a third copy: the oldest (a, touched before b) goes
+    expect(b.has("b")).toBe(true);
+    expect(b.left("b")).toBe(1);
+    expect(b.left("c")).toBe(1);
+    expect(b.left("a")).toBe(2);
+  });
 });
