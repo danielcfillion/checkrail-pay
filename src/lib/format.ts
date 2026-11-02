@@ -293,6 +293,9 @@ export function humaniseActor(actor: string | null | undefined): string {
     case "mcp":
       // An outside agent, through the agent guard: never Autopilot, and never able to approve or send.
       return `Outside agent ${rest ?? ""}`.trim();
+    case "api":
+      // Other software through /api/v1 (a booking system, an ERP): it can request, never approve or send.
+      return `Integration ${rest ?? ""}`.trim();
     case "policy":
       return "Policy";
     case "router":

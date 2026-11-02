@@ -9,6 +9,13 @@ import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForReque
 export const PUBLIC_HEADER = "x-checkrail-public";
 
 /**
+ * The inbound REST API's routes, exactly: /api/v1/departures, /api/v1/requests, /api/v1/requests/<id>,
+ * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login: a path with no route renders
+ * the not-found page inside the app layout, which trusts the identity headers only this middleware may set.
+ */
+export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json|requests\/[A-Za-z0-9_-]{1,64})$/;
+
+/**
  * Who is asking, on every request.
  *
  *  - Logins configured (CHECKRAIL_USERS, or the single CHECKRAIL_BASIC_AUTH which is an admin): every page and
@@ -53,8 +60,9 @@ export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   // Render's health check: no login, no sandbox copy, no data. It only proves the server answers.
   if (path === "/healthz") return new NextResponse("ok", { status: 200, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" } });
-  // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token) are no visitor: no copy for them.
-  const serverToServer = path === "/api/webhooks/paypal" || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
+  // Server-to-server calls (PayPal's webhook, a scheduler holding the tick token, software holding an API key on
+  // /api/v1) are no visitor: no copy for them. An API key works on the shared books, never a sandbox copy.
+  const serverToServer = path === "/api/webhooks/paypal" || API_V1_PATH.test(path) || (path === "/api/autopilot/tick" && Boolean(process.env.CHECKRAIL_TICK_TOKEN?.trim()));
   const sandbox = !serverToServer && sandboxSetting(process.env).on ? sandboxForRequest(req.cookies.get(SANDBOX_COOKIE)?.value, process.env) : null;
   const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);
   const headers = new Headers(req.headers);
@@ -70,6 +78,8 @@ export function middleware(req: NextRequest) {
   if (path === "/api/webhooks/paypal") return pass();
   // Outside agents hold an agent key, not a login; the route checks the key itself (src/app/api/mcp/route.ts).
   if (path === "/api/mcp") return pass();
+  // Other software holds an API key, not a login; each /api/v1 route checks the key itself (src/lib/api/http.ts).
+  if (API_V1_PATH.test(path)) return pass();
   // An external scheduler holds CHECKRAIL_TICK_TOKEN, not a login; the route checks the token itself.
   if (path === "/api/autopilot/tick" && process.env.CHECKRAIL_TICK_TOKEN?.trim()) return pass();
   if (/^\/(onboard|evidence|remit)\/[A-Za-z0-9_-]{20,80}$/.test(path)) {
@@ -134,6 +144,7 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   // /api/mcp is left out entirely: the route checks the agent key itself, and a matched request has its body copied
-  // (up to 10 MB) for the middleware before the route's own 64 KB limit can refuse it (agent guard review AG-3).
-  matcher: ["/((?!_next/static/|api/mcp$).*)"],
+  // (up to 10 MB) for the middleware before the route's own 64 KB limit can refuse it.
+  // The /api/v1 routes (API_V1_PATH) are left out the same way, and only those: each checks its API key and body cap.
+  matcher: ["/((?!_next/static/|api/mcp$|api/v1/(?:departures|requests|vendors|openapi\\.json|requests/[A-Za-z0-9_-]{1,64})$).*)"],
 };

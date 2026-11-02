@@ -455,6 +455,33 @@ describe("negotiation with a supplier's agent", () => {
     expect((await checkPayment(db, desk, DEMO_SUPPLIER_CHECK)).counter_offer).toBeUndefined();
   });
 
+  it("a supplier with a recent bill: its agent gets the neutral hold and no offer, on check, request and status", async () => {
+    createBill(db, DEMO_BUSINESS_ID, "agent", "ven_phuong", { kind: "invoice", reference: "INV-2026-0310", totalMinor: 50_000, currency: "USD" });
+    const neutral = "A person reviews payments to this supplier.";
+    const c = await checkPayment(db, phuongAgent, DEMO_SUPPLIER_CHECK);
+    expect(c.verdict).toBe("hold");
+    expect(c.blocks).toEqual([]);
+    expect(c.warnings).toEqual([{ rule: "bill_review", message: neutral }]);
+    expect(c.counter_offer).toBeUndefined();
+    expect(JSON.stringify(c)).not.toMatch(/USD 800|USD 500|rate card/i);
+    const r = await requestPayment(db, phuongAgent, { ...DEMO_SUPPLIER_CHECK, idempotency_key: "phuong-billed-0001" });
+    expect(r.status).toBe("waiting_for_approval");
+    expect(r.reasons).toEqual([neutral]);
+    expect(r.counter_offer).toBeUndefined();
+    expect(paymentStatus(db, phuongAgent, { request_id: r.request_id }).reasons).toEqual([neutral]);
+    expect(offerRows()).toHaveLength(0);
+  });
+
+  it("a provenance refusal still blocks a payment held because of bills, and says nothing about the bill", async () => {
+    createBill(db, DEMO_BUSINESS_ID, "agent", "ven_phuong", { kind: "invoice", reference: "INV-2026-0311", totalMinor: 50_000, currency: "USD" });
+    const c = await checkPayment(db, desk, PHUONG_EMAIL_BANK_CHANGE);
+    expect(c.verdict).toBe("block");
+    expect(c.blocks.map((b) => b.rule)).toEqual(["provenance_payout_change"]);
+    expect(c.warnings.map((w) => w.rule)).toContain("bill_review");
+    expect(JSON.stringify(c)).not.toMatch(/INV-2026-0311|open on|USD 500/);
+    await expect(requestPayment(db, desk, { ...PHUONG_EMAIL_BANK_CHANGE, idempotency_key: "phuong-billed-0002" })).rejects.toThrow(/Refused, and nothing was created: this instruction gives payout details/);
+  });
+
   it("a supplier key sees and acts on its own supplier only", async () => {
     expect(toolsFor(phuongAgent).map((t) => t.name)).toEqual(["check_payment", "request_payment", "payment_status", "accept_offer", "dispute_offer"]);
     await expect(checkPayment(db, phuongAgent, { ...ROSA })).rejects.toThrow(/its own supplier/);

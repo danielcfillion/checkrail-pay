@@ -177,6 +177,7 @@ export default async function SettingsPage() {
             </p>
           </Panel>
           <XeroConnection />
+          {await import("@/components/ApiKeysCard").then(({ ApiKeysCard }) => <ApiKeysCard />)}
         </Section>
       </div>
     </>

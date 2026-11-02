@@ -20,7 +20,8 @@ import { MIN_SANDBOX_SECRET, SANDBOX_COOKIE, SANDBOX_HEADER, sandboxKeyMaterial,
  * Middleware cannot do this itself: it runs on the edge runtime, away from the database.
  *
  * It fails closed. With sandbox mode on, getDb() returns the shared database only on the paths that are not a visitor
- * (SHARED_PATHS: an agent on /api/mcp with no cookie, PayPal's webhook, a scheduler's tick). Anywhere else, no
+ * (SHARED_PATHS: an agent on /api/mcp with no cookie, PayPal's webhook, a scheduler's tick), and always on the inbound
+ * REST API (/api/v1), whose callers hold an API key and are never a visitor, cookie or not. Anywhere else, no
  * verified token, no request store, or a store of a shape this code does not know (a Next upgrade) throws a plain
  * error instead of quietly handing one visitor the database everyone else would see.
  */
@@ -30,6 +31,9 @@ const g = globalThis as typeof globalThis & { __checkrailSandbox?: Installed | n
 
 /** Paths that are not a visitor and use the shared database when they carry no sandbox token. */
 const SHARED_PATHS = new Set(["/api/mcp", "/api/webhooks/paypal", "/api/autopilot/tick"]);
+
+/** Server-to-server paths: always the shared database, whatever token the request carries. */
+const SERVER_ONLY = /^\/api\/v1\//;
 
 export class SandboxScopeError extends Error {}
 
@@ -101,6 +105,7 @@ export function resetActiveSandbox(): boolean {
 function resolve(s: Installed): Db | null {
   const store = requestStore();
   if (!store) throw new SandboxScopeError("Sandbox mode: no request to choose a copy of the demo for. Reload the page.");
+  if (SERVER_ONLY.test(store.url?.pathname ?? "")) return null;
   const id = verifySandboxToken(tokenOf(store), s.material);
   if (!id) {
     if (SHARED_PATHS.has(store.url?.pathname ?? "")) return null;

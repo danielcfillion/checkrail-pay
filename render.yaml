@@ -106,3 +106,10 @@ services:
         value: "1"
       - key: CHECKRAIL_AGENT_KEYS
         sync: false
+      # The REST API (/api/v1, docs/API.md) for booking systems, ERPs and accounting tools: name:secret:scopes,
+      # comma separated. Empty: every API call is refused with 401.
+      - key: CHECKRAIL_API_KEYS
+        sync: false
+      # Calls a minute per API key; empty means 120.
+      - key: CHECKRAIL_API_RATE_LIMIT
+        sync: false

@@ -177,6 +177,10 @@ describe("the signed cookie", () => {
       const again = middleware(new NextRequest("http://checkrail.test/obligations", { headers: { cookie: `${SANDBOX_COOKIE}=${forwarded}` } }));
       expect(again.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBe(forwarded);
       expect(again.headers.get("set-cookie")).toBeNull();
+      // An API key on /api/v1 is no visitor either: no copy, no cookie, and a client's token is not forwarded.
+      const api = middleware(new NextRequest("http://checkrail.test/api/v1/requests", { headers: { cookie: `${SANDBOX_COOKIE}=${forwarded}`, [SANDBOX_HEADER]: forwarded } }));
+      expect(api.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBeNull();
+      expect(api.headers.get("set-cookie")).toBeNull();
       // PayPal's webhook is no visitor: no copy is made for it.
       const hook = middleware(new NextRequest("http://checkrail.test/api/webhooks/paypal", { method: "POST" }));
       expect(hook.headers.get(`x-middleware-request-${SANDBOX_HEADER}`)).toBeNull();
@@ -292,6 +296,12 @@ describe("one request, one visitor's copy", () => {
     expect(() => workUnitAsyncStorage.run({ type: "request", headers: { [SANDBOX_HEADER]: a }, url: { pathname: "/" } } as never, () => getDb())).toThrow();
     // Only the paths that are no visitor may use the shared database without a token.
     for (const p of ["/api/mcp", "/api/webhooks/paypal", "/api/autopilot/tick"]) expect(inRequest(null, () => getDb(), "header", p)).toBe(shared);
+    // The REST API is server-to-server: the shared database, even with a visitor's token in the header or cookie.
+    for (const p of ["/api/v1/requests", "/api/v1/departures", "/api/v1/requests/obl_x"]) {
+      expect(inRequest(null, () => getDb(), "header", p)).toBe(shared);
+      expect(inRequest(a, () => getDb(), "header", p)).toBe(shared);
+      expect(inRequest(a, () => getDb(), "cookie", p)).toBe(shared);
+    }
     const viaHeader = inRequest(a, () => getDb());
     expect(viaHeader).not.toBe(shared);
     expect(inRequest(a, () => getDb(), "cookie")).toBe(viaHeader);

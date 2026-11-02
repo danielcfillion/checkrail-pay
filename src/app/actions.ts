@@ -7,7 +7,7 @@ import { getDb } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { businesses, obligations, paymentRunItems, paymentRuns, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, linkWaitingToBill, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -676,7 +676,17 @@ export async function returnBankLineAction(lineId: string, reason: string): Prom
 export async function createBillAction(vendorId: string, bill: { kind: string; reference: string; totalMinor: number; currency: string; dueDate?: string | null; note?: string | null }): Promise<ActionResult & { id?: string }> {
   return inRequest(async () => {
   try {
-    const id = await withBusiness((db, b, who) => createBill(db, b, who, vendorId, bill));
+    const id = await withBusiness(async (db, b, who) => {
+      const made = createBill(db, b, who, vendorId, bill);
+      // Requests from outside callers that already name this bill are put on it and checked again.
+      // The bill is recorded either way: a failure here is logged, not shown to the clerk as a failed bill.
+      try {
+        await linkWaitingToBill(db, made, who.id);
+      } catch (e) {
+        console.error("[checkrail] linking waiting requests to a new bill failed", e);
+      }
+      return made;
+    });
     done([`/vendors/${vendorId}`]);
     return { ok: true, message: "Recorded.", id };
   } catch (e) {
@@ -715,7 +725,18 @@ export async function applyCreditAction(creditBillId: string, billId: string, am
 export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: number, note?: string): Promise<ActionResult> {
   return inRequest(async () => {
   try {
-    const r = await withBusiness((db, b, who) => settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined));
+    const r = await withBusiness(async (db, b, who) => {
+      const out = settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined);
+      // The difference bill picks up outside requests already waiting that name it, as any new bill does.
+      if (out.differenceBillId) {
+        try {
+          await linkWaitingToBill(db, out.differenceBillId, who.id);
+        } catch (e) {
+          console.error("[checkrail] linking waiting requests to a new bill failed", e);
+        }
+      }
+      return out;
+    });
     done(["/vendors"]);
     return { ok: true, message: r.owedTo === "vendor" ? "Settled. The overspend is recorded as owed to the vendor." : r.owedTo === "business" ? "Settled. The unspent part is a credit to set against their next bill." : "Settled exactly." };
   } catch (e) {
