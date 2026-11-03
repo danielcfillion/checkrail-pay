@@ -47,12 +47,20 @@ export function accountLabel(code: string): string {
 
 /**
  * Who bore a settled payment's fee. The business, on every rail, since 3 Nov 2026. A Stellar record from before then
- * has no feePaidBy and a net equal to its gross: the fee came out of the amount, so the recipient bore it and no fee
- * spend belongs in the books for it.
+ * has no feePaidBy and a net equal to what was sent, the gross less any tax withheld (750 - 75 = 675): the fee came
+ * out of the amount, so the recipient bore it and no fee spend belongs in the books for it. A newer record's net is
+ * that plus the fee.
  */
-export function feePaidByOf(p: { feePaidBy?: "business" | "recipient"; rail: string; feeAmount: string; netPaid: string; grossAmount: string }): "business" | "recipient" {
+export function feePaidByOf(p: { feePaidBy?: "business" | "recipient"; rail: string; feeAmount: string; netPaid: string; grossAmount: string; withheldAmount?: string }): "business" | "recipient" {
   if (p.feePaidBy) return p.feePaidBy;
-  return p.rail === "stellar" && Number(p.feeAmount) > 0 && p.netPaid === p.grossAmount ? "recipient" : "business";
+  if (p.rail !== "stellar" || !(Number(p.feeAmount) > 0)) return "business";
+  const sent = Number(p.grossAmount) - (Number(p.withheldAmount) || 0);
+  return Math.abs(Number(p.netPaid) - sent) < 0.005 ? "recipient" : "business";
+}
+
+/** The same rule for a settlement row and its accounting record, for the remittance advice. */
+export function feeWasDeducted(p: Parameters<typeof feePaidByOf>[0] | null | undefined): boolean {
+  return !!p && feePaidByOf(p) === "recipient";
 }
 
 /** A stored amount (hundredths) as the file shows it: whole units for a currency without decimals, else two places. */
