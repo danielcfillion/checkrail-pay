@@ -7,7 +7,7 @@ Checkrail Pay can send each approved bill to Xero, and its payment and fee when 
 | File | For | What it is |
 | --- | --- | --- |
 | **Bills CSV** (Export new bills for Xero) | **Importing** into Xero: Business, Bills to pay, Import | One bill per invoice in Xero's "Import bills" template, at the invoice's gross amount. Each press holds only bills not exported before. |
-| **Bookkeeper pack** (.xlsx) | **Reading**, for the accountant | A formatted workbook: a cover sheet (business, period, what each sheet is, totals, how to use it with Xero), the bills, the payments (real dates, amounts as numbers in their currency, account code and name, who paid the fee, what the recipient received and at what rate, the explorer link) and fees by rail and month. Never imported. |
+| **Bookkeeper pack** (.xlsx) | **Reading**, for the accountant | A formatted workbook: a cover sheet (business, period, what each sheet is, totals, how to use it with Xero), the bills, the payments (real dates, amounts as numbers in their currency, account code and name, who paid the fee, what the recipient received and at what rate, the explorer link) and fees by rail and month. This month and last month by default, or everything on record; at most 5,000 rows a sheet, and the cover says when a period has more. Never imported. |
 | **Settlement records CSV** | **Reading**, for matching payments from the bank feed | One row per settled payment. Never imported. |
 
 Only the bills CSV is imported. Payments match from the bank feed: each payment is one bank line for its `netPaid`.

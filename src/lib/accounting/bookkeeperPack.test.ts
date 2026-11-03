@@ -5,7 +5,8 @@ import { openTestDb, type Db } from "../db";
 import { accountingSyncs } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { approveObligation, confirmSettlement, executeObligation } from "../engine/orchestrator";
-import { buildBookkeeperPack, currencyFormat, PACK_SHEETS } from "./bookkeeperPack";
+import { buildBookkeeperPack, currencyFormat, defaultPackPeriod, PACK_ROW_CAP, PACK_SHEETS } from "./bookkeeperPack";
+import { localDateString } from "../format";
 import { allRecords, SIMULATED_EXPLORER, toCsv } from "./record";
 import { xeroBillRows } from "./xeroBills";
 
@@ -26,7 +27,7 @@ describe("bookkeeper pack (.xlsx)", () => {
     const hist = db.select().from(accountingSyncs).all().find((a) => JSON.parse(a.payloadJson!).reference === "JOB-PAL2D-0912")!;
     const p = JSON.parse(hist.payloadJson!);
     db.update(accountingSyncs).set({ payloadJson: JSON.stringify({ ...p, rail: "stellar", explorerUrl: LIVE_URL, railMode: "testnet" }) }).where(eq(accountingSyncs.id, hist.id)).run();
-    const { buffer } = await buildBookkeeperPack(db, DEMO_BUSINESS_ID, { generatedAt: new Date("2026-11-03T10:00:00Z") });
+    const { buffer } = await buildBookkeeperPack(db, DEMO_BUSINESS_ID, { generatedAt: new Date("2026-11-03T10:00:00Z"), period: "all" });
     wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer as unknown as ArrayBuffer);
   });
@@ -70,7 +71,10 @@ describe("bookkeeper pack (.xlsx)", () => {
     const file = xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows;
     const invoices: string[] = [];
     for (let r = 2; r <= file.length + 1; r++) invoices.push(String(ws.getRow(r).getCell(4).value));
-    expect(invoices).toEqual(file.map((f) => String(f["*InvoiceNumber"])));
+    // The same rows as the file, in invoice-date order (so a capped sheet drops the latest).
+    expect([...invoices].sort()).toEqual(file.map((f) => String(f["*InvoiceNumber"])).sort());
+    const dates = invoices.map((_, i) => (ws.getRow(i + 2).getCell(5).value as Date).getTime());
+    expect(dates).toEqual([...dates].sort((a, b) => a - b));
     const row = ws.getRow(invoices.indexOf("JOB-PAL3D-0927") + 2);
     expect(row.getCell(5).value).toBeInstanceOf(Date);
     expect(row.getCell(5).numFmt).toBe("d mmm yyyy");
@@ -119,18 +123,22 @@ describe("bookkeeper pack (.xlsx)", () => {
     const ws = wb.getWorksheet("Payments")!;
     const records = allRecords(db);
     const total = ws.getRow(records.length + 3);
-    expect(total.getCell(col(ws, "Description")).value).toBe("Total USD");
+    expect(total.getCell(col(ws, "Description")).value).toBe(`Total USD (${records.length} payments)`);
     const net = total.getCell(col(ws, "Net paid (cash out)")).value as Formula;
     expect(net.formula).toMatch(/^SUMIFS\(N2:N\d+,J2:J\d+,"USD"\)$/);
     const expected = records.filter((r) => r.grossCurrency === "USD").reduce((a, r) => a + Number(r.netPaid), 0);
     expect(net.result).toBeCloseTo(expected, 2);
     const fees = total.getCell(col(ws, "Fee")).value as Formula;
     expect(fees.result).toBeCloseTo(records.reduce((a, r) => a + Number(r.feeAmount), 0), 2);
-    expect((total.getCell(col(ws, "Rail")).value as Formula).result).toBe(records.length);
+    expect(total.getCell(col(ws, "Rail")).value).toBeNull();
 
     const bills = wb.getWorksheet("Bills")!;
     const file = xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: false }).rows;
-    const bt = bills.getRow(file.length + 3).getCell(9).value as Formula;
+    const billTotal = bills.getRow(file.length + 3);
+    // The count is in the label; the Quantity column stays empty on the totals row.
+    expect(billTotal.getCell(7).value).toBe(`Total USD (${file.length} bills)`);
+    expect(billTotal.getCell(8).value).toBeNull();
+    const bt = billTotal.getCell(9).value as Formula;
     expect(bt.result).toBeCloseTo(file.reduce((a, r) => a + Number(r["*UnitAmount"]), 0), 2);
   });
 
@@ -173,5 +181,43 @@ describe("bookkeeper pack (.xlsx)", () => {
     const { forExport } = await import("./record");
     const old = forExport({ reference: "R", vendorName: "V", vendorCountry: "PH", description: "d", billDate: "2026-10-01", paymentDate: "2026-10-02", grossAmount: "750.00", grossCurrency: "USD", feeAmount: "13.25", feeCurrency: "USD", netPaid: "750.00", recipientReceived: null, recipientCurrency: null, fxRate: null, rail: "stellar", externalTransactionId: "X", explorerUrl: null, accountCode: "310 Cost of Goods Sold: Contract labour", obligationId: "o" });
     expect(old).toMatchObject({ accountCode: "310", accountName: "Cost of Goods Sold", feePaidBy: "recipient", explorerUrl: SIMULATED_EXPLORER });
+  });
+
+  it("defaults to this month and last month, by invoice date and payment date", async () => {
+    expect(defaultPackPeriod("2026-11-03")).toEqual({ from: "2026-10-01", to: "2026-11-30" });
+    expect(defaultPackPeriod("2026-01-15")).toEqual({ from: "2025-12-01", to: "2026-01-31" });
+    const today = localDateString();
+    const period = defaultPackPeriod(today);
+    const { buffer, summary } = await buildBookkeeperPack(db, DEMO_BUSINESS_ID);
+    expect([summary.periodFrom, summary.periodTo]).toEqual([period.from, period.to]);
+    const inside = allRecords(db, DEMO_BUSINESS_ID).filter((r) => r.paymentDate >= period.from && r.paymentDate <= period.to);
+    expect(summary.payments).toBe(inside.length);
+    expect(summary.payments).toBeLessThan(allRecords(db, DEMO_BUSINESS_ID).length);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(buffer as unknown as ArrayBuffer);
+    const ws = book.getWorksheet("Payments")!;
+    for (let r = 2; r <= inside.length + 1; r++) {
+      const d = (ws.getRow(r).getCell(1).value as Date).toISOString().slice(0, 10);
+      expect(d >= period.from && d <= period.to).toBe(true);
+    }
+    expect(String(book.getWorksheet("Cover")!.getCell("D4").value)).toMatch(/payments by payment date/);
+    const custom = await buildBookkeeperPack(db, DEMO_BUSINESS_ID, { period: { from: "2026-09-01", to: "2026-09-30" } });
+    expect(custom.summary.payments).toBe(allRecords(db, DEMO_BUSINESS_ID).filter((r) => r.paymentDate.startsWith("2026-09")).length);
+  });
+
+  it("caps each sheet at the row limit and says so on the cover, in red, with what was left out", async () => {
+    const { buffer, summary } = await buildBookkeeperPack(db, DEMO_BUSINESS_ID, { period: "all", maxRows: 5 });
+    expect(summary).toMatchObject({ bills: 5, payments: 5 });
+    expect(summary.leftOut.payments).toBe(allRecords(db, DEMO_BUSINESS_ID).length - 5);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(buffer as unknown as ArrayBuffer);
+    const text: string[] = [];
+    book.getWorksheet("Cover")!.eachRow((r) => r.eachCell((c) => text.push(String(c.value))));
+    expect(text.join("\n")).toMatch(new RegExp(`at most 5 rows\\. This period has more, so ${summary.leftOut.bills} later bills and ${summary.leftOut.payments} later payments are left out`));
+    expect(book.getWorksheet("Payments")!.getRow(8).getCell(7).value).toBe("Total USD (5 payments)");
+    expect(PACK_ROW_CAP).toBe(5_000);
+    // Under the cap, no such note.
+    const full = await buildBookkeeperPack(db, DEMO_BUSINESS_ID, { period: "all" });
+    expect(full.summary.leftOut).toEqual({ bills: 0, payments: 0 });
   });
 });

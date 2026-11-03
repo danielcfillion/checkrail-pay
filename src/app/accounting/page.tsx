@@ -57,7 +57,7 @@ export default function AccountingPage() {
           <div className="flex flex-wrap gap-2">
             <ExportXeroBills count={newBills} />
             <ExportCsvButton pendingCount={pending.length} />
-            <a href="/api/accounting/pack" className="btn" download>
+            <a href="/api/accounting/pack" className="btn" download title="This month and last month">
               Bookkeeper pack (.xlsx)
             </a>
           </div>
@@ -92,10 +92,15 @@ export default function AccountingPage() {
           <dd className="text-ink-soft">The only file to import into Xero (Business, Bills to pay, Import), in Xero&apos;s template. Bills go in when they are approved, not when they are paid, so aged payables are right while payments wait. A deposit and its balance are one bill, at the invoice&apos;s gross amount. Export new bills holds only bills not exported before.</dd>
           <dt className="font-medium">Bookkeeper pack (.xlsx), to read</dt>
           <dd className="text-ink-soft">
-            For the accountant: a cover sheet with totals and how to use it with Xero, the bills, the payments with dates, amounts, fees, who paid each fee, the rate and account, and fees by rail and month. Not for importing.{" "}
+            For the accountant: a cover sheet with totals and how to use it with Xero, the bills, the payments with dates, amounts, fees, who paid each fee, the rate and account, and fees by rail and month. Not for importing. Up to 5,000 rows a sheet; the cover says if a period has more.{" "}
             <a className="link" href="/api/accounting/pack" download>
-              Download the bookkeeper pack
+              This month and last month
             </a>
+            {" or "}
+            <a className="link" href="/api/accounting/pack?period=all" download>
+              everything on record
+            </a>
+            .
           </dd>
           <dt className="font-medium">Settlement records CSV, to read</dt>
           <dd className="text-ink-soft">One row per settled payment, for the bookkeeper to match payments from the bank feed: gross, fee and who paid it, net (what left the bank account), recipient amount, account code and name, transaction id. Not for importing. Tax kept back from a vendor is a second payment on the bill from the withholding account, for the row&apos;s withheldAmount.</dd>

@@ -149,7 +149,7 @@ The fields come prefilled; type your own payee, amount, reference or request tex
 ## The files for the bookkeeper
 
 - **Xero bills CSV, to import** (Accounting, "Export new bills for Xero"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill. Every export is recorded with its file, so the page lists past exports with Download again (the identical file; import each once).
-- **Bookkeeper pack (.xlsx), to read** (Accounting, "Bookkeeper pack"): cover sheet with totals and how to use it with Xero, the bills, the payments (real dates, amounts with currency formats, account code and name, who paid the fee, recipient amount and rate, explorer link) and fees by rail and month. Frozen headers, filters, totals rows, landscape fit-to-width printing. Built with exceljs (MIT).
+- **Bookkeeper pack (.xlsx), to read** (Accounting, "Bookkeeper pack"; this month and last month, or everything on record, up to 5,000 rows a sheet): cover sheet with totals and how to use it with Xero, the bills, the payments (real dates, amounts with currency formats, account code and name, who paid the fee, recipient amount and rate, explorer link) and fees by rail and month. Frozen headers, filters, totals rows, landscape fit-to-width printing. Built with exceljs (MIT).
 - **Settlement records CSV, to read** (Accounting, "Settlement records CSV"): one row per settled payment, for matching to the bank feed.
 
 Changed 3 Nov 2026: the settlement CSV's `accountCode` is now the bare code and `accountName` its name, and `feePaidBy` says who bore the fee. The business pays the fee on every rail, Stellar included, so the supplier receives the full bill. Seeded demo history uses dated demo FX rates, marked as such.

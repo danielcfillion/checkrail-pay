@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../db";
 import { businesses } from "../db/schema";
 import { ZERO_DECIMAL_CURRENCIES } from "../domain/money";
-import { formatDateTime } from "../format";
+import { formatDateTime, formatDate, localDateString } from "../format";
 import { label as railLabel } from "../domain/routing";
 import type { Rail } from "../domain/types";
 import { allRecords, SIMULATED_EXPLORER } from "./record";
@@ -75,13 +75,15 @@ function letter(n: number): string {
  * Totals rows under a table, one per currency: SUMIFS over the data rows for each money column, with the computed
  * result stored too so a reader that does not recalculate still shows the figure.
  */
-function totals(ws: ExcelJS.Worksheet, opts: { first: number; last: number; currencyCol: number; labelCol: number; sums: Array<{ col: number; values: Array<{ currency: string; value: number | null }> }>; countCol?: number }): number {
+function totals(ws: ExcelJS.Worksheet, opts: { first: number; last: number; currencyCol: number; labelCol: number; sums: Array<{ col: number; values: Array<{ currency: string; value: number | null }> }>; noun?: [string, string] }): number {
   const currencies = [...new Set(opts.sums.flatMap((s) => s.values.map((v) => v.currency)))].sort();
   let r = opts.last + 2;
   const cur = letter(opts.currencyCol);
   for (const c of currencies) {
     const row = ws.getRow(r);
-    row.getCell(opts.labelCol).value = `Total ${c}`;
+    // The count goes in the label ("Total USD (33 bills)"), so no number sits under a column it does not belong to.
+    const n = opts.sums[0]?.values.filter((v) => v.currency === c).length ?? 0;
+    row.getCell(opts.labelCol).value = opts.noun ? `Total ${c} (${n} ${n === 1 ? opts.noun[0] : opts.noun[1]})` : `Total ${c}`;
     row.getCell(opts.currencyCol).value = c;
     for (const s of opts.sums) {
       const col = letter(s.col);
@@ -90,7 +92,6 @@ function totals(ws: ExcelJS.Worksheet, opts: { first: number; last: number; curr
       cell.value = { formula: `SUMIFS(${col}${opts.first}:${col}${opts.last},${cur}${opts.first}:${cur}${opts.last},"${c}")`, result: round(result, c) };
       cell.numFmt = currencyFormat(c);
     }
-    if (opts.countCol) row.getCell(opts.countCol).value = { formula: `COUNTIFS(${cur}${opts.first}:${cur}${opts.last},"${c}")`, result: opts.sums[0]?.values.filter((v) => v.currency === c).length ?? 0 };
     row.font = { bold: true };
     row.eachCell((cell) => (cell.fill = TOTAL_FILL));
     r++;
@@ -109,18 +110,50 @@ export interface PackSummary {
   periodTo: string | null;
   bills: number;
   payments: number;
+  /** Rows left out of a sheet because it reached the row cap, by sheet. */
+  leftOut: { bills: number; payments: number };
 }
 
-/** Build the pack for everything on record. `generatedAt` is injectable so a test or a sample is reproducible. */
-export async function buildBookkeeperPack(db: Db, businessId: string, opts: { generatedAt?: Date } = {}): Promise<{ buffer: Buffer; summary: PackSummary }> {
+/** The most rows a data sheet holds; a longer period is cut at this many rows and the cover says so. */
+export const PACK_ROW_CAP = 5_000;
+
+/** A period as two dates (YYYY-MM-DD, inclusive), or "all" for everything on record. */
+export type PackPeriod = { from: string; to: string } | "all";
+
+/** The default period: the first day of last month to the last day of this month, in the business time zone. */
+export function defaultPackPeriod(today: string = localDateString()): { from: string; to: string } {
+  const [y, m] = today.split("-").map(Number);
+  const first = new Date(Date.UTC(y, m - 2, 1));
+  const last = new Date(Date.UTC(y, m, 0));
+  return { from: first.toISOString().slice(0, 10), to: last.toISOString().slice(0, 10) };
+}
+
+/**
+ * Build the pack for a period (default: this month and last month; "all" for everything on record), for one business.
+ * Bills are in it by invoice date, payments by payment date. `generatedAt` and `maxRows` are injectable for tests.
+ *
+ * Built in memory, not with exceljs's streaming writer: the cover is written last (it needs the totals) and merges
+ * cells, which the streaming writer cannot go back to, and the row cap keeps the workbook to a few megabytes.
+ */
+export async function buildBookkeeperPack(db: Db, businessId: string, opts: { generatedAt?: Date; period?: PackPeriod; maxRows?: number } = {}): Promise<{ buffer: Buffer; summary: PackSummary }> {
   const biz = db.select().from(businesses).where(eq(businesses.id, businessId)).get();
   const business = biz?.name ?? "Business";
   const generatedAt = opts.generatedAt ?? new Date();
-  const bills = xeroBillRows(db, businessId, { onlyNew: false }).rows;
-  const payments = allRecords(db).sort((a, b) => (a.paymentDate ?? "").localeCompare(b.paymentDate ?? "") || a.reference.localeCompare(b.reference));
+  const period = opts.period ?? defaultPackPeriod(localDateString(generatedAt));
+  const inPeriod = (d: string | null | undefined) => period === "all" || (!!d && d >= period.from && d <= period.to);
+  const cap = opts.maxRows ?? PACK_ROW_CAP;
+  const allBills = xeroBillRows(db, businessId, { onlyNew: false })
+    .rows.filter((b) => inPeriod(String(b["*InvoiceDate"] ?? "")))
+    .sort((a, b) => String(a["*InvoiceDate"] ?? "").localeCompare(String(b["*InvoiceDate"] ?? "")) || String(a["*InvoiceNumber"]).localeCompare(String(b["*InvoiceNumber"])));
+  const allPayments = allRecords(db, businessId)
+    .filter((p) => inPeriod(p.paymentDate))
+    .sort((a, b) => (a.paymentDate ?? "").localeCompare(b.paymentDate ?? "") || a.reference.localeCompare(b.reference));
+  const bills = allBills.slice(0, cap);
+  const payments = allPayments.slice(0, cap);
+  const leftOut = { bills: allBills.length - bills.length, payments: allPayments.length - payments.length };
   const dates = [...bills.map((b) => String(b["*InvoiceDate"] ?? "")), ...payments.map((p) => p.paymentDate)].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
-  const periodFrom = dates[0] ?? null;
-  const periodTo = dates[dates.length - 1] ?? null;
+  const periodFrom = period === "all" ? (dates[0] ?? null) : period.from;
+  const periodTo = period === "all" ? (dates[dates.length - 1] ?? null) : period.to;
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "Checkrail Pay";
@@ -163,7 +196,7 @@ export async function buildBookkeeperPack(db: Db, businessId: string, opts: { ge
   }
   const billsLast = bills.length + 1;
   filter(billsWs, billCols.length, billsLast);
-  if (bills.length) totals(billsWs, { first: 2, last: billsLast, currencyCol: 10, labelCol: 7, sums: [{ col: 9, values: billMoney }], countCol: 8 });
+  if (bills.length) totals(billsWs, { first: 2, last: billsLast, currencyCol: 10, labelCol: 7, sums: [{ col: 9, values: billMoney }], noun: ["bill", "bills"] });
 
   // ---- Payments: the settlement records ----
   const payCols: Col[] = [
@@ -248,7 +281,7 @@ export async function buildBookkeeperPack(db: Db, businessId: string, opts: { ge
   }
   const payLast = payments.length + 1;
   filter(payWs, payCols.length, payLast);
-  if (payments.length) totals(payWs, { first: 2, last: payLast, currencyCol: 10, labelCol: 7, sums: [{ col: 9, values: gross }, { col: 11, values: fees }, { col: 13, values: withheld }, { col: 14, values: net }], countCol: 8 });
+  if (payments.length) totals(payWs, { first: 2, last: payLast, currencyCol: 10, labelCol: 7, sums: [{ col: 9, values: gross }, { col: 11, values: fees }, { col: 13, values: withheld }, { col: 14, values: net }], noun: ["payment", "payments"] });
 
   // ---- Fees: by rail and month ----
   const feeCols: Col[] = [
@@ -311,12 +344,13 @@ export async function buildBookkeeperPack(db: Db, businessId: string, opts: { ge
   cover.getCell(r, 3).value = day(periodTo);
   cover.getCell(r, 2).numFmt = DATE_FMT;
   cover.getCell(r, 3).numFmt = DATE_FMT;
+  cover.getCell(r, 4).value = period === "all" ? "Everything on record" : `Bills by invoice date, payments by payment date, ${formatDate(period.from)} to ${formatDate(period.to)}`;
   r++;
   put(r, ["Generated"]);
   cover.getCell(r, 2).value = formatDateTime(generatedAt.toISOString()); // in the business time zone, with its label: an Excel date has no zone
   r += 2;
   put(r++, ["What each sheet is"], { font: { bold: true } });
-  put(r++, ["Bills", "Every agreed bill, the same rows as the Xero bills import file, with readable headers. For reading; import the bills CSV, not this sheet."]);
+  put(r++, ["Bills", "Every agreed bill in the period, the same rows as the Xero bills import file, with readable headers. For reading; import the bills CSV, not this sheet."]);
   put(r++, ["Payments", "One row per settled payment, from the settlement records: amount, fee and who paid it, net cash out, what the recipient received and at what rate, account, and the transaction and explorer link."]);
   put(r++, ["Fees", "Payment fees totalled by rail and month."]);
   r++;
@@ -351,6 +385,17 @@ export async function buildBookkeeperPack(db: Db, businessId: string, opts: { ge
     cover.getRow(r).height = 30;
     r++;
   }
+  if (leftOut.bills || leftOut.payments) {
+    r++;
+    put(r++, ["Not everything is in this pack"], { font: { bold: true, color: { argb: "FFA8261D" } } });
+    const cut = [leftOut.bills ? `${leftOut.bills} later bills` : "", leftOut.payments ? `${leftOut.payments} later payments` : ""].filter(Boolean).join(" and ");
+    put(r, [`Each sheet holds at most ${cap.toLocaleString("en-US")} rows. This period has more, so ${cut} are left out and the totals cover only the rows shown. Download a shorter period for the rest.`]);
+    cover.mergeCells(r, 1, r, 5);
+    cover.getRow(r).alignment = { wrapText: true, vertical: "top" };
+    cover.getRow(r).height = 30;
+    cover.getRow(r).font = { bold: true, color: { argb: "FFA8261D" } };
+    r++;
+  }
   if (payments.some((p) => p.fxRateSource === "demo") || payments.some((p) => p.explorerUrl === SIMULATED_EXPLORER)) {
     r++;
     put(r++, ["Demo data"], { font: { bold: true } });
@@ -375,6 +420,6 @@ export async function buildBookkeeperPack(db: Db, businessId: string, opts: { ge
   }
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  return { buffer, summary: { business, periodFrom, periodTo, bills: bills.length, payments: payments.length } };
+  return { buffer, summary: { business, periodFrom, periodTo, bills: bills.length, payments: payments.length, leftOut } };
 }
 
