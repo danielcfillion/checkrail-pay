@@ -192,11 +192,12 @@ export const SIMULATED_EXPLORER = "simulated, not on chain";
  * the recipient, since the fee then came out of the amount), and the explorer column filled for a simulated Stellar
  * payment.
  */
-export function forExport(p: AccountingPayload): AccountingPayload {
+export function forExport(p: AccountingPayload, nameOf?: (code: string) => string | null): AccountingPayload {
   const label = String(p.accountCode ?? "").trim();
   const [first, ...rest] = label.split(/\s+/);
   const code = /^\d+$/.test(first ?? "") ? first : label;
-  const name = p.accountName || (code === label ? "" : rest.join(" ")) || accountName(code);
+  const named = nameOf?.(code);
+  const name = named ?? (accountName(code) || p.accountName || (code === label ? "" : rest.join(" ")));
   const feePaidBy = feePaidByOf(p);
   const simulated = p.rail === "stellar" && !p.explorerUrl && (p.railMode === undefined || p.railMode === "mock");
   return { ...p, accountCode: code, accountName: name, feePaidBy, explorerUrl: p.explorerUrl || (simulated ? SIMULATED_EXPLORER : null) };
@@ -216,25 +217,49 @@ export function csvCell(v: unknown): string {
 export function toCsv(rows: AccountingPayload[]): string {
   const esc = csvCell;
   const lines = [CSV_COLUMNS.join(",")];
-  for (const r of rows.map(forExport)) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
+  for (const r of rows.map((r) => forExport(r))) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
   return lines.join("\n") + "\n";
 }
 
 /** Every accounting record as CSV, changing nothing. Safe for a plain link or a second click. */
-export function allRecordsCsv(db: Db): { csv: string; count: number } {
-  const rows = allRecords(db);
+export function allRecordsCsv(db: Db, businessId?: string): { csv: string; count: number } {
+  const rows = allRecords(db, businessId);
   return { csv: toCsv(rows), count: rows.length };
 }
 
-/** Every accounting record as the files show it (see forExport), with its Xero status. Changes nothing. */
-export function allRecords(db: Db): AccountingPayload[] {
-  return withXeroPayment(db, db.select().from(accountingSyncs).all().map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload }))).map(forExport);
+/**
+ * How the files name an account. With Xero connected and its chart read, the name is the one in that chart, so the
+ * files say what Xero says ("310 Cost of Goods Sold", or the business's own name for it); a code that is not in the
+ * chart says so. Without Xero, the standard-chart defaults in billLine apply (returns null to let them).
+ */
+export function accountNamesFor(db: Db, businessId?: string): (code: string) => string | null {
+  const bizId = businessId ?? db.select({ id: businesses.id }).from(businesses).limit(1).get()?.id ?? "";
+  const conn = db.select({ status: xeroConnections.status, chart: xeroConnections.chartJson }).from(xeroConnections).where(eq(xeroConnections.businessId, bizId)).get();
+  if (!conn || conn.status === "disconnected" || !conn.chart) return () => null;
+  let accounts: Array<{ code?: string; name?: string }> = [];
+  try {
+    accounts = (JSON.parse(conn.chart) as { accounts?: Array<{ code?: string; name?: string }> }).accounts ?? [];
+  } catch {
+    return () => null;
+  }
+  const names = new Map(accounts.filter((a) => a.code && a.name).map((a) => [String(a.code), String(a.name)]));
+  return (code) => names.get(code) ?? "not in the Xero chart (posted to the supplier bills account)";
+}
+
+/** Every accounting record of the business as the files show it (see forExport), with its Xero status. Changes nothing. */
+export function allRecords(db: Db, businessId?: string): AccountingPayload[] {
+  const nameOf = accountNamesFor(db, businessId);
+  const syncs = businessId
+    ? db.select({ s: accountingSyncs }).from(accountingSyncs).innerJoin(obligations, eq(obligations.id, accountingSyncs.obligationId)).where(eq(obligations.businessId, businessId)).all().map((r) => r.s)
+    : db.select().from(accountingSyncs).all();
+  return withXeroPayment(db, syncs.map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload }))).map((p) => forExport(p, nameOf));
 }
 
 /** Mark every pending CSV sync as exported and return the file contents. */
 export function exportPendingCsv(db: Db): { csv: string; count: number } {
   const pending = db.select().from(accountingSyncs).where(eq(accountingSyncs.status, "pending")).all();
-  const rows = withXeroPayment(db, pending.map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload })));
+  const nameOf = accountNamesFor(db);
+  const rows = withXeroPayment(db, pending.map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload }))).map((p) => forExport(p, nameOf));
   const ts = new Date().toISOString();
   for (const p of pending) {
     db.update(accountingSyncs).set({ status: "exported", externalRef: `csv:${localDateString(new Date(ts))}`, updatedAt: ts }).where(eq(accountingSyncs.id, p.id)).run();

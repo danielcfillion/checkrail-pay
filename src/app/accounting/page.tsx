@@ -9,6 +9,7 @@ import { XeroPushSummary } from "@/components/XeroConnection";
 import { listBillExports, xeroBillRows } from "@/lib/accounting/xeroBills";
 import { BillExportHistory } from "@/components/BillExportHistory";
 import { accountName } from "@/lib/accounting/billLine";
+import { accountNamesFor } from "@/lib/accounting/record";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { auditEntries, obligations } from "@/lib/db/schema";
@@ -23,6 +24,7 @@ export default function AccountingPage() {
   const biz = getBusiness();
   const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
   const exports = biz ? listBillExports(getDb(), biz.id) : [];
+  const nameOf = accountNamesFor(getDb(), biz?.id);
   const pending = rows.filter((r) => r.status === "pending");
   const system = getSystemModes();
   // One currency across every record: say it once in the column headers, not in every cell.
@@ -182,7 +184,7 @@ export default function AccountingPage() {
                     <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
                     <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
                     <td className="hidden text-ink-soft lg:table-cell">
-                      <span className="block max-w-[6rem] truncate" title={p.accountCode ? `${String(p.accountCode).split(" ")[0]} ${p.accountName || accountName(String(p.accountCode).split(" ")[0]) || ""}`.trim() : undefined}>
+                      <span className="block max-w-[6rem] truncate" title={p.accountCode ? `${String(p.accountCode).split(" ")[0]} ${nameOf(String(p.accountCode).split(" ")[0]) ?? (accountName(String(p.accountCode).split(" ")[0]) || p.accountName || "")}`.trim() : undefined}>
                         {p.accountCode ? String(p.accountCode).split(" ")[0] : ""}
                       </span>
                     </td>

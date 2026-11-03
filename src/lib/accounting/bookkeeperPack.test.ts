@@ -99,7 +99,7 @@ describe("bookkeeper pack (.xlsx)", () => {
     expect(ana.getCell(col(ws, "Recipient received")).numFmt).toBe(currencyFormat("PHP"));
     expect(typeof ana.getCell(col(ws, "FX rate")).value).toBe("number");
     expect(ana.getCell(col(ws, "Account code")).value).toBe("310");
-    expect(ana.getCell(col(ws, "Account name")).value).toBe("Cost of Goods Sold: Contract labour");
+    expect(ana.getCell(col(ws, "Account name")).value).toBe("Cost of Goods Sold");
     expect(ana.getCell(col(ws, "Explorer")).value).toBe(SIMULATED_EXPLORER);
 
     const linked = find("JOB-PAL2D-0912").getCell(col(ws, "Explorer"));
@@ -107,8 +107,8 @@ describe("bookkeeper pack (.xlsx)", () => {
     expect(linked.hyperlink).toBe(LIVE_URL);
 
     const tam = find("INV-TAM-0834");
-    expect(tam.getCell(col(ws, "Account code")).value).toBe("320");
-    expect(tam.getCell(col(ws, "Account name")).value).toBe("Cost of Goods Sold: Transport and vehicle hire");
+    expect(tam.getCell(col(ws, "Account code")).value).toBe("325");
+    expect(tam.getCell(col(ws, "Account name")).value).toBe("Direct Expenses");
 
     // A past payment converted at a demo rate says so.
     const maria = find("JOB-HG4D-0914");
@@ -164,7 +164,7 @@ describe("bookkeeper pack (.xlsx)", () => {
     const cells = (line: string) => [...line.matchAll(/("(?:[^"]|"")*"|[^,]*)(,|$)/g)].map((m) => m[1].replace(/^"|"$/g, "").replace(/""/g, '"')).slice(0, cols.length);
     const ana = cells(lines.find((l) => l.startsWith("JOB-PAL3D-0927,"))!);
     expect(ana[cols.indexOf("accountCode")]).toBe("310");
-    expect(ana[cols.indexOf("accountName")]).toBe("Cost of Goods Sold: Contract labour");
+    expect(ana[cols.indexOf("accountName")]).toBe("Cost of Goods Sold");
     expect(ana[cols.indexOf("feePaidBy")]).toBe("business");
     expect(ana[cols.indexOf("explorerUrl")]).toBe(SIMULATED_EXPLORER);
   });
@@ -172,6 +172,6 @@ describe("bookkeeper pack (.xlsx)", () => {
   it("splits an older record's 'code name' account and treats its Stellar fee as borne by the recipient", async () => {
     const { forExport } = await import("./record");
     const old = forExport({ reference: "R", vendorName: "V", vendorCountry: "PH", description: "d", billDate: "2026-10-01", paymentDate: "2026-10-02", grossAmount: "750.00", grossCurrency: "USD", feeAmount: "13.25", feeCurrency: "USD", netPaid: "750.00", recipientReceived: null, recipientCurrency: null, fxRate: null, rail: "stellar", externalTransactionId: "X", explorerUrl: null, accountCode: "310 Cost of Goods Sold: Contract labour", obligationId: "o" });
-    expect(old).toMatchObject({ accountCode: "310", accountName: "Cost of Goods Sold: Contract labour", feePaidBy: "recipient", explorerUrl: SIMULATED_EXPLORER });
+    expect(old).toMatchObject({ accountCode: "310", accountName: "Cost of Goods Sold", feePaidBy: "recipient", explorerUrl: SIMULATED_EXPLORER });
   });
 });

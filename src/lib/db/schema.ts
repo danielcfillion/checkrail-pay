@@ -773,7 +773,7 @@ export const xeroConnections = sqliteTable("xero_connections", {
   connectedAt: text("connected_at").notNull(),
   /** Only what is approved from this moment on goes to Xero; earlier bills stay in the files. Kept when the same organisation reconnects. */
   syncFrom: text("sync_from").notNull(),
-  /** Account for supplier bills whose own code (310, 320, ...) is not in this tenant's chart. */
+  /** Account for supplier bills whose own code (310, 325, ...) is not in this tenant's chart. */
   expenseAccountCode: text("expense_account_code"),
   paypalAccountCode: text("paypal_account_code"),
   stellarAccountCode: text("stellar_account_code"),
