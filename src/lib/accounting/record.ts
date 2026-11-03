@@ -1,13 +1,13 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
-import { obligations, settlements, vendors, accountingSyncs, bills, businesses, xeroConnections, xeroRecords } from "../db/schema";
+import { obligations, settlements, vendors, accountingSyncs, bills, businesses, paymentAttempts, xeroConnections, xeroRecords } from "../db/schema";
 import { billApprovedAt } from "./xeroScope";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { config } from "../config";
 import { senderOutlayMinor } from "../domain/routing";
 import type { Rail } from "../domain/types";
-import { accountCodeFor, accountLabel, describeBill, majorText } from "./billLine";
+import { accountCodeFor, accountName, describeBill, feePaidByOf, majorText } from "./billLine";
 
 /**
  * Accounting output. Checkrail Pay is not a ledger; it produces clean, complete
@@ -29,7 +29,9 @@ export interface AccountingPayload {
   /** Tax kept back from the vendor and owed to the tax office (a liability line in the books). */
   withheldAmount?: string;
   feeCurrency: string;
-  /** What left the bank account, in the gross currency, on every rail: gross + fee, except Stellar where the fee is inside the gross. */
+  /** Who bore the fee: "business" (paid on top, in netPaid) on every rail today; "recipient" only on records from before 3 Nov 2026 where Stellar took it out of the amount. */
+  feePaidBy?: "business" | "recipient";
+  /** What left the bank account, in the gross currency: gross + fee, on every rail (the business pays the fee). */
   netPaid: string;
   recipientReceived: string | null;
   recipientCurrency: string | null;
@@ -37,8 +39,14 @@ export interface AccountingPayload {
   rail: string;
   externalTransactionId: string;
   explorerUrl: string | null;
-  /** The account the bill is posted to: the same code the Xero bills file carries (a prepayment for an advance), with its usual name. */
+  /** The mode of the attempt that paid it (mock, sandbox, testnet, live), so a simulated Stellar payment can say it is not on chain. */
+  railMode?: string;
+  /** Where fxRate came from: "demo" for seeded history (a table of demo rates), else the rail or its quote. */
+  fxRateSource?: "demo";
+  /** The account the bill is posted to: the bare code the Xero bills file carries (a prepayment for an advance). Records from before 3 Nov 2026 hold "code name"; exports split them. */
   accountCode: string;
+  /** The account's usual name when it is one of the defaults ("Cost of Goods Sold: Contract labour"), else blank. */
+  accountName?: string;
   /** Departure code, for a Xero tracking category ("Departure") so cost per trip can be reported. */
   departure?: string | null;
   /** Xero tax type for the bill line (XERO_TAX_TYPE, default "Tax Exempt"); tax profiles refine it. */
@@ -60,6 +68,8 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
   const reference = bill?.reference ?? ob.sourceRef ?? ob.id;
   const departure = departureCodeFor(db, ob.businessId, [ob.rawInput, ob.sourceRef, ob.description]);
   const cur = st.grossCurrency;
+  const code = accountCodeFor(v.role, v.defaultAccountCode, bill?.kind);
+  const attemptMode = db.select({ mode: paymentAttempts.mode }).from(paymentAttempts).where(eq(paymentAttempts.id, st.attemptId)).get()?.mode ?? null;
   const major = (minor: number) => majorText(minor, cur);
   return {
     destination: config.accounting.destination,
@@ -78,7 +88,7 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       grossCurrency: cur,
       feeAmount: major(st.feeMinor),
       feeCurrency: cur,
-      // Cash out of the bank account, whichever rail: PayPal, Wise and the bank file charge their fee on top; the Stellar anchor path takes its fee out of the amount.
+      // Cash out of the bank account, whichever rail: the amount sent plus the fee, which the business pays on top.
       netPaid: major(senderOutlayMinor({ rail: st.rail as Rail, sendAmountMinor: st.grossMinor, feeMinor: st.feeMinor })),
       recipientReceived: st.receivedMinor != null ? majorText(st.receivedMinor, st.receivedCurrency ?? cur) : null,
       recipientCurrency: st.receivedCurrency,
@@ -86,7 +96,10 @@ export function buildAccountingRecord(db: Db, obligationId: string): { destinati
       rail: st.rail,
       externalTransactionId: st.externalId ?? "",
       explorerUrl: st.explorerUrl,
-      accountCode: accountLabel(accountCodeFor(v.role, v.defaultAccountCode, bill?.kind)),
+      railMode: attemptMode ?? undefined,
+      feePaidBy: "business",
+      accountCode: code,
+      accountName: accountName(code),
       departure,
       taxType: process.env.XERO_TAX_TYPE || "Tax Exempt",
       obligationId: ob.id,
@@ -105,6 +118,7 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "grossCurrency",
   "feeAmount",
   "feeCurrency",
+  "feePaidBy",
   "withheldAmount",
   "netPaid",
   "recipientReceived",
@@ -114,6 +128,7 @@ export const CSV_COLUMNS: Array<keyof AccountingPayload> = [
   "externalTransactionId",
   "explorerUrl",
   "accountCode",
+  "accountName",
   "dueDate",
   "departure",
   "taxType",
@@ -168,6 +183,25 @@ function withXeroPayment(db: Db, rows: Array<{ id: string; payload: AccountingPa
   });
 }
 
+/** What the explorer column says for a payment with no explorer link: a simulated Stellar payment was never on chain. */
+export const SIMULATED_EXPLORER = "simulated, not on chain";
+
+/**
+ * A stored record as the files show it, whatever its age: the account split into a bare code and its name (older
+ * records held "310 Cost of Goods Sold: Contract labour" in accountCode), who paid the fee (older Stellar records:
+ * the recipient, since the fee then came out of the amount), and the explorer column filled for a simulated Stellar
+ * payment.
+ */
+export function forExport(p: AccountingPayload): AccountingPayload {
+  const label = String(p.accountCode ?? "").trim();
+  const [first, ...rest] = label.split(/\s+/);
+  const code = /^\d+$/.test(first ?? "") ? first : label;
+  const name = p.accountName || (code === label ? "" : rest.join(" ")) || accountName(code);
+  const feePaidBy = feePaidByOf(p);
+  const simulated = p.rail === "stellar" && !p.explorerUrl && (p.railMode === undefined || p.railMode === "mock");
+  return { ...p, accountCode: code, accountName: name, feePaidBy, explorerUrl: p.explorerUrl || (simulated ? SIMULATED_EXPLORER : null) };
+}
+
 /** One CSV cell: quoted when needed, and never a live spreadsheet formula. */
 export function csvCell(v: unknown): string {
   let s = v == null ? "" : String(v);
@@ -182,14 +216,19 @@ export function csvCell(v: unknown): string {
 export function toCsv(rows: AccountingPayload[]): string {
   const esc = csvCell;
   const lines = [CSV_COLUMNS.join(",")];
-  for (const r of rows) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
+  for (const r of rows.map(forExport)) lines.push(CSV_COLUMNS.map((c) => esc(r[c])).join(","));
   return lines.join("\n") + "\n";
 }
 
 /** Every accounting record as CSV, changing nothing. Safe for a plain link or a second click. */
 export function allRecordsCsv(db: Db): { csv: string; count: number } {
-  const rows = withXeroPayment(db, db.select().from(accountingSyncs).all().map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload })));
+  const rows = allRecords(db);
   return { csv: toCsv(rows), count: rows.length };
+}
+
+/** Every accounting record as the files show it (see forExport), with its Xero status. Changes nothing. */
+export function allRecords(db: Db): AccountingPayload[] {
+  return withXeroPayment(db, db.select().from(accountingSyncs).all().map((p) => ({ id: p.id, createdAt: p.createdAt, payload: JSON.parse(p.payloadJson ?? "{}") as AccountingPayload }))).map(forExport);
 }
 
 /** Mark every pending CSV sync as exported and return the file contents. */

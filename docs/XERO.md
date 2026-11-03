@@ -1,6 +1,22 @@
 # Connecting Xero
 
-Checkrail Pay can send each approved bill to Xero, and its payment and fee when the payment settles, instead of you importing the bills file and the settlement CSV. The two files stay on the Accounting page as the fallback and carry the same records.
+Checkrail Pay can send each approved bill to Xero, and its payment and fee when the payment settles, instead of you importing the bills file and entering payments from the settlement records. The files stay on the Accounting page as the fallback and carry the same records.
+
+## The files on the Accounting page: which one to import
+
+| File | For | What it is |
+| --- | --- | --- |
+| **Bills CSV** (Export new bills for Xero) | **Importing** into Xero: Business, Bills to pay, Import | One bill per invoice in Xero's "Import bills" template, at the invoice's gross amount. Each press holds only bills not exported before. |
+| **Bookkeeper pack** (.xlsx) | **Reading**, for the accountant | A formatted workbook: a cover sheet (business, period, what each sheet is, totals, how to use it with Xero), the bills, the payments (real dates, amounts as numbers in their currency, account code and name, who paid the fee, what the recipient received and at what rate, the explorer link) and fees by rail and month. Never imported. |
+| **Settlement records CSV** | **Reading**, for matching payments from the bank feed | One row per settled payment. Never imported. |
+
+Only the bills CSV is imported. Payments match from the bank feed: each payment is one bank line for its `netPaid`.
+
+**Export history.** Every bills export is recorded: when, by whom, how many bills and the file itself. The Accounting page shows the last one ("32 bills exported 2 Nov, 17:40") and every earlier one, each with Download again. Download again gives the identical file, byte for byte, and marks nothing. Import each file once: importing the same file again creates its bills a second time.
+
+**Settlement records CSV columns, changed 3 Nov 2026.** `accountCode` is the bare code the bills file carries ("310"), and a new `accountName` holds its name ("Cost of Goods Sold: Contract labour"); before, `accountCode` held both. A new `feePaidBy` says who bore the fee: `business` (paid on top, inside `netPaid`) on every rail now; `recipient` only on Stellar rows from before 3 Nov 2026, when the fee came out of the amount. For a simulated Stellar payment the `explorerUrl` column says `simulated, not on chain`.
+
+**Default accounts, changed 3 Nov 2026.** Guides 310 Contract labour; transport and vehicle or motorbike rental (the driver role) 320 Transport and vehicle hire; homestays and hotels 325 Accommodation (was 320); creators 400; others 429; cash advances 620. A vendor's own code always wins.
 
 Nothing about a payment waits for Xero. The push runs beside the payment path, on the autopilot heartbeat (every 15 seconds by default), on `POST /api/autopilot/tick`, and when someone presses Push to Xero.
 
@@ -47,9 +63,9 @@ Only what is approved after you first connect. A bill whose first part was appro
 | Settled payment | Payment against that vendor's bill, from the rail's bank account, for the amount sent | when the payment settles |
 | Tax kept back on that payment | A second payment against the same bill, from the tax withheld account, for what that payment really withheld (reference `<rail>:<transaction id>:wh`) | with the payment |
 | Credit note applied to a bill | Allocation of the credit note to the bill | once both are in Xero |
-| Fee (PayPal, Wise, bank file) | Spend money on the same bank account, to the fee account, referenced `fee <invoice> <obligation id>` | with the payment |
+| Fee (every rail) | Spend money on the same bank account, to the fee account, referenced `fee <invoice> <obligation id>` | with the payment |
 
-A Stellar fee is taken out of the amount in transit, so no separate fee is booked.
+The business pays the fee on every rail, and the supplier receives the full bill. On Stellar the amount sent is grossed up so the anchor's fee does not come out of the bill; that fee is booked like PayPal's. A Stellar payment settled before 3 Nov 2026, when the fee came out of the amount, books no fee spend.
 
 ### Tax withheld
 

@@ -64,7 +64,7 @@ As of 29 Oct 2026:
 - **Xero:** an import file, not a live push.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
-- **Tests:** 1,305 in 107 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 1,330 in 111 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -146,16 +146,19 @@ The fields come prefilled; type your own payee, amount, reference or request tex
 - The autopilot heartbeat assumes one server process. SQLite, logins in an environment variable.
 - The agent shares a PayPal app that has Payouts scope. Use a separate read-only app before real money.
 
-## The two files for the bookkeeper
+## The files for the bookkeeper
 
-- **Xero bills file** (Accounting, "Export new bills"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill.
-- **Settlement CSV** (Accounting, "Export CSV"): one row per settled payment, for matching to the bank feed.
+- **Xero bills CSV, to import** (Accounting, "Export new bills for Xero"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill. Every export is recorded with its file, so the page lists past exports with Download again (the identical file; import each once).
+- **Bookkeeper pack (.xlsx), to read** (Accounting, "Bookkeeper pack"): cover sheet with totals and how to use it with Xero, the bills, the payments (real dates, amounts with currency formats, account code and name, who paid the fee, recipient amount and rate, explorer link) and fees by rail and month. Frozen headers, filters, totals rows, landscape fit-to-width printing. Built with exceljs (MIT).
+- **Settlement records CSV, to read** (Accounting, "Settlement records CSV"): one row per settled payment, for matching to the bank feed.
+
+Changed 3 Nov 2026: the settlement CSV's `accountCode` is now the bare code and `accountName` its name, and `feePaidBy` says who bore the fee. The business pays the fee on every rail, Stellar included, so the supplier receives the full bill. Seeded demo history uses dated demo FX rates, marked as such.
 
 Changed 1 Nov 2026: the bills file is now at the invoice's gross amount, with no "Tax withheld" line. Tax kept back from a vendor is recorded when the payment is matched, as a second payment on the bill from the withholding liability account (825, or `XERO_WITHHOLDING_ACCOUNT`) for the row's `withheldAmount`. A new last column, `xeroPayment`, is `xero:<payment id>` when the live Xero connection has sent all of that payment and `xero:sending` while it will; only rows where it is blank need entering by hand (docs/XERO.md).
 
-They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (310 guides, 320 transport and vehicle or motorbike rental, 325 homestays and hotels, 400 creators, 429 other), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` starts with the same code the bills file carries and adds the usual name.
+They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (310 guides, 320 transport and vehicle or motorbike rental, 325 homestays and hotels, 400 creators, 429 other), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` is the same code the bills file carries, and `accountName` is its usual name.
 
-`netPaid` is what left the bank account, on every rail: the amount sent plus the fee for PayPal, Wise and the bank file, which charge their fee on top. Only Stellar takes its fee out of the amount, so its net is the amount, and the `feeAmount` on a Stellar row is borne by the vendor, not paid by the business. The vendor's remittance message and advice say so ("a USD 13.25 fee was deducted from the amount; you receive PHP 45,664.99"). A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
+`netPaid` is what left the bank account, on every rail: the amount sent plus the fee, which the business pays on top. On Stellar the amount sent is grossed up so the swap and anchor fees do not come out of the bill (Ana's USD 750 costs USD 763.41 and she receives PHP 46,486.24); before 3 Nov 2026 the Stellar fee came out of the amount, and those older rows say `feePaidBy` recipient. A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
 
 Changed in practitioner round six (PR6-4): `netPaid` was the amount alone for Wise and the bank file, so it did not equal the money that left the account; an advance was classed as 310 in the CSV and 620 in the bills file; `description` was the reader's one-line summary of the request, cut at 120 characters; VND carried `.00`. If you already import the settlement CSV, `netPaid` for Wise and bank-file payments is now larger by the fee, and `description` and `accountCode` for advances differ from earlier rows.
 
@@ -236,7 +239,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-1,305 tests in 107 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+1,330 tests in 111 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 

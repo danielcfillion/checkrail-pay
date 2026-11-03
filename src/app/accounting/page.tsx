@@ -6,7 +6,9 @@ import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { DemoVisit } from "@/components/DemoProgress";
 import { ExportXeroBills } from "@/components/ExportXeroBills";
 import { XeroPushSummary } from "@/components/XeroConnection";
-import { xeroBillRows } from "@/lib/accounting/xeroBills";
+import { listBillExports, xeroBillRows } from "@/lib/accounting/xeroBills";
+import { BillExportHistory } from "@/components/BillExportHistory";
+import { accountName } from "@/lib/accounting/billLine";
 import { getDb } from "@/lib/db";
 import { getBusiness } from "@/lib/queries";
 import { auditEntries, obligations } from "@/lib/db/schema";
@@ -20,6 +22,7 @@ export default function AccountingPage() {
   const rows = listAccountingSyncs();
   const biz = getBusiness();
   const newBills = biz ? xeroBillRows(getDb(), biz.id, { onlyNew: true }).rows.length : 0;
+  const exports = biz ? listBillExports(getDb(), biz.id) : [];
   const pending = rows.filter((r) => r.status === "pending");
   const system = getSystemModes();
   // One currency across every record: say it once in the column headers, not in every cell.
@@ -52,6 +55,9 @@ export default function AccountingPage() {
           <div className="flex flex-wrap gap-2">
             <ExportXeroBills count={newBills} />
             <ExportCsvButton pendingCount={pending.length} />
+            <a href="/api/accounting/pack" className="btn" download>
+              Bookkeeper pack (.xlsx)
+            </a>
           </div>
         }
       />
@@ -74,9 +80,25 @@ export default function AccountingPage() {
         </div>
       ) : null}
       <XeroPushSummary />
-      <p className="mb-3 max-w-3xl text-ink-soft">Bills go to Xero when they are approved, not when they are paid, so aged payables are right while payments wait: the bills file follows Xero&apos;s import template with the account code, tax type and a Departure tracking category. A deposit and its balance are one bill. Payments then match from the bank feed or the settlement records below.</p>
-      <p className="mb-3 max-w-3xl text-sm text-ink-soft">Changed 1 Nov 2026: bills are now at the invoice&apos;s gross amount. Tax kept back from a vendor is recorded as a second payment on the bill from the withholding account, for the settlement row&apos;s withheldAmount.</p>
-      <p className="mb-5 max-w-3xl text-ink-soft">Xero is the first live destination. The CSV carries the same record shape (reference, vendor, bill date, gross, fee, net, recipient amount, rail, external transaction id, account code), so the books look identical whichever path the record took.</p>
+      <BillExportHistory exports={exports} />
+      <section className="panel mb-5 px-4 py-3" aria-labelledby="files-heading">
+        <h2 id="files-heading" className="font-medium">
+          Which file is for what
+        </h2>
+        <dl className="mt-2 grid max-w-3xl gap-x-4 gap-y-2 text-sm sm:grid-cols-[13rem_1fr]">
+          <dt className="font-medium">Bills CSV, to import</dt>
+          <dd className="text-ink-soft">The only file to import into Xero (Business, Bills to pay, Import), in Xero&apos;s template. Bills go in when they are approved, not when they are paid, so aged payables are right while payments wait. A deposit and its balance are one bill, at the invoice&apos;s gross amount. Export new bills holds only bills not exported before.</dd>
+          <dt className="font-medium">Bookkeeper pack (.xlsx), to read</dt>
+          <dd className="text-ink-soft">
+            For the accountant: a cover sheet with totals and how to use it with Xero, the bills, the payments with dates, amounts, fees, who paid each fee, the rate and account, and fees by rail and month. Not for importing.{" "}
+            <a className="link" href="/api/accounting/pack" download>
+              Download the bookkeeper pack
+            </a>
+          </dd>
+          <dt className="font-medium">Settlement records CSV, to read</dt>
+          <dd className="text-ink-soft">One row per settled payment, for the bookkeeper to match payments from the bank feed: gross, fee and who paid it, net (what left the bank account), recipient amount, account code and name, transaction id. Not for importing. Tax kept back from a vendor is a second payment on the bill from the withholding account, for the row&apos;s withheldAmount.</dd>
+        </dl>
+      </section>
 
       {rows.length === 0 ? (
         <EmptyState title="No accounting records yet" body="A record is queued the moment a payment settles." action={<Link href="/ledger" className="btn">Open ledger</Link>} />
@@ -99,7 +121,7 @@ export default function AccountingPage() {
                   <span className="mt-1 flex items-center gap-2 text-xs">
                     <span className="num min-w-0 truncate text-ink-soft">
                       {p.reference ?? r.obligation.sourceRef ?? "no reference"}
-                      {p.accountCode ? `, ${p.accountCode}` : ""}
+                      {p.accountCode ? `, ${String(p.accountCode).split(" ")[0]}` : ""}
                     </span>
                     <span className={`dense ml-auto inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 ${tone}`} style={{ background: r.status === "pending" ? "var(--attention-soft)" : r.status === "failed" ? "var(--blocked-soft)" : "var(--settled-soft)" }}>{status}</span>
                   </span>
@@ -160,8 +182,8 @@ export default function AccountingPage() {
                     <td className="r num hidden whitespace-nowrap text-ink-soft md:table-cell">{amount(p.feeAmount, cur)}</td>
                     <td className="r num whitespace-nowrap">{amount(p.netPaid, cur)}</td>
                     <td className="hidden text-ink-soft lg:table-cell">
-                      <span className="block max-w-[6rem] truncate" title={p.accountCode ?? undefined}>
-                        {p.accountCode ?? ""}
+                      <span className="block max-w-[6rem] truncate" title={p.accountCode ? `${String(p.accountCode).split(" ")[0]} ${p.accountName || accountName(String(p.accountCode).split(" ")[0]) || ""}`.trim() : undefined}>
+                        {p.accountCode ? String(p.accountCode).split(" ")[0] : ""}
                       </span>
                     </td>
                     <td className="hidden whitespace-nowrap text-ink-soft md:table-cell" title={r.externalRef ?? undefined}>

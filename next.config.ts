@@ -31,7 +31,7 @@ const common = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ["better-sqlite3", "@stellar/stellar-sdk", "@anthropic-ai/sdk", "pdfjs-dist"],
+  serverExternalPackages: ["better-sqlite3", "@stellar/stellar-sdk", "@anthropic-ai/sdk", "pdfjs-dist", "exceljs"],
   experimental: { serverActions: { bodySizeLimit: "10mb" } },
   async headers() {
     return [
