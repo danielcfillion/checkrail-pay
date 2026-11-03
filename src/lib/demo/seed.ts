@@ -288,7 +288,7 @@ async function seedHistoryRows(db: Db): Promise<void> {
       await confirmSettlement(db, id, "seed");
     }
     backdate(db, id, { settledDays: it.days, raisedDays: it.days + settleLagDays(it.ref), paidFromSeq });
-    useDemoRate(db, id);
+    applyDemoRate(db, id);
   }
 
 }
@@ -305,7 +305,7 @@ export function settleLagDays(ref: string): number {
  * own margin is kept: the dated mid rate is scaled by the same ratio the quote applied to the corridor mid. Marked as
  * a demo rate in the settlement note and the accounting record.
  */
-function useDemoRate(db: Db, obligationId: string): void {
+function applyDemoRate(db: Db, obligationId: string): void {
   const st = db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).get();
   if (!st || !st.fxRate || !st.receivedMinor || !st.receivedCurrency || st.receivedCurrency === st.grossCurrency) return;
   const vendor = db.select({ country: vendors.country }).from(vendors).innerJoin(obligations, eq(obligations.vendorId, vendors.id)).where(eq(obligations.id, obligationId)).get();

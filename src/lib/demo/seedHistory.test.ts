@@ -11,10 +11,9 @@ const DAY = 86_400_000;
 
 describe("demo history dates", () => {
   let db: Db;
-  let story: Awaited<ReturnType<typeof seedDemo>>["story"];
   beforeAll(async () => {
     db = openTestDb();
-    ({ story } = await seedDemo(db));
+    await seedDemo(db);
   });
   const past = () =>
     db
