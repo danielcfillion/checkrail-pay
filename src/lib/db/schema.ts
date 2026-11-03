@@ -857,3 +857,22 @@ export const xeroRecords = sqliteTable(
   },
   (t) => [uniqueIndex("xero_records_key").on(t.businessId, t.tenantId, t.kind, t.localKey), index("xero_records_status").on(t.businessId, t.status)]
 );
+
+/**
+ * Every Xero bills file exported, kept so it can be downloaded again byte for byte: who exported it, when, how many
+ * bills, and the file's exact text (served with the same BOM and name). The sha256 is of the bytes served.
+ */
+export const billExports = sqliteTable(
+  "bill_exports",
+  {
+    id: text("id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    actor: text("actor").notNull(),
+    billCount: integer("bill_count").notNull(),
+    fileName: text("file_name").notNull(),
+    content: text("content").notNull(),
+    sha256: text("sha256").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("bill_exports_business_created").on(t.businessId, t.createdAt)]
+);

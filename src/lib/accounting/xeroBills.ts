@@ -1,12 +1,13 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import type { Db } from "../db";
-import { bills, businesses, obligations, vendors } from "../db/schema";
+import { billExports, bills, businesses, obligations, vendors } from "../db/schema";
 import { csvCell } from "./record";
 import { accountCodeFor, advancesAccount, describeBill, majorText } from "./billLine";
 import { localDateString } from "../format";
 import { departureCodeFor } from "../engine/rates";
 import { audit } from "../domain/stateMachine";
-import { now } from "../domain/ids";
+import { newId, now } from "../domain/ids";
 import { config } from "../config";
 import { getXeroConnection } from "./xeroAuth";
 import { splitGroups } from "./xeroScope";
@@ -127,12 +128,65 @@ export function xeroBillsCsv(rows: Row[]): string {
   return [XERO_BILL_COLUMNS.join(","), ...rows.map((r) => XERO_BILL_COLUMNS.map((c) => csvCell(r[c])).join(","))].join("\r\n") + "\r\n";
 }
 
-/** Bills agreed since the last export, marked so the next file holds only new ones. */
-export function exportNewXeroBills(db: Db, businessId: string, actor: string): { csv: string; count: number } {
-  const { rows, obligationIds, billIds } = xeroBillRows(db, businessId, { onlyNew: true });
-  const ts = now();
-  if (obligationIds.length) db.update(obligations).set({ xeroBillExportedAt: ts }).where(inArray(obligations.id, obligationIds)).run();
-  if (billIds.length) db.update(bills).set({ xeroExportedAt: ts }).where(inArray(bills.id, billIds)).run();
-  audit(db, { obligationId: null, actor, action: "accounting.xero_bills_exported", detail: { bills: rows.length } });
-  return { csv: xeroBillsCsv(rows), count: rows.length };
+/**
+ * Bills agreed since the last export, marked so the next file holds only new ones. Every export that holds a bill is
+ * recorded with the file's exact text, so it can be downloaded again (billExportFile) after the button has moved on.
+ */
+export function exportNewXeroBills(db: Db, businessId: string, actor: string): { csv: string; count: number; exportId: string | null } {
+  return db.transaction(() => {
+    const { rows, obligationIds, billIds } = xeroBillRows(db, businessId, { onlyNew: true });
+    const ts = now();
+    const csv = xeroBillsCsv(rows);
+    let exportId: string | null = null;
+    if (rows.length) {
+      exportId = newId("bex");
+      const fileName = `xero-bills-${localDateString(new Date(ts))}-${exportId.slice(-6)}.csv`;
+      db.insert(billExports).values({ id: exportId, businessId, actor, billCount: rows.length, fileName, content: csv, sha256: sha256(fileBytes(csv)), createdAt: ts }).run();
+    }
+    if (obligationIds.length) db.update(obligations).set({ xeroBillExportedAt: ts }).where(inArray(obligations.id, obligationIds)).run();
+    if (billIds.length) db.update(bills).set({ xeroExportedAt: ts }).where(inArray(bills.id, billIds)).run();
+    audit(db, { obligationId: null, actor, action: "accounting.xero_bills_exported", detail: { bills: rows.length, exportId } });
+    return { csv, count: rows.length, exportId };
+  });
+}
+
+/** The bytes of a bills file as downloaded: a UTF-8 BOM (so Excel reads accents) and the CSV text. */
+function fileBytes(csv: string): Buffer {
+  return Buffer.from("﻿" + csv, "utf8");
+}
+
+function sha256(b: Buffer): string {
+  return createHash("sha256").update(b).digest("hex");
+}
+
+export interface BillExportSummary {
+  id: string;
+  actor: string;
+  billCount: number;
+  fileName: string;
+  createdAt: string;
+}
+
+/** Past bills exports, newest first. */
+export function listBillExports(db: Db, businessId: string, limit = 50): BillExportSummary[] {
+  return db
+    .select({ id: billExports.id, actor: billExports.actor, billCount: billExports.billCount, fileName: billExports.fileName, createdAt: billExports.createdAt })
+    .from(billExports)
+    .where(eq(billExports.businessId, businessId))
+    .orderBy(desc(billExports.createdAt), desc(billExports.id))
+    .limit(limit)
+    .all();
+}
+
+/**
+ * One past export's file, byte for byte what was downloaded the first time (the first download is served from here
+ * too). Refuses a file whose stored text no longer hashes to what was recorded. Changes nothing: a second download
+ * marks nothing exported, and the same bills must not be imported into Xero twice.
+ */
+export function billExportFile(db: Db, businessId: string, id: string): { fileName: string; bytes: Buffer; billCount: number } | null {
+  const row = db.select().from(billExports).where(and(eq(billExports.id, id), eq(billExports.businessId, businessId))).get();
+  if (!row) return null;
+  const bytes = fileBytes(row.content);
+  if (sha256(bytes) !== row.sha256) throw new Error("This export's stored file does not match its checksum; it was not served.");
+  return { fileName: row.fileName, bytes, billCount: row.billCount };
 }

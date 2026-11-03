@@ -100,6 +100,15 @@ export function formatDateTime(iso: string | null | undefined): string {
   return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE }) + " " + zoneLabel(d);
 }
 
+/** "2 Nov, 17:40" in the business time zone: a short stamp for a list of recent events. */
+export function formatShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: TIMEZONE });
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: TIMEZONE });
+  return `${date}, ${time}`;
+}
+
 /** "3 Oct 2026". Accepts a date-only string too. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";

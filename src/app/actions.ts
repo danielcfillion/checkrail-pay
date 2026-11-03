@@ -788,16 +788,17 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
   });
 }
 
-export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: string }> {
+export async function exportXeroBillsAction(): Promise<ActionResult & { exportId?: string }> {
   return inRequest(async () => {
   try {
     const who = await act("export", "export bills");
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
     if (!biz) return { ok: false, message: "No business configured." };
-    const { csv, count } = exportNewXeroBills(db, biz.id, who.id);
+    const { count, exportId } = exportNewXeroBills(db, biz.id, who.id);
     done(["/accounting"]);
-    return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import.` : "No new bills since the last export.", csv: count ? csv : undefined };
+    // The file is downloaded from the export's record, so the first download and any later one are the same bytes.
+    return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import. Import it once.` : "No new bills since the last export.", exportId: exportId ?? undefined };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }
