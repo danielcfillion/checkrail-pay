@@ -6,7 +6,7 @@ import { config } from "../config";
 import { audit } from "../domain/stateMachine";
 import { newId } from "../domain/ids";
 import type { AccountingPayload } from "./record";
-import { advancesAccount, majorText } from "./billLine";
+import { advancesAccount, feePaidByOf, majorText } from "./billLine";
 import { toXeroFeeTransaction, toXeroPayment, xeroFeeReference } from "./xero";
 import { xeroBillRows, type XeroBillGroup } from "./xeroBills";
 import { createXeroClient, XeroApiError, type XeroClient, type XeroRequest } from "./xeroClient";
@@ -871,7 +871,7 @@ async function pushSettlement(ctx: Ctx, item: SettlementItem): Promise<void> {
   const parent = billKey(p.vendorName, p.reference);
   const amount = String(toXeroPayment(p, "").Amount);
   const pay = recordFor(ctx, "payment", key, `Payment ${p.reference}, ${p.vendorName}`, { obligationId: sync.obligationId, accountingSyncId: sync.id, parentKey: parent, amount });
-  const needsFee = hundredths(p.feeAmount) > 0 && p.rail !== "stellar";
+  const needsFee = hundredths(p.feeAmount) > 0 && feePaidByOf(p) === "business";
   const feeLabel = `Fee on ${p.reference} (${p.rail})`;
   // The part kept back for the tax office: paid against the same bill from the withholding liability account, so the
   // bill (sent at its gross) clears exactly with what this part really withheld.

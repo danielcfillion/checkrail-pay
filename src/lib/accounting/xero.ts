@@ -1,4 +1,5 @@
 import type { AccountingPayload } from "./record";
+import { feePaidByOf } from "./billLine";
 
 /**
  * Xero mapping and the adapter Checkrail Pay writes through.
@@ -53,16 +54,14 @@ export function xeroFeeReference(r: Pick<AccountingPayload, "reference" | "oblig
 }
 
 /**
- * A separate fee spend exists whenever the fee left the bank account on top of the bill: PayPal, Wise and the bank
- * file, so the payment plus the fee equals netPaid. On the Stellar path the fee is deducted from the amount in
- * transit, so the payer's cash out equals the bill and the recipient bears the fee; booking a second spend would
- * double count it.
+ * A separate fee spend whenever there is a fee: the business pays it on top of the bill on every rail (Stellar grosses
+ * up what it sends so the vendor still receives the full amount), so the payment plus the fee equals netPaid.
  */
 export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: string, feeAccountCode = "404") {
-  if (Number(r.feeAmount) === 0 || r.rail === "stellar") return null;
+  if (Number(r.feeAmount) === 0 || feePaidByOf(r) === "recipient") return null; // an old Stellar record: the recipient bore it
   return {
     Type: "SPEND",
-    Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : "Bank transfer fee" },
+    Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : r.rail === "stellar" ? "Stellar anchor fee" : "Bank transfer fee" },
     Date: r.paymentDate,
     BankAccount: { Code: bankAccountCode },
     // One per payment: a deposit and its balance share the bill's reference, so the payment's own id goes on too.

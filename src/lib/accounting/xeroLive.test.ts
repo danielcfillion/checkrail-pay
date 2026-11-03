@@ -546,7 +546,7 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     expect(xeroCardView(db, DEMO_BUSINESS_ID)).toMatchObject({ connected: true, tenantName: "Demo Company (US)", pushed: 4 });
   });
 
-  it("Stellar: the bill and the payment of the gross, with no separate fee spend; a new contact is created", async () => {
+  it("Stellar: the bill, the payment of the gross and the fee as a separate spend, like every rail; a new contact is created", async () => {
     await connect();
     await settle(story.stellar);
     await runXeroSync(db);
@@ -556,7 +556,9 @@ describe("Push: bills at approval, payment and fee at settlement", () => {
     expect(ana.map((c) => c.ContactStatus)).toEqual(["ARCHIVED", "ACTIVE"]);
     expect(bill.Contact).toEqual({ ContactID: ana[1].ContactID });
     expect(xero.state.payments.find((p) => (p.Invoice as { InvoiceID: string }).InvoiceID === bill.InvoiceID)).toMatchObject({ Amount: 750, Account: { Code: "091" } });
-    expect(xero.state.bankTx).toHaveLength(0);
+    // The business paid the anchor's fee on top (the supplier received the full USD 750): one spend from the Stellar treasury.
+    expect(xero.state.bankTx).toHaveLength(1);
+    expect(xero.state.bankTx[0]).toMatchObject({ Type: "SPEND", BankAccount: { Code: "091" }, LineItems: [{ UnitAmount: 13.41, AccountCode: "404" }] });
   });
 
   it("a payment whose answer was lost is found on the bill, not created again", async () => {
@@ -1391,7 +1393,7 @@ describe("Review round 5", () => {
     expect(csvMark("JOB-PAL3D-0927")).toBe("xero:sending");
     const bill = createBill(db, DEMO_BUSINESS_ID, as("lan"), "ven_maria", { kind: "invoice", reference: "INV-MS-9201", totalMinor: 20_000, currency: "USD" });
     await payPart(bill, 20_000);
-    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/BankTransactions"), times: 1, respond: () => xero.res(400, { Elements: [{ ValidationErrors: [{ Message: "Bank account is archived" }] }] }) });
+    xero.injections.push({ when: (c) => c.method === "PUT" && c.url.pathname.endsWith("/BankTransactions") && c.body.includes("INV-MS-9201"), times: 1, respond: () => xero.res(400, { Elements: [{ ValidationErrors: [{ Message: "Bank account is archived" }] }] }) });
     await runXeroSync(db);
     expect(records("payment").find((r) => r.label.includes("9201"))).toMatchObject({ status: "pushed" });
     expect(csvMark("INV-MS-9201")).toBe("xero:sending"); // payment in, fee not yet: not complete

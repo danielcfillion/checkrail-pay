@@ -17,6 +17,12 @@ import { quoteStellar } from "./quoteModel";
  * settlement records what actually happened on the ledger (PYUSD sent), not
  * the modelled recipient-currency figure.
  *
+ * Who pays the fee: the business, on every rail. Today the PYUSD goes straight to the vendor's wallet, so the
+ * on-chain amount is the bill amount, the vendor receives all of it and the only fee is the network fee in XLM.
+ * When the anchor leg is built, the anchor takes its fee from what it receives and cannot be told to deliver a net
+ * amount, so what is sent to the anchor must be the quote's grossed-up figure (sendAmountMinor + feeMinor, see
+ * stellarGrossUpMinor in quoteModel.ts), never the bill amount, or the vendor is short by the fee.
+ *
  * Duplicate protection, in order:
  *   1. The treasury account is loaded first, then its history is searched for a
  *      successful payment with this memo, this destination, this asset and this

@@ -101,7 +101,7 @@ export interface RunView {
   }>;
   /** What releasing would actually do, for the confirmation: items paid (and how many of those are approved first), items left, and the money for the paid ones. */
   payNow: { count: number; approving: number; left: number; leftByReason: Record<"changed" | "limit" | "warning" | "second" | "state", number>; byCurrency: Array<{ currency: string; minor: number }> };
-  /** totalMinor is what the payees are sent; feeMinor is charged on top (Stellar's fee comes out of the amount). */
+  /** totalMinor is what the payees are sent; feeMinor is charged on top, on every rail. */
   totals: Array<{ currency: string; rail: string; totalMinor: number; feeMinor: number; count: number; balance: { availableMinor: number; source: string } | null; short: boolean }>;
   /** Why this viewer cannot release the run, when they cannot. */
   releaseRefusal: string | null;
@@ -158,7 +158,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     if (it.state === "awaiting_approval") approving += 1;
     // What leaves the account, as the funding panel counts it: the amount less tax kept back, and the fee where it is charged on top.
     const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
-    const fee = q && it.rail !== "stellar" && q.sendCurrency === it.currency ? q.feeMinor ?? 0 : 0;
+    const fee = q && q.sendCurrency === it.currency ? q.feeMinor ?? 0 : 0;
     payMoney.set(it.currency, (payMoney.get(it.currency) ?? 0) + it.amountMinor - (byId.get(it.obligationId)?.withheldMinor ?? 0) + fee);
   }
   const payNow = { count: payCount, approving, left: Object.values(leftByReason).reduce((a, b) => a + b, 0), leftByReason, byCurrency: [...payMoney.entries()].map(([currency, minor]) => ({ currency, minor })) };
@@ -167,7 +167,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     const key = `${it.rail ?? "unrouted"}|${it.currency}`;
     const g = groups.get(key) ?? { currency: it.currency, rail: it.rail ?? "unrouted", totalMinor: 0, feeMinor: 0, count: 0 };
     const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
-    if (q && it.rail !== "stellar" && q.sendCurrency === it.currency) g.feeMinor += q.feeMinor ?? 0;
+    if (q && q.sendCurrency === it.currency) g.feeMinor += q.feeMinor ?? 0;
     // What leaves the account: the amount less any tax kept back for the tax office.
     g.totalMinor += it.amountMinor - (byId.get(it.obligationId)?.withheldMinor ?? 0);
     g.count += 1;

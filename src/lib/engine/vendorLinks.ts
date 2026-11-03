@@ -63,7 +63,7 @@ export interface Remittance {
   language: "en" | "vi";
   /** Tax kept back and paid to the tax office instead, when any. */
   withheld: string | null;
-  /** The rail's fee, when it comes out of the amount the vendor is sent (Stellar) instead of being paid on top: "USD 13.25". */
+  /** The rail's fee, if it ever came out of the amount the vendor is sent instead of being paid on top: "USD 13.25". No rail does today: the business pays every fee. */
   feeDeducted?: string | null;
   /** Paid to the agreed rate, less than invoiced: what was invoiced, so the vendor sees the difference is deliberate. */
   shortPaid: { invoiced: string; basis: string } | null;

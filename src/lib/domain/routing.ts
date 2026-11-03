@@ -15,8 +15,8 @@ export interface RoutingDecision {
  *   1. Vendor preference, if that rail is available.
  *   2. Domestic obligations go PayPal when available (familiar, instant, no FX).
  *   3. Cross-border: compare what the recipient gets per unit the sender actually spends
- *      (PayPal's fee is charged on top, Stellar's is taken out of the amount, so delivered
- *      amount alone is not comparable). A difference under TIE_BPS is a tie, and ties go to
+ *      (every rail's fee is paid by the business on top of the amount, and fees and FX differ,
+ *      so delivered amount alone is not comparable). A difference under TIE_BPS is a tie, and ties go to
  *      PayPal because it is the rail whose whole path is executed end to end today.
  *   4. Whatever is available.
  *   5. Nothing available: hold with the reasons.
@@ -24,9 +24,13 @@ export interface RoutingDecision {
 /** Differences in effective rate below this many basis points count as a tie. */
 export const TIE_BPS = 50;
 
-/** What the sender spends for this quote: Stellar's fee comes out of the amount; every other rail charges it on top. */
+/**
+ * What the sender spends for this quote: the amount plus the fee, on every rail. The business pays the fee and the
+ * recipient receives the full amount (Stellar grosses up what it sends so the anchor's fee does not come out of it).
+ * The rail is kept in the signature so a rail that ever charges differently has one place to say so.
+ */
 export function senderOutlayMinor(q: Pick<RouteQuote, "rail" | "sendAmountMinor" | "feeMinor">): number {
-  return q.rail === "stellar" ? q.sendAmountMinor : q.sendAmountMinor + q.feeMinor;
+  return q.sendAmountMinor + q.feeMinor;
 }
 
 /** Recipient-currency units delivered per 1.00 of sender currency spent. */

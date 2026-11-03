@@ -45,6 +45,16 @@ export function accountLabel(code: string): string {
   return ACCOUNT_NAMES[code] ? `${code} ${ACCOUNT_NAMES[code]}` : code;
 }
 
+/**
+ * Who bore a settled payment's fee. The business, on every rail, since 3 Nov 2026. A Stellar record from before then
+ * has no feePaidBy and a net equal to its gross: the fee came out of the amount, so the recipient bore it and no fee
+ * spend belongs in the books for it.
+ */
+export function feePaidByOf(p: { feePaidBy?: "business" | "recipient"; rail: string; feeAmount: string; netPaid: string; grossAmount: string }): "business" | "recipient" {
+  if (p.feePaidBy) return p.feePaidBy;
+  return p.rail === "stellar" && Number(p.feeAmount) > 0 && p.netPaid === p.grossAmount ? "recipient" : "business";
+}
+
 /** A stored amount (hundredths) as the file shows it: whole units for a currency without decimals, else two places. */
 export function majorText(minor: number, currency: string): string {
   return ZERO_DECIMAL_CURRENCIES.has(currency) ? String(Math.round(minor / 100)) : (minor / 100).toFixed(2);

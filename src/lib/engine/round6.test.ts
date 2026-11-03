@@ -162,9 +162,9 @@ describe("PR6-4: the settlement CSV and the Xero bills file agree", () => {
     expect(p.reference).toBe("ADV-HG4D-1101");
   });
 
-  it("the Xero payment plus the fee spend equals net on every rail but Stellar", () => {
+  it("the Xero payment plus the fee spend equals net on every rail; an old Stellar record whose fee came out of the amount books none", () => {
     const base = { reference: "R", vendorName: "V", vendorCountry: "VN", description: "d", billDate: "2026-10-01", paymentDate: "2026-10-02", grossAmount: "10800000", grossCurrency: "VND", feeAmount: "91090", feeCurrency: "VND", netPaid: "10891090", recipientReceived: null, recipientCurrency: null, fxRate: null, externalTransactionId: "X", explorerUrl: null, accountCode: "320", obligationId: "o" };
-    for (const rail of ["wise", "bank_file"]) {
+    for (const rail of ["wise", "bank_file", "stellar"]) {
       const r = { ...base, rail };
       expect(Number(toXeroPayment(r, "090").Amount) + Number(toXeroFeeTransaction(r, "090")!.LineItems[0].UnitAmount)).toBe(Number(r.netPaid));
     }
