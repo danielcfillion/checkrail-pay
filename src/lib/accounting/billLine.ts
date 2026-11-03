@@ -19,14 +19,26 @@ export function advancesAccount(): string {
   return process.env.XERO_ADVANCES_ACCOUNT || "620";
 }
 
+/**
+ * Default account by role, used when the vendor has no code of its own. Guides are contract labour (310); transport,
+ * vehicle and motorbike rental (the driver role: vans, boats, bikes) is vehicle hire (320); homestays and hotels are
+ * accommodation (325, moved off 320 when 320 became vehicle hire).
+ */
+const ROLE_ACCOUNT: Record<string, string> = { guide: "310", driver: "320", homestay: "325", hotel: "325", creator: "400" };
+
 /** The account code a bill is posted to: the vendor's own when set, a prepayment for an advance, else one by role. Code only. */
 export function accountCodeFor(role: string, override: string | null, kind?: string): string {
   if (kind === "advance") return advancesAccount();
   if (override) return override.trim().split(/\s+/)[0] || override;
-  return role === "homestay" || role === "hotel" ? "320" : role === "creator" ? "400" : role === "guide" || role === "driver" ? "310" : "429";
+  return ROLE_ACCOUNT[role] ?? "429";
 }
 
-const ACCOUNT_NAMES: Record<string, string> = { "310": "Cost of Goods Sold: Contract labour", "320": "Cost of Goods Sold: Accommodation", "400": "Advertising and marketing", "429": "General expenses", "620": "Prepayments" };
+const ACCOUNT_NAMES: Record<string, string> = { "310": "Cost of Goods Sold: Contract labour", "320": "Cost of Goods Sold: Transport and vehicle hire", "325": "Cost of Goods Sold: Accommodation", "400": "Advertising and marketing", "429": "General expenses", "620": "Prepayments" };
+
+/** The usual name of a code we set by default ("Cost of Goods Sold: Contract labour"), or "" for any other code. */
+export function accountName(code: string): string {
+  return ACCOUNT_NAMES[code] ?? "";
+}
 
 /** "310 Cost of Goods Sold: Contract labour": the code the Xero file carries, with its usual name when we know it. */
 export function accountLabel(code: string): string {

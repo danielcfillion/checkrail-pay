@@ -31,7 +31,7 @@ async function call(url: string, method: "POST" | "DELETE", body?: unknown): Pro
 }
 
 const FIELDS: Array<{ key: keyof XeroMappingInput; label: string; list: "expense" | "bank" | "tax" | "withholding"; hint: string }> = [
-  { key: "expenseAccountCode", label: "Supplier bills", list: "expense", hint: "Used when a bill's own account (310, 320, 400, 429) is not in your chart." },
+  { key: "expenseAccountCode", label: "Supplier bills", list: "expense", hint: "Used when a bill's own account (310, 320, 325, 400, 429) is not in your chart." },
   { key: "paypalAccountCode", label: "PayPal clearing", list: "bank", hint: "Bank account PayPal payments come out of." },
   { key: "stellarAccountCode", label: "Stellar treasury", list: "bank", hint: "Bank account for the PYUSD treasury." },
   { key: "bankAccountCode", label: "Wise and bank file", list: "bank", hint: "Bank account local payouts come out of." },
