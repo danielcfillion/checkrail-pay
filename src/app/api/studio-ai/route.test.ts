@@ -187,6 +187,13 @@ describe("POST /api/studio-ai", () => {
     expect((await post(BODY, { origin: "http://checkrail.test" })).status).toBe(200);
   });
 
+  it("accepts the public host behind a proxy, where the request URL is the server's internal address", async () => {
+    const proxied = { "x-forwarded-host": "checkrail-pay.onrender.com" };
+    expect((await post(BODY, { ...proxied, origin: "https://checkrail-pay.onrender.com" })).status).toBe(200);
+    expect((await post(BODY, { ...proxied, origin: "https://evil.example" })).status).toBe(403);
+    expect((await post(BODY, { host: "checkrail-pay.onrender.com", origin: "https://checkrail-pay.onrender.com" })).status).toBe(200);
+  });
+
   it("maps Claude's refusals without leaking details of the key", async () => {
     sdk.create.mockRejectedValueOnce(Object.assign(new Error("401 invalid x-api-key"), { status: 401 }));
     const bad = await post(BODY);

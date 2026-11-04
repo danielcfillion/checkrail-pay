@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { config } from "@/lib/config";
 import { realMoneyEnv } from "@/lib/basicAuth";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
+import { sameOrigin } from "@/lib/auth/session";
 import { authenticateAgent, configuredAgentKeys, type AgentKey } from "@/lib/agent/keys";
 import { handleMcp, SUPPORTED_VERSIONS } from "@/lib/agent/mcp";
 import { createHash } from "node:crypto";
@@ -36,15 +37,8 @@ export async function POST(req: Request) {
   if (keys === null) return deny(503, "CHECKRAIL_AGENT_KEYS is malformed (name:secret:check or name:secret:check+request, comma separated); refusing agent calls");
   // A browser page on another site must not drive this endpoint with a visitor's network position.
   const origin = req.headers.get("origin");
-  if (origin) {
-    let same = false;
-    try {
-      same = new URL(origin).host === new URL(req.url).host;
-    } catch {
-      same = false;
-    }
-    if (!same) return deny(403, "Cross-origin calls are not accepted");
-  }
+  // sameOrigin also matches the forwarded host: behind the host's proxy req.url carries the server's internal address.
+  if (origin && !sameOrigin(req.headers, req.url)) return deny(403, "Cross-origin calls are not accepted");
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return deny(415, "Send application/json");
 
   const ip = clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER);

@@ -3,6 +3,7 @@ import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages
 import { config, isStudioAssistantOn } from "@/lib/config";
 import { BODY_LIMIT, buildParams, TURN_LIMIT, TURN_WINDOW_MS } from "@/lib/studio/studioRequest";
 import { ACTOR_HEADER } from "@/lib/basicAuth";
+import { sameOrigin } from "@/lib/auth/session";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
@@ -34,15 +35,8 @@ export async function POST(req: Request): Promise<Response> {
 
   // A page on another site must not spend this login's turns through the browser's saved credentials.
   const origin = req.headers.get("origin");
-  if (origin) {
-    let same = false;
-    try {
-      same = new URL(origin).host === new URL(req.url).host;
-    } catch {
-      same = false;
-    }
-    if (!same) return plain(403, "Cross-origin calls are not accepted.");
-  }
+  // sameOrigin also matches the forwarded host: behind the host's proxy req.url carries the server's internal address.
+  if (origin && !sameOrigin(req.headers, req.url)) return plain(403, "Cross-origin calls are not accepted.");
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return plain(415, "Send application/json.");
 
   // The middleware sets the login; a request without one (none should reach here) is limited by address instead.

@@ -5,6 +5,7 @@ import { apiIdempotency, apiKeyUsage } from "../db/schema";
 import { newId, now } from "../domain/ids";
 import { getBusiness } from "../queries";
 import { clientIp, newThrottle, overLimit } from "../throttle";
+import { sameOrigin } from "../auth/session";
 import { authenticateApiKey, configuredApiKeys, hasScope, type ApiKey, type ApiScope } from "./keys";
 
 /**
@@ -112,15 +113,8 @@ export async function handleApi(req: Request, opts: HandleOptions, fn: (ctx: Api
   const url = new URL(req.url);
   // A browser page on another site must not drive the API with a visitor's network position.
   const origin = req.headers.get("origin");
-  if (origin) {
-    let same = false;
-    try {
-      same = new URL(origin).host === url.host;
-    } catch {
-      same = false;
-    }
-    if (!same) return errorResponse(403, "cross_origin", "Cross-origin calls are not accepted");
-  }
+  // sameOrigin also matches the forwarded host: behind the host's proxy req.url carries the server's internal address.
+  if (origin && !sameOrigin(req.headers, req.url)) return errorResponse(403, "cross_origin", "Cross-origin calls are not accepted");
 
   const header = req.headers.get("authorization");
   if (!header) return errorResponse(401, "unauthorized", "An API key is required (Authorization: Bearer <key>)", WWW_AUTH);
