@@ -230,7 +230,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
 
 ## Hosting
 
-`render.yaml` is a Render Blueprint for the hosted judging demo: simulated rails, the rule-based reader, logins from `CHECKRAIL_USERS`, and a reset to the four opening requests after 30 minutes without use. It is one shared database, so two judges in the same half hour see each other's changes. Reset demo on `/demo` restores it at any time.
+`render.yaml` is a Render Blueprint for the hosted judging demo: simulated rails, the rule-based reader, logins from `CHECKRAIL_USERS`, and a private copy of the demo for each browser (`CHECKRAIL_SANDBOX=1`), so judges never see each other's changes. Idle copies are deleted after two hours. The dashboard assistant uses Claude (`STUDIO_ASSISTANT=1` with a key) while invoice reading stays rule-based. Without the sandbox setting it is one shared database; Reset demo on `/demo` restores it at any time.
 
 ## Tests
 

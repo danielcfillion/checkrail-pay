@@ -17,7 +17,7 @@ Rules checklist before submitting:
 - Select a sponsor prize only for a build that meets that sponsor's own brief (AG Grid asks for AG Studio; Bryntum for Gantt, Scheduler or Calendar in a real workflow; Render for Workflows). Otherwise select none rather than claim it.
 - Public repo with the MIT licence visible in the repo's About section.
 - Video under 3 minutes, public on YouTube, no copyrighted music.
-- Judges can test free until 15 Dec 2026: the hosted demo link plus the run instructions in the README. Put the hosted login in the testing instructions field, with this line: "The hosted demo runs on simulated rails with the rule-based reader, and shows Claude's readings recorded from a live run; the video shows Claude live." Keep the Render plan awake through 15 Dec. It is one shared database that restores the four opening requests after 30 minutes without use; Reset demo on /demo does the same at any time.
+- Judges can test free until 15 Dec 2026: the hosted demo link plus the run instructions in the README. Put the hosted login in the testing instructions field, with this line: "The hosted demo runs on simulated rails with the rule-based reader, and shows Claude's readings recorded from a live run; the video shows Claude live." Keep the Render plan awake through 15 Dec. Each browser gets its own private copy of the demo, so judges do not affect each other; copies are deleted after two hours idle. The dashboard assistant ("Ask about your setup") answers with Claude live.
 - Say the project was started on 3 Oct 2026, after the submission period opened on 1 Oct.
 
 ## Project name
