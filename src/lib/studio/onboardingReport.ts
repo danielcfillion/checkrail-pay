@@ -97,25 +97,26 @@ const page = {
 export function layoutFor(assistant: boolean): Record<string, AgWidgetLayoutState> {
   if (assistant) {
     return {
-      readiness: at(0, 0, 15, 27),
-      "false-holds": at(15, 0, 9, 27),
-      "money-stopped": at(0, 27, 8, 9),
-      "money-held": at(8, 27, 8, 9),
-      "still-to-review": at(16, 27, 8, 9),
-      "stopped-by-reason": at(0, 36, 24, 15),
-      "rule-agreement": at(0, 51, 24, 17),
-      calls: at(0, 68, 24, 26),
+      readiness: at(0, 0, 15, 36),
+      "false-holds": at(15, 0, 9, 36),
+      "money-stopped": at(0, 36, 8, 9),
+      "money-held": at(8, 36, 8, 9),
+      "still-to-review": at(16, 36, 8, 9),
+      "stopped-by-reason": at(0, 45, 24, 15),
+      "rule-agreement": at(0, 60, 24, 17),
+      calls: at(0, 77, 24, 26),
     };
   }
+  // The leading row is 30 tracks tall so the gauge card shows all four checks and the time line without clipping.
   return {
-    readiness: at(0, 0, 14, 22),
-    "false-holds": at(14, 0, 10, 22),
-    "money-stopped": at(0, 22, 8, 9),
-    "money-held": at(8, 22, 8, 9),
-    "still-to-review": at(16, 22, 8, 9),
-    "stopped-by-reason": at(0, 31, 10, 19),
-    "rule-agreement": at(10, 31, 14, 19),
-    calls: at(0, 50, 24, 26),
+    readiness: at(0, 0, 14, 30),
+    "false-holds": at(14, 0, 10, 30),
+    "money-stopped": at(0, 30, 8, 9),
+    "money-held": at(8, 30, 8, 9),
+    "still-to-review": at(16, 30, 8, 9),
+    "stopped-by-reason": at(0, 39, 10, 19),
+    "rule-agreement": at(10, 39, 14, 19),
+    calls: at(0, 58, 24, 26),
   };
 }
 

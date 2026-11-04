@@ -36,6 +36,20 @@ export function moneyFormatString(currency: string): string {
   return `"${code} "#,##0${currencyDecimals(code) ? ".00" : ""}`;
 }
 
+/**
+ * The same amounts shortened for tiles and chart labels: "VND 244.8M" for a currency with no minor unit, whose figures run to
+ * nine digits and overflow a bar chart or a narrow tile. Currencies with cents keep the full figure, which fits.
+ */
+export function moneyFormatCompact(currency: string): Intl.NumberFormat | string {
+  const code = currency.toUpperCase().replace(/[^A-Z]/g, "");
+  if (currencyDecimals(code) !== 0) return moneyFormatString(code);
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: code, currencyDisplay: "code", notation: "compact", maximumFractionDigits: 1 });
+  } catch {
+    return moneyFormatString(code);
+  }
+}
+
 /** Display names for the readiness levels. */
 export const LEVEL_LABEL: Record<string, string> = { review: "Review", assist: "Assist", autopilot: "Autopilot" };
 
@@ -51,14 +65,14 @@ const hidden = (id: string, name: string, format: AgFormat = "textFormat"): Spec
 const money = (id: string, name: string, description?: string): Spec => ({ id, name, format: "currencyFormat", description, money: true });
 const share = (id: string, name: string, description?: string): Spec => ({ id, name, format: "percentageFormat", description, percent: true });
 
-function fields(specs: Spec[], currency: string): AgFieldDefinition[] {
+function fields(specs: Spec[], currency: string, compact = false): AgFieldDefinition[] {
   return specs.map(({ id, name, format, description, hide, money: isMoney, percent }) => ({
     id,
     name,
     format,
     ...(description && { description }),
     ...(hide && { hide }),
-    ...(isMoney && { formatOptions: { format: moneyFormatString(currency) } }),
+    ...(isMoney && { formatOptions: { format: compact ? moneyFormatCompact(currency) : moneyFormatString(currency) } }),
     ...(percent && { formatOptions: { format: "0%" } }),
     // "25 Oct 2026", as elsewhere in the app, not the browser's numeric short date.
     ...(format === "dateFormat" && { formatOptions: { format: "d mmm yyyy" } }),
@@ -327,7 +341,8 @@ export function buildOnboardingStudioData(data: DashboardData, opts: { today?: s
       name: DESCRIPTIONS[id].name,
       description: DESCRIPTIONS[id].description,
       data: rows[id] as Record<string, string | number | boolean | null>[],
-      fields: fields(FIELDS[id], currency),
+      // Totals feed tiles and charts, so they are shortened; the payment list keeps every figure whole.
+      fields: fields(FIELDS[id], currency, id === "money_stopped" || id === "imports"),
     })),
     relationships,
     calendars: [

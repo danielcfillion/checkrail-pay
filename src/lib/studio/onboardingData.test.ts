@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openTestDb } from "../db";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { onboardingDashboard, type DashboardData } from "../onboarding/dashboard";
-import { FIELDS, buildOnboardingStudioData, callMoney, currenciesIn, displayCurrency, moneyFormatString, studioRows, toMajor } from "./onboardingData";
+import { FIELDS, buildOnboardingStudioData, callMoney, currenciesIn, displayCurrency, moneyFormatCompact, moneyFormatString, studioRows, toMajor } from "./onboardingData";
 
 describe("the Studio data sources for Your first weeks", async () => {
   const db = openTestDb();
@@ -39,7 +39,11 @@ describe("the Studio data sources for Your first weeks", async () => {
     const ms = sources.find((s) => s.id === "money_stopped")!;
     const dup = data.money_stopped.find((r) => r.category === "duplicate")!;
     expect(ms.data.find((r) => r.category === "duplicate")!.stopped).toBe(dup.stopped_minor / 100);
-    expect(ms.fields.find((f) => f.id === "stopped")!.formatOptions?.format).toBe('"VND "#,##0');
+    // Totals are shortened for tiles and chart labels; the payment list keeps whole figures.
+    const short = ms.fields.find((f) => f.id === "stopped")!.formatOptions?.format as unknown as Intl.NumberFormat;
+    expect(short.format(244_800_000)).toMatch(/^VND\s244\.8M$/);
+    expect(sources.find((s) => s.id === "calls")!.fields.find((f) => f.id === "amount")!.formatOptions?.format).toBe('"VND "#,##0');
+    expect(moneyFormatCompact("usd")).toBe('"USD "#,##0.00');
     expect(moneyFormatString("usd")).toBe('"USD "#,##0.00');
     expect(toMajor(null)).toBeNull();
   });
