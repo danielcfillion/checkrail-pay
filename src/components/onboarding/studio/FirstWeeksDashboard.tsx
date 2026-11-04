@@ -6,6 +6,8 @@ import type { AgStudioApi, AgStudioMode } from "ag-studio";
 import type { DashboardData } from "@/lib/onboarding/dashboard";
 import { PageHeader } from "@/components/ui";
 import { clearLayout } from "@/lib/studio/layoutStore";
+import { usdEquivalentNote } from "@/lib/onboarding/usdNote";
+import { localDateString } from "@/lib/format";
 import { studioDefault } from "./state";
 import { FallbackSummary } from "./FallbackSummary";
 import type { StudioCanvasProps } from "./StudioCanvas";
@@ -67,6 +69,7 @@ export function FirstWeeksDashboard({ data, licenseKey, assistant }: FirstWeeksD
   const onFatal = useCallback(() => setFailed(true), []);
 
   const editing = mode === "edit";
+  const usdNote = usdEquivalentNote(data, localDateString());
   const reset = () => {
     clearLayout();
     api.current?.setState(studioDefault(!!assistant));
@@ -105,6 +108,7 @@ export function FirstWeeksDashboard({ data, licenseKey, assistant }: FirstWeeksD
           ) : assistant ? (
             <p className="dense mb-3 text-right text-ink-soft">The assistant explains the numbers and adds widgets. It cannot change a rule or pay anyone.</p>
           ) : null}
+          {!editing && usdNote ? <p className="dense mb-3 text-ink-soft">{usdNote}</p> : null}
           <div className="cr-frame" style={FRAME_STYLE}>
             <StudioBoundary fallback={fallback} onFail={onFatal}>
               <StudioCanvas data={data} licenseKey={licenseKey} assistant={assistant} mode={mode} onApi={onApi} onCustomised={onCustomised} onFatal={onFatal} />
