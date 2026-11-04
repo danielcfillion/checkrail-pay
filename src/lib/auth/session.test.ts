@@ -183,6 +183,10 @@ describe("POST /api/signin", () => {
 
   it("refuses a post from another site", async () => {
     expect((await signInPost(form({ username: "judge", password: "a-long-enough-pass" }, { origin: "https://evil.example" }))).status).toBe(403);
+    // Behind a proxy the request URL is the server's own address; the host the browser used arrives in headers.
+    const proxied = { origin: "https://checkrail-pay.onrender.com", host: "checkrail-pay.onrender.com", "x-forwarded-host": "checkrail-pay.onrender.com", "x-forwarded-proto": "https" };
+    expect((await signInPost(form({ username: "judge", password: "a-long-enough-pass" }, proxied, "http://localhost:10000/api/signin"))).status).toBe(303);
+    expect((await signInPost(form({ username: "judge", password: "a-long-enough-pass" }, { ...proxied, origin: "https://evil.example" }, "http://localhost:10000/api/signin"))).status).toBe(403);
     const noOrigin = new NextRequest("http://localhost/api/signin", { method: "POST", body: "username=judge&password=a-long-enough-pass", headers: { "content-type": "application/x-www-form-urlencoded" } });
     expect((await signInPost(noOrigin)).status).toBe(403);
     expect((await signOutPost(new NextRequest("http://localhost/api/signout", { method: "POST", headers: { origin: "https://evil.example" } }))).status).toBe(403);

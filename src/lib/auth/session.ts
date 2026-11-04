@@ -154,12 +154,18 @@ export function wantsPage(method: string, h: Headers): boolean {
   return (h.get("accept") ?? "").includes("text/html");
 }
 
-/** Whether a POST came from this site: its Origin names the host the request was sent to. */
+/**
+ * Whether a POST came from this site: its Origin names a host this request was sent to. Behind a proxy (Render) the
+ * request URL carries the server's own address, not the one the browser used, so the Host and forwarded-host headers
+ * count as well. A page on another site cannot set those headers on a form post, so a cross-site post still fails.
+ */
 export function sameOrigin(h: Headers, requestUrl: string): boolean {
   const origin = h.get("origin");
   if (!origin || origin === "null") return false;
   try {
-    return new URL(origin).host === new URL(requestUrl).host;
+    const originHost = new URL(origin).host;
+    const hosts = [h.get("x-forwarded-host")?.split(",")[0].trim(), h.get("host")?.trim(), new URL(requestUrl).host];
+    return hosts.some((x) => !!x && x.toLowerCase() === originHost.toLowerCase());
   } catch {
     return false;
   }
