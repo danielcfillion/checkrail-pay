@@ -1,7 +1,7 @@
 import { EmptyState } from "@/components/ui";
 import { Stepper } from "@/components/onboarding/Stepper";
 import { FirstWeeksDashboard } from "@/components/onboarding/studio/FirstWeeksDashboard";
-import { isLiveAi } from "@/lib/config";
+import { isStudioAssistantOn } from "@/lib/config";
 import { getDb } from "@/lib/db";
 import { onboardingDashboard, type DashboardData } from "@/lib/onboarding/dashboard";
 import { getBusiness } from "@/lib/queries";
@@ -15,8 +15,9 @@ export const metadata = { title: "Your first weeks" };
  *
  *   AG_STUDIO      the AG Studio licence key, read here on the server and handed to Studio. Without it Studio runs
  *                  with a trial watermark.
- *   isLiveAi()     shows the assistant ("Ask about your setup"), which talks to Claude through /api/studio-ai. In
- *                  mock AI mode it is hidden; the page never probes the route.
+ *   isStudioAssistantOn()  shows the assistant ("Ask about your setup"), which talks to Claude through /api/studio-ai.
+ *                  On with live AI, or with STUDIO_ASSISTANT=1 and a key while AI_MODE stays mock. Otherwise it is
+ *                  hidden; the page never probes the route.
  */
 export default async function FirstWeeksPage() {
   const biz = getBusiness();
@@ -32,7 +33,7 @@ export default async function FirstWeeksPage() {
   return (
     <>
       <Stepper current={3} />
-      <FirstWeeksDashboard data={data} licenseKey={process.env.AG_STUDIO || undefined} assistant={isLiveAi() ? { business: biz.name } : null} />
+      <FirstWeeksDashboard data={data} licenseKey={process.env.AG_STUDIO || undefined} assistant={isStudioAssistantOn() ?{ business: biz.name } : null} />
     </>
   );
 }

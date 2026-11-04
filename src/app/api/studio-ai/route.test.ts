@@ -16,7 +16,7 @@ import { BODY_LIMIT, MAX_OUTPUT_TOKENS, TURN_LIMIT } from "@/lib/studio/studioRe
 import { config } from "@/lib/config";
 import { ACTOR_HEADER } from "@/lib/basicAuth";
 
-const ai = config.ai as { mode: string; anthropicApiKey: string; model: string; studioModel: string };
+const ai = config.ai as { mode: string; anthropicApiKey: string; model: string; studioModel: string; studioAssistant: boolean };
 const saved = { ...ai };
 const KEY = "sk-ant-test-key-never-sent";
 const URL_ = "http://checkrail.test/api/studio-ai";
@@ -81,6 +81,18 @@ describe("POST /api/studio-ai", () => {
     ai.anthropicApiKey = "";
     expect((await post(BODY)).status).toBe(503);
     expect(sdk.create).not.toHaveBeenCalled();
+  });
+
+  it("runs with AI_MODE mock when STUDIO_ASSISTANT is on and a key is set, and not without the key", async () => {
+    ai.mode = "mock";
+    ai.studioAssistant = true;
+    expect((await post(BODY)).status).toBe(200);
+    expect(sdk.create).toHaveBeenCalledTimes(1);
+    ai.anthropicApiKey = "";
+    expect((await post(BODY)).status).toBe(503);
+    ai.anthropicApiKey = KEY;
+    ai.studioAssistant = false;
+    expect((await post(BODY)).status).toBe(503);
   });
 
   it("says no to GET", async () => {

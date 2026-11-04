@@ -56,6 +56,11 @@ export const config = {
     model: env("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
     /** Model for the AG Studio dashboard assistant: many short turns, nothing on the money path. */
     studioModel: env("STUDIO_MODEL", "claude-haiku-5-5"),
+    /**
+     * Turns the dashboard assistant on by itself (STUDIO_ASSISTANT=1, with ANTHROPIC_API_KEY), while AI_MODE stays mock:
+     * invoice reading stays rule-based and a public demo can keep a private sandbox copy per visitor.
+     */
+    studioAssistant: env("STUDIO_ASSISTANT") === "1",
   },
 
   accounting: {
@@ -77,4 +82,9 @@ export function isRealMoney(): boolean {
 }
 export function isLiveAi(): boolean {
   return config.ai.mode === "live" && config.ai.anthropicApiKey.length > 0;
+}
+
+/** The dashboard assistant (read-only, no money path): on when AI is live, or when STUDIO_ASSISTANT=1, and a key is set. */
+export function isStudioAssistantOn(): boolean {
+  return config.ai.anthropicApiKey.length > 0 && (config.ai.mode === "live" || config.ai.studioAssistant);
 }

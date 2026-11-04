@@ -76,6 +76,11 @@ services:
         value: claude-sonnet-5-5
       - key: STUDIO_MODEL
         value: claude-haiku-5-5
+      # 1 = the dashboard assistant ("Ask about your setup") talks to Claude while AI_MODE stays mock, so invoice reading
+      # stays rule-based and every visitor keeps a private sandbox copy. It still needs ANTHROPIC_API_KEY; without a
+      # key the assistant stays hidden.
+      - key: STUDIO_ASSISTANT
+        value: "1"
       - key: AG_STUDIO
         sync: false
       # Books: csv keeps the two files on the Accounting page; xero also sends bills, payments and fees to the

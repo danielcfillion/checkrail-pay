@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
-import { config, isLiveAi } from "@/lib/config";
+import { config, isStudioAssistantOn } from "@/lib/config";
 import { BODY_LIMIT, buildParams, TURN_LIMIT, TURN_WINDOW_MS } from "@/lib/studio/studioRequest";
 import { ACTOR_HEADER } from "@/lib/basicAuth";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
@@ -29,8 +29,8 @@ const plain = (status: number, message: string, headers: Record<string, string> 
   new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...headers } });
 
 export async function POST(req: Request): Promise<Response> {
-  // Off (mock mode, or no key): the dashboard reads the 503 and hides the assistant.
-  if (!isLiveAi()) return plain(503, "The AI assistant is turned off on this server.");
+  // Off (no key, or neither live AI nor STUDIO_ASSISTANT=1): the dashboard reads the 503 and hides the assistant.
+  if (!isStudioAssistantOn()) return plain(503, "The AI assistant is turned off on this server.");
 
   // A page on another site must not spend this login's turns through the browser's saved credentials.
   const origin = req.headers.get("origin");
