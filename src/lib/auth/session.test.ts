@@ -38,7 +38,7 @@ describe("middleware without a login", () => {
   it("sends a page request to /signin with the page it asked for, and no challenge, so no pop-up appears", () => {
     const res = middleware(page("/obligations?filter=mine"));
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/signin?next=%2Fobligations%3Ffilter%3Dmine");
+    expect(res.headers.get("location")).toBe("http://localhost/signin?next=%2Fobligations%3Ffilter%3Dmine");
     expect(res.headers.get("www-authenticate")).toBeNull();
   });
 
@@ -235,12 +235,24 @@ describe("the two counters together", () => {
   });
 });
 
+describe("redirects from middleware", () => {
+  it("are absolute, because the production build rejects a bare path and the page answers 500", () => {
+    const res = middleware(page("/onboarding/dashboard"));
+    expect(res.headers.get("location")).toMatch(/^https?:\/\//);
+  });
+
+  it("use the host and protocol the browser used when a proxy forwards them", () => {
+    const res = middleware(page("/runs", { "x-forwarded-host": "checkrail-pay.onrender.com", "x-forwarded-proto": "https" }));
+    expect(res.headers.get("location")).toBe("https://checkrail-pay.onrender.com/signin?next=%2Fruns");
+  });
+});
+
 describe("the sign-in page itself", () => {
   it("sends a visitor who is already signed in straight on to next", () => {
     const res = middleware(page("/signin?next=%2Fruns", { cookie: `${SESSION_COOKIE}=${cookieFor()}` }));
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/runs");
-    expect(middleware(page("/signin?next=https%3A%2F%2Fevil.example", { cookie: `${SESSION_COOKIE}=${cookieFor()}` })).headers.get("location")).toBe("/");
+    expect(res.headers.get("location")).toBe("http://localhost/runs");
+    expect(middleware(page("/signin?next=https%3A%2F%2Fevil.example", { cookie: `${SESSION_COOKIE}=${cookieFor()}` })).headers.get("location")).toBe("http://localhost/");
   });
 
   it("answers Origin null with a friendly page, not a bare 403", async () => {

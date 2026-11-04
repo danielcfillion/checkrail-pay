@@ -75,6 +75,13 @@ export function middleware(req: NextRequest) {
   for (const h of [ACTOR_HEADER, ROLE_HEADER, PERSONA_HEADER, PUBLIC_HEADER, SANDBOX_HEADER]) headers.delete(h);
   if (sandbox) headers.set(SANDBOX_HEADER, sandbox.token);
   const https = req.nextUrl.protocol === "https:" || req.headers.get("x-forwarded-proto")?.split(",")[0].trim() === "https";
+  // A redirect from middleware needs an absolute address: the production build rejects a bare path with "Invalid URL" and
+  // every signed-out page answers 500. The origin is the one the browser used (behind Render's proxy, the forwarded host).
+  const redirectTo = (location: string) => {
+    const host = req.headers.get("x-forwarded-host")?.split(",")[0].trim() || req.headers.get("host") || req.nextUrl.host;
+    const target = new URL(location, `${https ? "https" : "http"}://${host}`).toString();
+    return new NextResponse(null, { status: 303, headers: { Location: target, "Cache-Control": "no-store" } });
+  };
   const pass = () => {
     const res = NextResponse.next({ request: { headers } });
     if (sandbox?.fresh) res.cookies.set(SANDBOX_COOKIE, sandbox.token, { httpOnly: true, sameSite: "lax", secure: https, path: "/", maxAge: SANDBOX_COOKIE_MAX_AGE });
@@ -88,7 +95,7 @@ export function middleware(req: NextRequest) {
       // Already signed in: straight on to the page they asked for.
       const signedIn = configuredUsers();
       if (signedIn?.length && verifySession(req.cookies.get(SESSION_COOKIE)?.value, signedIn, sessionKey(process.env))) {
-        return new NextResponse(null, { status: 303, headers: { Location: safeNext(req.nextUrl.searchParams.get("next")), "Cache-Control": "no-store" } });
+        return redirectTo(safeNext(req.nextUrl.searchParams.get("next")));
       }
       headers.set(PUBLIC_HEADER, "1");
     }
@@ -128,7 +135,7 @@ export function middleware(req: NextRequest) {
       // No form sign-in possible (production with no secret to sign sessions): the browser's own prompt, as before.
       if (!key) return new NextResponse(AUTH_REQUIRED_HTML, { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Checkrail Pay", charset="UTF-8"', "Content-Type": "text/html; charset=utf-8" } });
       // A browser asking for a page goes to the sign-in page, with no challenge header, so no pop-up appears.
-      if (wantsPage(req.method, req.headers)) return new NextResponse(null, { status: 303, headers: { Location: signInUrl(path + req.nextUrl.search), "Cache-Control": "no-store" } });
+      if (wantsPage(req.method, req.headers)) return redirectTo(signInUrl(path + req.nextUrl.search));
       // Fetches, server actions, RSC and API calls get JSON. The challenge goes only to a client that sent Basic itself.
       const h: Record<string, string> = { "Content-Type": "application/json", "Cache-Control": "no-store" };
       if (authorization) h["WWW-Authenticate"] = 'Basic realm="Checkrail Pay", charset="UTF-8"';
