@@ -83,6 +83,9 @@ services:
         value: "1"
       - key: AG_STUDIO
         sync: false
+      # Last day the AG Studio trial licence works; the next day the dashboard shows a notice with who to contact.
+      - key: AG_STUDIO_TRIAL_ENDS
+        value: "2026-12-14"
       # Books: csv keeps the two files on the Accounting page; xero also sends bills, payments and fees to the
       # organisation connected in Settings (docs/XERO.md). Redirect URI for the Xero app: $RENDER_EXTERNAL_URL/api/xero/callback
       - key: ACCOUNTING_DESTINATION
