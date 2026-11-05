@@ -40,12 +40,16 @@ describe("the Studio data sources for Your first weeks", async () => {
     const dup = data.money_stopped.find((r) => r.category === "duplicate")!;
     expect(ms.data.find((r) => r.category === "duplicate")!.stopped).toBe(dup.stopped_minor / 100);
     // Totals are shortened for tiles and chart labels; the payment list keeps whole figures.
-    const short = ms.fields.find((f) => f.id === "stopped")!.formatOptions?.format as unknown as Intl.NumberFormat;
-    expect(short.format(244_800_000)).toMatch(/^VND\s244\.8M$/);
+    expect(ms.fields.find((f) => f.id === "stopped")!.formatOptions?.format).toBe('[>=1000000]"VND "0.0,,"M";[>=1000]"VND "0.0,"K";"VND "#,##0');
     expect(sources.find((s) => s.id === "calls")!.fields.find((f) => f.id === "amount")!.formatOptions?.format).toBe('"VND "#,##0');
     expect(moneyFormatCompact("usd")).toBe('"USD "#,##0.00');
     expect(moneyFormatString("usd")).toBe('"USD "#,##0.00');
     expect(toMajor(null)).toBeNull();
+  });
+
+  it("survives JSON, because Studio's agent receives the field definitions that way (an Intl object would become {})", () => {
+    const roundTrip = JSON.parse(JSON.stringify(studio.sources));
+    expect(roundTrip).toEqual(studio.sources);
   });
 
   it("splits each call's money the same way as the totals by reason, so sums by supplier agree with them", () => {

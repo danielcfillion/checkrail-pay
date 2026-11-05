@@ -40,14 +40,14 @@ export function moneyFormatString(currency: string): string {
  * The same amounts shortened for tiles and chart labels: "VND 244.8M" for a currency with no minor unit, whose figures run to
  * nine digits and overflow a bar chart or a narrow tile. Currencies with cents keep the full figure, which fits.
  */
-export function moneyFormatCompact(currency: string): Intl.NumberFormat | string {
+export function moneyFormatCompact(currency: string): string {
   const code = currency.toUpperCase().replace(/[^A-Z]/g, "");
   if (currencyDecimals(code) !== 0) return moneyFormatString(code);
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: code, currencyDisplay: "code", notation: "compact", maximumFractionDigits: 1 });
-  } catch {
-    return moneyFormatString(code);
-  }
+  // A string, not an Intl.NumberFormat: Studio's agent sends field definitions as JSON, where an Intl object becomes {} and
+  // every query it builds on the field is refused ("value did not match any of the discriminated types").
+  // Sections by size: millions and thousands are shortened with scaling commas; smaller amounts stay whole.
+  const q = `"${code} "`;
+  return `[>=1000000]${q}0.0,,"M";[>=1000]${q}0.0,"K";${q}#,##0`;
 }
 
 /** Display names for the readiness levels. */
