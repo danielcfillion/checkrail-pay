@@ -75,16 +75,24 @@ export function DemoBanner({ startHref, canReset, heading, tour = false, mine = 
           Dismiss
         </button>
       </div>
+      <p className="mt-2 max-w-3xl text-sm text-ink-soft">
+        Claude read these requests (recorded from a live run on 28 Oct). PayPal&apos;s own records blocked one of them. Rails here are simulated; the video shows the live PayPal sandbox.
+      </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        {tour ? <TakeTourButton primary /> : null}
+        {tour ? <TakeTourButton primary /> : <Link href={startHref} className="btn btn-primary">Start with the USD 960 invoice</Link>}
         {tryIt ? <TryButton /> : null}
-        <Link href={startHref} className={`btn ${tour ? "" : "btn-primary"}`}>
-          Start with the USD 960 invoice
-        </Link>
-        <Link href="/demo" className="btn">
-          Demo guide
-        </Link>
       </div>
+      <p className="mt-3 text-sm text-ink-soft">
+        Or jump in:{" "}
+        <Link href={startHref} className="link">
+          the USD 960 invoice
+        </Link>
+        , or the{" "}
+        <Link href="/demo" className="link">
+          full demo guide
+        </Link>
+        .
+      </p>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-sm text-ink-soft hairline">
         <span>{mine ? "This copy of the demo is yours: other visitors do not see your clicks. Start over puts the four opening requests back." : "This demo is shared by everyone using it. Reset puts the four opening requests back."}</span>
         {canReset ? <span className="max-sm:hidden"><ResetDemoButton size="sm" mine={mine} /></span> : null}
