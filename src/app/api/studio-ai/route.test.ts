@@ -206,4 +206,13 @@ describe("POST /api/studio-ai", () => {
     sdk.create.mockRejectedValueOnce(Object.assign(new Error("overloaded"), { status: 529 }));
     expect((await post(BODY)).status).toBe(502);
   });
+
+  it("has one budget for the whole server, so many actor names (demo personas) cannot multiply the limit", async () => {
+    let limited = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await post(BODY, { [ACTOR_HEADER]: `persona-${i}` });
+      if (r.status === 429) limited++;
+    }
+    expect(limited).toBeGreaterThan(0);
+  });
 });

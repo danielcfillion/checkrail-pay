@@ -25,6 +25,10 @@ export const runtime = "nodejs";
  */
 
 const turns = newThrottle();
+/** One budget for the whole server, whoever asks: the demo persona cookie gives one login several actor names. */
+const GLOBAL_TURNS = 150;
+const GLOBAL_WINDOW_MS = 60 * 60_000;
+
 
 const plain = (status: number, message: string, headers: Record<string, string> = {}) =>
   new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...headers } });
@@ -43,6 +47,9 @@ export async function POST(req: Request): Promise<Response> {
   const actor = req.headers.get(ACTOR_HEADER)?.trim();
   const key = actor ? `user:${actor}` : `ip:${clientIp(req.headers, process.env.CHECKRAIL_CLIENT_IP_HEADER)}`;
   const now = Date.now();
+  if (overLimit(turns, "all", GLOBAL_TURNS, GLOBAL_WINDOW_MS, now)) {
+    return plain(429, "The assistant is busy with other visitors right now. Try again in a few minutes.", { "Retry-After": "300" });
+  }
   if (overLimit(turns, key, TURN_LIMIT, TURN_WINDOW_MS, now)) {
     const since = turns.get(key)?.since ?? now;
     const wait = Math.max(1, Math.ceil((TURN_WINDOW_MS - (now - since)) / 1000));
