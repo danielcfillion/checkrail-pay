@@ -26,9 +26,9 @@ Checkrail Pay
 
 ## Tagline (under 60 characters)
 
-Claude reads. Policy decides. You sign off.
+Claude reads the request. Rules decide. PayPal pays.
 
-(43 characters)
+(52 characters)
 
 ## Inspiration
 
@@ -40,7 +40,7 @@ The demo company, Ridgeline Expeditions, is a US operator, because a US payer ca
 
 ## What it does
 
-Checks every supplier payment before money moves.
+Checkrail Pay stops a wrong supplier payment before PayPal sends it. Claude reads the request and its paperwork, then a fixed set of rules checks the amount against the trip sheet and the rate card, and checks PayPal's own transaction history for a job already paid. Clean payments go out over PayPal Payouts inside caps you set; the rest stop with a one-line reason. Claude advises and has no tool that moves money. And when an AI agent asks to pay a supplier, it asks Checkrail first over MCP, with a signed spending mandate that caps what it may even request. Built by a tour operator in Vietnam who pays guides, drivers and homestays from chat messages every week.
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
@@ -61,6 +61,8 @@ Every request travels one line through five stations: read, verified, routed, pa
 **Reconciled from PayPal.** Read from PayPal on the Books page pulls the statement from Transaction Search and ties a returned payout to its original payout by reference id.
 
 **Agents ask first.** PayPal moves money for people. Next it moves money for agents, and agents need a check rail. Checkrail is an MCP server: before any agent pays a supplier through any tool, it calls `check_payment` and gets pay, hold or block, the rule that decided, what would clear it, and PayPal's transaction id when PayPal already paid the job. The check runs on an in-memory copy of the books, so nothing is paid or saved. With the request scope, the agent hands Checkrail the payment instead; it lands in the inbox, and Autopilot sends it only inside the owner's caps after the cancel window. Trust is per agent: what an assistant attaches is its own say-so and a person approves, while a booking system's own agent can be made a system of record. An agent that tries amount after amount for one payee is held for a person.
+
+**Mandates, provenance and counter-offers.** Each agent can carry an Ed25519-signed spending mandate (allowed payees or supplier roles, a per-payment cap and a total budget) that the owner can revoke with one click; anyone with the public key can verify it, and it is checked again at release. Every instruction an agent relays is tagged with where it came from, so a payout change pasted into a supplier email is treated as the email's say-so, not the owner's, and a person must approve it (the prompt-injection firewall). When a supplier's agent asks for more than the job supports, Checkrail answers with a counter-offer instead of a bare refusal, for example USD 800 against a USD 960 ask. All three are seeded into every judge's copy and shown on the Agents page.
 
 **What it does not do.** It never holds funds: money goes from the business's own PayPal, Wise or bank account. The model has no tool that moves money.
 
