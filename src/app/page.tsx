@@ -95,7 +95,7 @@ export default async function OverviewPage() {
 
       <BookLine rows={all} currency={base} />
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-6 grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Panel title="Needs someone" aside={<Link href="/obligations?filter=needs_action" className="link">Open inbox</Link>} padded={false}>
           {o.needsAction.length ? <NeedsYouList rows={o.needsAction} /> : <div className="px-4 py-8 text-center text-ink-soft">Nothing waiting. New requests appear here when the agent reads them.</div>}
         </Panel>

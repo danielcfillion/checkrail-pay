@@ -21,6 +21,10 @@ export default async function TryPage({ searchParams }: { searchParams: Promise<
           <Link className="link" href="/">
             Back to the overview
           </Link>
+          {" or "}
+          <Link className="link" href="/demo">
+            open the demo guide
+          </Link>
         </p>
       </section>
     );

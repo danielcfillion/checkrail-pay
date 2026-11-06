@@ -84,7 +84,7 @@ export default async function BringInYourDataPage() {
         <BankImport canIngest={canIngest} currencies={SUPPORTED_CURRENCIES} baseCurrency={biz.baseCurrency} />
       </div>
 
-      <div className="mt-8">
+      <div className="mt-8 min-w-0">
         <Panel title="Past re-checks" aside={imports.length ? pluralise(imports.length, "file") : undefined} padded={false}>
           {imports.length ? (
             <div className="overflow-x-auto">
