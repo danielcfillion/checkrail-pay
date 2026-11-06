@@ -4,20 +4,15 @@ import { DEMO_PERSONAS } from "@/lib/auth/roles";
 import { clientIp, newThrottle, overLimit } from "@/lib/throttle";
 import { FAIL_WINDOW_MS, SESSION_COOKIE, gateAttempt, safeNext, sessionKey, signInUrl, verifySession, wantsPage } from "@/lib/auth/session";
 import { AUTH_REQUIRED_HTML } from "@/lib/authRequiredPage";
-import { SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
+import { API_V1_PATH, SANDBOX_COOKIE, SANDBOX_COOKIE_MAX_AGE, SANDBOX_HEADER, sandboxForRequest, sandboxSetting } from "@/lib/sandbox/settings";
 
 /** Set on public vendor pages so the layout renders them without the app's navigation or business data. */
 export const PUBLIC_HEADER = "x-checkrail-public";
 
-/**
- * The inbound REST API's routes, exactly: /api/v1/departures, /api/v1/requests, /api/v1/requests/<id>,
- * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login: a path with no route renders
- * the not-found page inside the app layout, which trusts the identity headers only this middleware may set.
- */
 /** The sign-in page and its two form posts. */
 export const SIGN_IN_PATHS = new Set(["/signin", "/api/signin", "/api/signout"]);
 
-export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json|requests\/[A-Za-z0-9_-]{1,64})$/;
+export { API_V1_PATH };
 
 /**
  * Who is asking, on every request.

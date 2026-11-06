@@ -146,3 +146,10 @@ export function sandboxForRequest(cookie: string | undefined, env: Env, nowMs: n
   }
   return { token: signSandboxId(newSandboxId(), material, nowMs), fresh: true };
 }
+
+/**
+ * The inbound REST API's routes, exactly: /api/v1/departures, /api/v1/requests, /api/v1/requests/<id>,
+ * /api/v1/vendors and /api/v1/openapi.json. Nothing else under /api/v1 skips the login or the sandbox: a path with no
+ * route renders the not-found page inside the app layout, where server actions run as the signed-in visitor.
+ */
+export const API_V1_PATH = /^\/api\/v1\/(?:departures|requests|vendors|openapi\.json|requests\/[A-Za-z0-9_-]{1,64})$/;

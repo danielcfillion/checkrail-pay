@@ -302,6 +302,12 @@ describe("one request, one visitor's copy", () => {
       expect(inRequest(a, () => getDb(), "header", p)).toBe(shared);
       expect(inRequest(a, () => getDb(), "cookie", p)).toBe(shared);
     }
+    // RT-2: a path under /api/v1 that is not one of the routes renders the app layout for a visitor: their copy, never shared.
+    for (const p of ["/api/v1/zzz", "/api/v1/", "/api/v1/requests/a/b", "/api/v1/vendors/x"]) {
+      expect(inRequest(a, () => getDb(), "header", p), p).not.toBe(shared);
+      expect(inRequest(a, () => getDb(), "cookie", p), p).not.toBe(shared);
+      expect(() => inRequest(null, () => getDb(), "header", p), p).toThrow(/carries no copy/);
+    }
     const viaHeader = inRequest(a, () => getDb());
     expect(viaHeader).not.toBe(shared);
     expect(inRequest(a, () => getDb(), "cookie")).toBe(viaHeader);

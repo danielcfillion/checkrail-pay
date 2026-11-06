@@ -8,7 +8,7 @@ import { seedDemo } from "../demo/seed";
 import { runAutopilot } from "../engine/autopilot";
 import { clientIp } from "../throttle";
 import { SandboxPool, isSandboxBusy } from "./pool";
-import { MIN_SANDBOX_SECRET, SANDBOX_COOKIE, SANDBOX_HEADER, sandboxKeyMaterial, sandboxSetting, verifySandboxToken, type Env } from "./settings";
+import { API_V1_PATH, MIN_SANDBOX_SECRET, SANDBOX_COOKIE, SANDBOX_HEADER, sandboxKeyMaterial, sandboxSetting, verifySandboxToken, type Env } from "./settings";
 
 /**
  * Sandbox mode on the Node server: which copy of the database a request gets.
@@ -33,7 +33,7 @@ const g = globalThis as typeof globalThis & { __checkrailSandbox?: Installed | n
 const SHARED_PATHS = new Set(["/api/mcp", "/api/webhooks/paypal", "/api/autopilot/tick"]);
 
 /** Server-to-server paths: always the shared database, whatever token the request carries. */
-const SERVER_ONLY = /^\/api\/v1\//;
+const SERVER_ONLY = API_V1_PATH;
 
 export class SandboxScopeError extends Error {}
 
