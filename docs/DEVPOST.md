@@ -48,7 +48,7 @@ A purchase-order tool would pass Phuong's USD 960 invoice, because there is no p
 
 Every request travels one line through five stations: read, verified, routed, paid, reconciled.
 
-**Claude reads.** It reads the request and the attached documents, resolves the vendor, extracts the amount and reference, and checks PayPal's own transaction and invoice history with three read-only REST calls. It returns a structured reading, a confidence score and concerns. We call PayPal's REST endpoints directly rather than through the Agent Toolkit so the agent can reach only these three GET calls.
+**Claude reads.** It reads the request and the attached documents, resolves the vendor, extracts the amount and reference, and checks PayPal's own transaction and invoice history with three read-only REST calls. It returns a structured reading, a confidence score and concerns. The model gets these three read-only GET calls and nothing else, by construction: PayPal's Agent Toolkit would have handed it write access it must never have.
 
 **PayPal's own records decide.** Before every decision that can move money, the app itself (deterministic code, not the model) reads PayPal Transaction Search. When PayPal already paid this job to this payee, the request is blocked with the PayPal transaction id: "PayPal transaction ... already paid USD 180.00 for JOB-HG4D-0914 to maria.santos@example.com". The model cannot add or remove that record. Transaction Search can lag by up to three hours, so Checkrail's own payment history stays the first duplicate check.
 

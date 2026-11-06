@@ -17,7 +17,7 @@
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
-Built for the PayPal AI Hackathon (project started 3 Oct 2026). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it.
+Built for the PayPal AI Hackathon (project started 3 Oct 2026; built on a local repository first, so the public history begins with the 28 Oct snapshot). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it.
 
 ## Try it
 
@@ -54,14 +54,14 @@ As of 29 Oct 2026:
 
 - **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
 - **Claude (`claude-sonnet-5-5`): has read the full demo live.**
-- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). We call PayPal's REST endpoints directly rather than through the Agent Toolkit so the agent can reach only these three GET calls.
+- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). The model gets these three read-only GET calls and nothing else, by construction: PayPal's Agent Toolkit would have handed it write access it must never have.
 - **PayPal's own records decide a block.** Before every decision that can move money, the app itself (deterministic code, not the model) reads PayPal Transaction Search and blocks with the PayPal transaction id when PayPal already paid this job to this payee (policy rule `paypal_history`, `src/lib/domain/paypalHistory.ts`). On simulated rails it reads what the simulated PayPal rail actually paid. Live it needs Transaction search enabled on the PayPal app. Transaction Search can lag by up to three hours, so Checkrail's own payment history stays the first duplicate check.
 - **Recorded Claude readings for the hosted demo.** Claude's readings of the six opening requests, recorded from a live run on 28 Oct 2026 (`claude-sonnet-5-5`, PayPal sandbox), are kept in `src/lib/demo/recordedReadings.ts` for the request page to show, labelled as recorded. Display only: on the hosted demo the decision still comes from the rule-based reader and the policy rules.
 - **Read from PayPal (Books):** reconciles from Transaction Search and ties a returned payout to its payout by reference id. Tested against fakes; needs live PayPal keys.
 - **Stellar PYUSD: simulated.** The adapter is written to the Stellar SDK and has never run on testnet.
 - **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 20 unit tests pass. Not deployed to testnet, not called by the app yet.
 - **Wise:** beta adapter, never run.
-- **Xero:** an import file, not a live push.
+- **Xero:** a bills file to import, plus a live OAuth push written and tested against a fake Xero, not yet run against a real organisation.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
 - **Tests:** 1,345 in 113 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
@@ -128,7 +128,7 @@ The fields come prefilled; type your own payee, amount, reference or request tex
 - Starting an execution is one SQLite transaction, and state moves are compare-and-swap through a whitelist (`TRANSITIONS` in `src/lib/domain/types.ts`).
 - The payout destination is pinned at approval. Edited details send the payment back to blocked.
 - Webhooks never set state. A signature-verified event only triggers a re-check.
-- Live mode never falls back to a mock. Missing credentials throw.
+- Live mode never falls back to a mock for rails: missing credentials throw. The reader is different: if the model call fails, the rules reader reads the request and the page says so.
 
 ### People and access
 - Named logins with roles (owner, approver, clerk, accountant) and approval limits.
