@@ -44,7 +44,7 @@ Checks every supplier payment before money moves.
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
-A purchase-order tool would pass Phuong's USD 960 invoice, because there is no purchase order to fail against. Checkrail blocks it because the trip sheet says 4 days at USD 200.
+A purchase-order tool would pass Phuong's USD 960 invoice, because there is no purchase order to fail against. Checkrail blocks it because the trip sheet says 4 vehicle-days at USD 200.
 
 Every request travels one line through five stations: read, verified, routed, paid, reconciled.
 
@@ -95,7 +95,7 @@ The agent guard is a dependency-free JSON-RPC handler shared by two MCP transpor
 
 Autopilot is a timer over policy, not the model deciding to pay. A payment is scheduled only when policy says pay, and released by a heartbeat after the cancel window, with the agent recorded as the actor.
 
-Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 1,345 tests in 113 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
+Money-path safety: an idempotency key on every attempt (`sender_batch_id` and `PayPal-Request-Id`), compare-and-swap state changes inside one transaction, the payout destination pinned at approval, an ambiguous rail answer treated as unknown and never retried under a new key, and live mode that fails closed instead of falling back to mocks. 1,345 tests in 113 files, plus 20 tests on the Soroban spend-policy contract. Review rounds by AI agents, each working from a clean copy of the repo: six critic rounds on 16 Oct, security and AP-practitioner rounds from 25 to 27 Oct, and on 29 Oct three cycles each from a security reviewer, a design reviewer and an AP practitioner, all ending with no Must-fix item outstanding. A further agent-guard series from 29 to 31 Oct (`docs/audits/agent-guard-2026-10-31-r1` to `r8`) found one last Must-fix in round 8, free-text departures in lower case or with "." or "/" slipping past the duplicate check, which is fixed with tests. Every finding, what it led to and what is still open is in `docs/audits/2026-10-29-response.md`. No human security audit has been done yet.
 
 ## Challenges we ran into
 
