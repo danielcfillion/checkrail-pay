@@ -26,7 +26,7 @@ Run it locally in two commands (Node 22 or later; SQLite is bundled, no external
     npm run setup
     npm run dev
 
-Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 6 and 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
+Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
 
 Hosted demo and video: linked from the Devpost page, with the hosted login in the Devpost testing instructions.
 
