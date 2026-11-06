@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, settlements, users, vendors, accountingSyncs } from "../db/schema";
+import { approvals, auditEntries, businesses, evidence as evidenceTable, obligations, paymentAttempts, routeQuotes, settlements, users, vendors, accountingSyncs } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { amendObligation, approvalGate, approveObligation, confirmSettlement, executeObligation, ingestObligation, processObligation, retryAmbiguousExecution, retryFailed, resolveManually, runPolicy } from "./orchestrator";
 import { IllegalTransition, transition } from "../domain/stateMachine";
@@ -519,6 +519,65 @@ describe("H6: the payout destination is pinned at approval", () => {
     await expect(executeObligation(db, story.stellar, { actor: "user:daniel" })).rejects.toThrow(/refused/);
     const rows = db.select().from(approvals).where(eq(approvals.obligationId, story.stellar)).all();
     expect(rows.every((a) => a.decision === "superseded")).toBe(true);
+  });
+});
+
+describe("RT-1: an amend during release never sends an amount policy did not check", () => {
+  /** A live quote is network I/O (Wise today). This one waits, which opens the window a person's amend can land in. */
+  class SlowQuoteStellar extends MockStellarRail {
+    override async quote(i: Parameters<MockStellarRail["quote"]>[0]) {
+      await new Promise((r) => setTimeout(r, 40));
+      return super.quote(i);
+    }
+  }
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Quotes older than six hours, as for an approval in the morning released later: execute refreshes them first. */
+  const ageQuotes = (id: string) => db.update(routeQuotes).set({ createdAt: new Date(Date.now() - 7 * 3600_000).toISOString() }).where(eq(routeQuotes.obligationId, id)).run();
+
+  it("refuses to send when the amount is amended while the quotes are being refreshed", async () => {
+    const pp = new ScriptedRail("paypal", [submitted("B-1")]);
+    installRails(pp, new SlowQuoteStellar());
+    const before = get(story.paypal);
+    expect(before.state).toBe("approved");
+    ageQuotes(story.paypal);
+    const exec = executeObligation(db, story.paypal, { actor: "agent:autopilot" });
+    await sleep(5); // the release is now waiting on the quote
+    const amend = amendObligation(db, story.paypal, "user:lan", { amountMinor: before.amountMinor! * 10 }, "typo");
+    const [e, a] = await Promise.allSettled([exec, amend]);
+    expect(e.status).toBe("rejected");
+    expect((e as PromiseRejectedResult).reason.message).toMatch(/changed while it was being released \(amount\)/);
+    expect(a.status).toBe("fulfilled");
+    expect(pp.requests).toHaveLength(0);
+    expect(attemptsOf(story.paypal)).toHaveLength(0);
+    // The amended request goes back through policy and approval, as any amend does.
+    const after = get(story.paypal);
+    expect(after.amountMinor).toBe(before.amountMinor! * 10);
+    expect(["approved", "execution_pending", "sent"]).not.toContain(after.state);
+  });
+
+  it("refuses when an approval counted by policy is superseded during the refresh, even with the same amount", async () => {
+    approveObligation(db, story.stellar, "user:daniel");
+    const pp = new ScriptedRail("paypal", []);
+    installRails(pp, new SlowQuoteStellar());
+    expect(get(story.stellar).state).toBe("approved");
+    ageQuotes(story.stellar);
+    const exec = executeObligation(db, story.stellar, { actor: "agent:autopilot" });
+    await sleep(5);
+    db.update(approvals).set({ decision: "superseded" }).where(eq(approvals.obligationId, story.stellar)).run();
+    await expect(exec).rejects.toThrow(/changed while it was being released \(approvals\)/);
+    expect(attemptsOf(story.stellar)).toHaveLength(0);
+    expect(get(story.stellar).state).toBe("approved");
+  });
+
+  it("still pays when nothing changed during the refresh", async () => {
+    const pp = new ScriptedRail("paypal", [submitted("B-1")]);
+    installRails(pp, new SlowQuoteStellar());
+    const before = get(story.paypal);
+    ageQuotes(story.paypal);
+    await executeObligation(db, story.paypal, { actor: "agent:autopilot" });
+    expect(pp.requests).toHaveLength(1);
+    expect(pp.requests[0].amountMinor).toBe(before.amountMinor! - (before.withheldMinor ?? 0));
+    expect(get(story.paypal).state).toBe("sent");
   });
 });
 

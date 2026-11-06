@@ -1347,6 +1347,9 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     transition(db, obligationId, target === "approved" ? "blocked" : target, "policy", "execution.refused", { reasons: outcome.reasons });
     throw new Error(`Execution refused by policy: ${outcome.reasons.join("; ")}`);
   }
+  // What policy just passed, read with no await since: the start transaction below refuses unless the row still says
+  // exactly this. The quote refresh awaits network I/O, and an amend landing in that window must not be paid unchecked.
+  const checked = releaseTerms(db, mustGet(db, obligationId));
 
   // Quotes from more than six hours ago (or before a rail was set up) are refreshed before the router's choice is used.
   // And always when the quote was for a different amount than will be sent (tax withheld since, a short pay), so the
@@ -1379,6 +1382,11 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
     (tx) => {
       const cur = tx.select({ state: obligations.state, payoutHash: obligations.payoutHash }).from(obligations).where(eq(obligations.id, obligationId)).get();
       if (cur?.state !== "approved") throw new Error(`The request must be approved before it is paid (it is ${stateWord(cur?.state)})`);
+      // Compare-and-swap on what policy and the approvals covered: the amount (and withholding, currency, payee and
+      // reference) that is about to be sent, and every approval counted, must be exactly as they were when policy passed.
+      // Both the copy the rail call below is built from and the row as it stands inside the lock are compared.
+      const changed = releaseTermsChanged(checked, releaseTerms(tx as unknown as Db, ob)) ?? releaseTermsChanged(checked, releaseTerms(tx as unknown as Db, mustGet(tx as unknown as Db, obligationId)));
+      if (changed) throw new Error(`Execution refused: the request changed while it was being released (${changed}); it must be checked and approved again`);
       // Re-check the destination inside the lock: an edit between the check above and this point must not slip through.
       const vendorNow = tx.select().from(vendors).where(eq(vendors.id, vendorRow.id)).get();
       if (!vendorNow || !cur.payoutHash || payoutHashOf(vendorNow) !== cur.payoutHash) throw new Error("Execution refused: vendor payout details changed at the moment of release");
@@ -1407,6 +1415,33 @@ export async function executeObligation(db: Db, obligationId: string, opts: Exec
 
   const result = await callRail(db, adapter, started.attemptId, { obligationId, idempotencyKey: started.key, vendor, amountMinor: payableMinor(ob), currency: ob.currency!, memo: started.memo, businessCountry: biz.country, businessId: ob.businessId, ...bankAccountFor(rail, vendorRow) });
   return finishAttempt(db, obligationId, started.attemptId, rail, adapter.mode, result);
+}
+
+/** The parts of a request that policy and its approvals vouch for at release: what is sent, to whom, and who approved it. */
+interface ReleaseTerms {
+  amountMinor: number | null;
+  withheldMinor: number;
+  currency: string | null;
+  vendorId: string | null;
+  sourceRef: string | null;
+  approvalIds: string[];
+}
+
+function releaseTerms(db: Db, ob: typeof obligations.$inferSelect): ReleaseTerms {
+  const approvalIds = db.select({ id: approvals.id }).from(approvals).where(and(eq(approvals.obligationId, ob.id), eq(approvals.decision, "approved"))).all().map((a) => a.id);
+  return { amountMinor: ob.amountMinor, withheldMinor: ob.withheldMinor ?? 0, currency: ob.currency, vendorId: ob.vendorId, sourceRef: ob.sourceRef, approvalIds };
+}
+
+/** What differs between the terms policy passed and the terms about to be sent, or null when nothing does. */
+function releaseTermsChanged(checked: ReleaseTerms, now: ReleaseTerms): string | null {
+  if (now.amountMinor !== checked.amountMinor) return "amount";
+  if (now.withheldMinor !== checked.withheldMinor) return "tax withheld";
+  if (now.currency !== checked.currency) return "currency";
+  if (now.vendorId !== checked.vendorId) return "payee";
+  if (now.sourceRef !== checked.sourceRef) return "reference";
+  // An approval withdrawn or superseded since policy counted it no longer covers this payment.
+  if (checked.approvalIds.some((id) => !now.approvalIds.includes(id))) return "approvals";
+  return null;
 }
 
 /** Refuse (and pull the obligation back to blocked) if the payout destination differs from what was verified and approved. */
