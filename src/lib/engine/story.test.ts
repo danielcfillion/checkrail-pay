@@ -119,16 +119,22 @@ describe("the three-obligation story (mock rails, rule-based agent)", () => {
 });
 
 describe("accounting cash-out", () => {
-  it("counts PayPal fee on top and the Stellar fee inside the amount", async () => {
+  it("counts the fee on top on every rail: PayPal and Stellar alike, and the supplier receives the full amount", async () => {
     const { buildAccountingRecord } = await import("../accounting/record");
     const db2 = openTestDb();
-    await seedDemo(db2, { history: false });
+    const { story } = await seedDemo(db2, { history: false });
     const rows = db2.select().from(obligations).all();
     const pay = rows.find((r) => r.sourceRef === "JOB-HG4D-0921")!;
     await executeObligation(db2, pay.id, { actor: "user:daniel" });
     await confirmSettlement(db2, pay.id, "test");
     const rec = buildAccountingRecord(db2, pay.id)!;
     expect(Number(rec.payload.netPaid)).toBeCloseTo(Number(rec.payload.grossAmount) + Number(rec.payload.feeAmount), 2);
+    expect(rec.payload.feePaidBy).toBe("business");
+    approveObligation(db2, story.stellar, "user:daniel");
+    await executeObligation(db2, story.stellar, { actor: "user:minh" });
+    await confirmSettlement(db2, story.stellar, "test");
+    const st = buildAccountingRecord(db2, story.stellar)!.payload;
+    expect(st).toMatchObject({ rail: "stellar", grossAmount: "750.00", feeAmount: "13.41", netPaid: "763.41", feePaidBy: "business", recipientCurrency: "PHP", recipientReceived: "46486.24" });
   });
 });
 

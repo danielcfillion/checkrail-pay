@@ -5,24 +5,39 @@
    Brand fills (--paypal, --stellar) are for swatches and borders only; text on a
    rail tint uses the matching -text token, which passes 4.5:1 (scripts/contrast-check.mjs). */
 :root {
-  --paper: #edf0f2;
+  --paper: #f4f6f9;
   --sheet: #ffffff;
-  --ink: #10233a;
-  --ink-soft: #5b6b7c;
-  --primary: #10233a;
+  --ink: #0a1628;
+  --ink-soft: #4a5568;
+  --primary: #0a1628;
   --primary-ink: #ffffff;
-  --rule: rgb(91 107 124 / 0.24);
-  --rule-strong: rgb(91 107 124 / 0.5);
+  /* Our action colour: a cobalt that is ours, not PayPal's. One approve-type action per screen uses it. */
+  --action: #1f4fd6;
+  --action-ink: #ffffff;
+  --action-soft: rgb(31 79 214 / 0.1);
+  --rule: rgb(74 85 104 / 0.16);
+  --rule-strong: rgb(74 85 104 / 0.42);
   /* The edge of a text field: a solid colour that reaches 3:1 on the sheet and on paper (WCAG 1.4.11). */
   --field-border: #7a8794;
-  --neutral-soft: rgb(91 107 124 / 0.12);
-  --settled: #0b6e51;
+  --neutral-soft: rgb(74 85 104 / 0.1);
+  --settled: #0b6b4a;
   --settled-ink: #ffffff;
-  --settled-soft: rgb(14 124 91 / 0.08);
-  --attention: #9a5b00;
-  --attention-soft: rgb(154 91 0 / 0.08);
-  --blocked: #a8261d;
-  --blocked-soft: rgb(168 38 29 / 0.1);
+  --settled-soft: rgb(11 107 74 / 0.1);
+  --attention: #8a4b00;
+  --attention-soft: rgb(178 98 0 / 0.12);
+  --blocked: #b42318;
+  --blocked-soft: rgb(180 35 24 / 0.1);
+  /* The one dark surface per screen (the headline number). */
+  --hero: #0a1628;
+  --hero-ink: #ffffff;
+  --hero-soft: #b9c6da;
+  /* Cards lift off the paper with a soft shadow instead of a border. */
+  --card-shadow: 0 1px 2px rgb(10 22 40 / 0.06), 0 8px 24px rgb(10 22 40 / 0.05);
+  --card-edge: rgb(10 22 40 / 0.04);
+  /* The block banner: solid red with white text in both themes. */
+  --alarm: #b42318;
+  --alarm-ink: #ffffff;
+  --alarm-soft: #fde3e0;
   --paypal: #0070e0;
   --paypal-text: #005fc4;
   --paypal-soft: rgb(0 112 224 / 0.1);
@@ -38,30 +53,38 @@
   --chart-paypal: #2f8cf0;
   --chart-stellar: #6a1fd0;
   --chart-bank: var(--rail-bank);
-  --focus: #0070e0;
+  --focus: #1f4fd6;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #0f1923;
-    --sheet: #15222e;
-    --ink: #e6ecf2;
-    --ink-soft: #93a3b4;
+    --paper: #0b111b;
+    --sheet: #131c2a;
+    --ink: #e8edf3;
+    --ink-soft: #98a6b8;
     /* Inverted ink, mirroring light's navy on white: never the PayPal hue. */
-    --primary: #e6ecf2;
-    --primary-ink: #10233a;
-    --rule: rgb(147 163 180 / 0.24);
-    --rule-strong: rgb(147 163 180 / 0.5);
+    --primary: #e8edf3;
+    --primary-ink: #0a1628;
+    --action: #7aa2ff;
+    --action-ink: #0a1628;
+    --action-soft: rgb(122 162 255 / 0.16);
+    --rule: rgb(152 166 184 / 0.18);
+    --rule-strong: rgb(152 166 184 / 0.46);
     --field-border: #6b7a8a;
-    --neutral-soft: rgb(147 163 180 / 0.14);
-    --settled: #3db58f;
-    --settled-ink: #0f1923;
-    --settled-soft: rgb(61 181 143 / 0.16);
-    --attention: #d4983a;
-    --attention-soft: rgb(222 150 40 / 0.18);
-    --blocked: #ec7a70;
-    --blocked-soft: rgb(236 122 112 / 0.14);
+    --neutral-soft: rgb(152 166 184 / 0.14);
+    --settled: #45c09a;
+    --settled-ink: #0b111b;
+    --settled-soft: rgb(69 192 154 / 0.16);
+    --attention: #e0a54a;
+    --attention-soft: rgb(224 165 74 / 0.18);
+    --blocked: #f0857b;
+    --blocked-soft: rgb(240 133 123 / 0.16);
+    --hero: #1a2a44;
+    --hero-ink: #ffffff;
+    --hero-soft: #b9c6da;
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    --card-edge: rgb(152 166 184 / 0.14);
     --paypal: #4d9bf0;
     --paypal-text: #63a8f2;
     --paypal-soft: rgb(77 155 240 / 0.14);
@@ -76,30 +99,38 @@
     --chart-paypal: #4f97ea;
     --chart-stellar: #8a45ee;
     --chart-bank: var(--rail-bank);
-    --focus: #4d9bf0;
+    --focus: #7aa2ff;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #0f1923;
-  --sheet: #15222e;
-  --ink: #e6ecf2;
-  --ink-soft: #93a3b4;
+  --paper: #0b111b;
+  --sheet: #131c2a;
+  --ink: #e8edf3;
+  --ink-soft: #98a6b8;
   /* Inverted ink, mirroring light's navy on white: never the PayPal hue. */
-  --primary: #e6ecf2;
-  --primary-ink: #10233a;
-  --rule: rgb(147 163 180 / 0.24);
-  --rule-strong: rgb(147 163 180 / 0.5);
+  --primary: #e8edf3;
+  --primary-ink: #0a1628;
+  --action: #7aa2ff;
+  --action-ink: #0a1628;
+  --action-soft: rgb(122 162 255 / 0.16);
+  --rule: rgb(152 166 184 / 0.18);
+  --rule-strong: rgb(152 166 184 / 0.46);
   --field-border: #6b7a8a;
-  --neutral-soft: rgb(147 163 180 / 0.14);
-  --settled: #3db58f;
-  --settled-ink: #0f1923;
-  --settled-soft: rgb(61 181 143 / 0.16);
-  --attention: #d4983a;
-  --attention-soft: rgb(222 150 40 / 0.18);
-  --blocked: #ec7a70;
-  --blocked-soft: rgb(236 122 112 / 0.14);
+  --neutral-soft: rgb(152 166 184 / 0.14);
+  --settled: #45c09a;
+  --settled-ink: #0b111b;
+  --settled-soft: rgb(69 192 154 / 0.16);
+  --attention: #e0a54a;
+  --attention-soft: rgb(224 165 74 / 0.18);
+  --blocked: #f0857b;
+  --blocked-soft: rgb(240 133 123 / 0.16);
+  --hero: #1a2a44;
+  --hero-ink: #ffffff;
+  --hero-soft: #b9c6da;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --card-edge: rgb(152 166 184 / 0.14);
   --paypal: #4d9bf0;
   --paypal-text: #63a8f2;
   --paypal-soft: rgb(77 155 240 / 0.14);
@@ -114,7 +145,7 @@
   --chart-paypal: #4f97ea;
   --chart-stellar: #8a45ee;
   --chart-bank: var(--rail-bank);
-  --focus: #4d9bf0;
+  --focus: #7aa2ff;
   color-scheme: dark;
 }
 
@@ -143,7 +174,13 @@
   --color-wise: var(--wise);
   --color-wise-soft: var(--wise-soft);
   --color-focus: var(--focus);
-  --font-sans: var(--font-archivo), system-ui, sans-serif;
+  --color-action: var(--action);
+  --color-action-soft: var(--action-soft);
+  --color-hero: var(--hero);
+  --color-hero-ink: var(--hero-ink);
+  --color-hero-soft: var(--hero-soft);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --text-2xs: 11px;
   --text-2xs--line-height: 16px;
   --text-xs: 12px;
@@ -171,21 +208,19 @@ html {
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-archivo), system-ui, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
   font-size: 14px;
   line-height: 20px;
-  font-stretch: 100%;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01" 0;
 }
 
-/* Width is the hierarchy device. */
+/* Weight and tight tracking carry the hierarchy. */
 .wide {
-  font-stretch: 112%;
-  letter-spacing: -0.02em;
-  font-weight: 600;
+  letter-spacing: -0.025em;
+  font-weight: 700;
 }
 .dense {
-  font-stretch: 88%;
   font-weight: 500;
   font-size: 12px;
   line-height: 16px;
@@ -195,11 +230,107 @@ body {
   font-feature-settings: "tnum";
 }
 
-/* Hairlines separate panels; no shadows anywhere. */
+/* Cards lift off the paper: a soft shadow and a near-invisible edge, no hard border (the edge carries the card in dark). */
 .panel {
   background: var(--sheet);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
+  border: 1px solid var(--card-edge);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+}
+/* The block moment: one solid red banner, sliding in when the page opens on a blocked request. */
+.decision-alarm {
+  background: var(--alarm);
+  color: var(--alarm-ink);
+  box-shadow: 0 10px 28px rgb(180 35 24 / 0.24);
+}
+.decision-alarm .text-ink,
+.decision-alarm .text-ink-soft {
+  color: var(--alarm-soft);
+}
+.decision-alarm .link {
+  color: var(--alarm-ink);
+  text-decoration-color: rgb(255 255 255 / 0.6);
+}
+.decision-alarm .btn-primary {
+  background: var(--alarm-ink);
+  color: #0a1628;
+  border-color: var(--alarm-ink);
+}
+.decision-alarm .btn-danger {
+  background: transparent;
+  color: var(--alarm-ink);
+  border-color: rgb(255 255 255 / 0.7);
+}
+.decision-alarm :focus-visible {
+  outline-color: var(--alarm-ink);
+}
+@keyframes decision-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.99);
+  }
+}
+.decision-enter {
+  animation: decision-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* A struck amount: the line draws across once, left to right, after the banner lands. */
+.strike {
+  position: relative;
+  text-decoration: none;
+}
+.strike::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: 52%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--blocked);
+  transform-origin: left center;
+  animation: strike-draw 420ms 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes strike-draw {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* A row that just arrived (an agent asked a moment ago) slides in and its tint fades. */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+    background-color: var(--action-soft);
+  }
+  40% {
+    opacity: 1;
+    transform: none;
+    background-color: var(--action-soft);
+  }
+}
+.row-new {
+  animation: row-in 1600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* A card inside a card flattens: one level of lift only. */
+.panel .panel:not(.panel-hero) {
+  box-shadow: none;
+  border-color: transparent;
+}
+
+/* The one dark card per screen. */
+.panel-hero {
+  background: var(--hero);
+  color: var(--hero-ink);
+  border-color: transparent;
+}
+.panel-hero .text-ink-soft {
+  color: var(--hero-soft);
+}
+.mono {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
 }
 .hairline {
   border-color: var(--rule);
@@ -238,9 +369,9 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 4px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
   font-size: 14px;
   line-height: 20px;
   font-weight: 500;
@@ -249,18 +380,40 @@ summary:focus-visible {
   color: var(--ink);
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 120ms ease-out, opacity 150ms ease-out;
 }
 .btn:hover {
   border-color: var(--ink-soft);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
+.btn-primary:disabled,
+.btn-action:disabled {
+  opacity: 1;
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px dashed var(--ink-soft);
+}
 .btn-primary {
   background: var(--primary);
   color: var(--primary-ink);
   border-color: var(--primary);
+  font-weight: 600;
+}
+.btn-action {
+  background: var(--action);
+  color: var(--action-ink);
+  border-color: var(--action);
+  font-weight: 600;
+}
+.btn-action:hover {
+  border-color: var(--action);
+  opacity: 0.9;
 }
 .btn-primary:hover {
   border-color: var(--primary);
@@ -278,23 +431,24 @@ summary:focus-visible {
   background: var(--settled);
   color: var(--settled-ink);
   border-color: var(--settled);
+  font-weight: 600;
 }
 .btn-settled:hover {
   border-color: var(--settled);
   opacity: 0.92;
 }
 .btn-sm {
-  height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 /* Form fields */
 .field {
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 4px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
   border: 1px solid var(--field-border);
   background: var(--sheet);
   color: var(--ink);
@@ -302,7 +456,7 @@ summary:focus-visible {
 }
 textarea.field {
   height: auto;
-  padding: 8px 10px;
+  padding: 9px 12px;
   line-height: 20px;
 }
 /* Full ink-soft (5.5:1 on the sheet): a placeholder at 80% fell under 4.5:1 in the light theme. */
@@ -323,9 +477,16 @@ table.ledger {
   width: 100%;
   border-collapse: collapse;
 }
+table.ledger th:first-child,
+table.ledger td:first-child {
+  padding-left: 16px;
+}
+table.ledger th:last-child,
+table.ledger td:last-child {
+  padding-right: 16px;
+}
 table.ledger th {
   text-align: left;
-  font-stretch: 88%;
   font-weight: 500;
   font-size: 12px;
   line-height: 16px;
@@ -335,7 +496,7 @@ table.ledger th {
   white-space: nowrap;
 }
 table.ledger td {
-  padding: 10px 12px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--rule);
   vertical-align: middle;
 }
@@ -358,10 +519,64 @@ table.ledger td.r {
 .dl-fill {
   transition: width 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* On arrival the track draws from the start: the dot travels to where the payment is, or the line runs to the check
+   that stopped it and the red X lands there. */
+@keyframes dl-fill-in {
+  from {
+    width: 0;
+  }
+}
+@keyframes dl-marker-in {
+  from {
+    left: 0%;
+  }
+}
+@keyframes dl-break-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+.dl-animate .dl-fill {
+  animation: dl-fill-in 650ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.dl-animate .dl-marker {
+  animation: dl-marker-in 650ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.dl-break {
+  transform: translate(-50%, -50%);
+}
+.dl-animate .dl-break {
+  animation: dl-break-in 360ms 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
 @media (prefers-reduced-motion: reduce) {
   .dl-marker,
   .dl-fill {
     transition: none;
+  }
+  .dl-animate .dl-fill,
+  .dl-animate .dl-marker,
+  .dl-animate .dl-break {
+    animation: none;
+  }
+  .btn {
+    transition: none;
+  }
+  .decision-enter,
+  .row-new,
+  .strike::after {
+    animation: none;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
   }
 }
 
@@ -389,7 +604,7 @@ table.ledger td.r {
     max-width: 100%;
     padding: 3px 10px 3px 8px;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: 999px;
     font-size: 12px;
     line-height: 16px;
     font-weight: 500;
@@ -506,8 +721,12 @@ table.ledger td.r {
 .release-bar {
   transition: width 1s linear;
 }
+.release-ring {
+  transition: stroke-dashoffset 1s linear;
+}
 @media (prefers-reduced-motion: reduce) {
-  .release-bar {
+  .release-bar,
+  .release-ring {
     transition: none;
   }
 }

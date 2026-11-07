@@ -7,7 +7,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; hrefs: readonly string[]
   { label: "Pay", hrefs: ["/", "/obligations", "/exceptions", "/runs", "/agents"] },
   { label: "People", hrefs: ["/vendors"] },
   { label: "Books", hrefs: ["/ledger", "/accounting", "/books", "/close"] },
-  { label: "Admin", hrefs: ["/audit", "/settings"] },
+  { label: "Admin", hrefs: ["/onboarding", "/audit", "/settings"] },
 ];
 
 /** The four sections on the phone bar; everything else is one tap away under More. */

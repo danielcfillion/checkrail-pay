@@ -7,7 +7,9 @@ import type { NextConfig } from "next";
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  // Development only: React Refresh evaluates modules with eval, so `npm run dev` needs 'unsafe-eval' to hydrate.
+  // Production (`npm run build && npm start`, the hosted demo) never gets it.
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
@@ -29,7 +31,7 @@ const common = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ["better-sqlite3", "@stellar/stellar-sdk", "@anthropic-ai/sdk", "pdfjs-dist"],
+  serverExternalPackages: ["better-sqlite3", "@stellar/stellar-sdk", "@anthropic-ai/sdk", "pdfjs-dist", "exceljs"],
   experimental: { serverActions: { bodySizeLimit: "10mb" } },
   async headers() {
     return [

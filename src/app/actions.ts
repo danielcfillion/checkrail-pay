@@ -7,7 +7,7 @@ import { getDb } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { businesses, obligations, paymentRunItems, paymentRuns, vendorChanges } from "@/lib/db/schema";
 import { audit } from "@/lib/domain/stateMachine";
-import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
+import { amendObligation, approveObligation, assertOwnObligation, recheckObligation, recheckVendorItems, refreshQuotesIfStale, repayRefunded, setObligationDates, confirmSettlement, executeObligation, ingestObligation, linkWaitingToBill, rejectObligation, retryAmbiguousExecution, retryFailed, resolveManually } from "@/lib/engine/orchestrator";
 import { ACTOR_HEADER, PERSONA_COOKIE, PERSONA_HEADER, ROLE_HEADER, configuredUsers, personasAllowed } from "@/lib/basicAuth";
 import { cookies } from "next/headers";
 import { DEMO_PERSONAS, isRole, type Permission } from "@/lib/auth/roles";
@@ -19,6 +19,7 @@ import { exportPendingCsv } from "@/lib/accounting/record";
 import { exportNewXeroBills } from "@/lib/accounting/xeroBills";
 import { uploadDocument, type UploadResult } from "@/lib/engine/attachments";
 import { seedDemo } from "@/lib/demo/seed";
+import { resetActiveSandbox, sandboxActive } from "@/lib/sandbox/server";
 import type { Rail, SourceType } from "@/lib/domain/types";
 import { cancelAutopilotRelease, runAutopilot, setAutonomy, setAutopilotPaused, type AutonomyChange } from "@/lib/engine/autopilot";
 import { signOffDailyClose } from "@/lib/engine/dailyClose";
@@ -321,6 +322,14 @@ export async function resetDemoAction(): Promise<ActionResult> {
   try {
     // Resetting wipes obligations, payment attempts, settlements and the audit log. Never with real rails.
     if (isLiveRails()) return { ok: false, message: "Demo reset is disabled when RAIL_MODE=live." };
+    // Sandbox mode: Start over replaces this browser's own copy with a fresh one. Nobody else's copy changes, so
+    // anyone signed in may do it, whichever demo person they are acting as.
+    if (sandboxActive()) {
+      await currentActor();
+      if (!resetActiveSandbox()) return { ok: false, message: "No copy of the demo was found for this browser. Reload the page and try again." };
+      done();
+      return { ok: true, message: "Started over. Your copy has the four opening requests again: two are blocked, one is ready to pay over PayPal, one needs approval." };
+    }
     await act("reset_demo", "reset the demo");
     await seedDemo(getDb(), { history: true });
     done();
@@ -667,7 +676,17 @@ export async function returnBankLineAction(lineId: string, reason: string): Prom
 export async function createBillAction(vendorId: string, bill: { kind: string; reference: string; totalMinor: number; currency: string; dueDate?: string | null; note?: string | null }): Promise<ActionResult & { id?: string }> {
   return inRequest(async () => {
   try {
-    const id = await withBusiness((db, b, who) => createBill(db, b, who, vendorId, bill));
+    const id = await withBusiness(async (db, b, who) => {
+      const made = createBill(db, b, who, vendorId, bill);
+      // Requests from outside callers that already name this bill are put on it and checked again.
+      // The bill is recorded either way: a failure here is logged, not shown to the clerk as a failed bill.
+      try {
+        await linkWaitingToBill(db, made, who.id);
+      } catch (e) {
+        console.error("[checkrail] linking waiting requests to a new bill failed", e);
+      }
+      return made;
+    });
     done([`/vendors/${vendorId}`]);
     return { ok: true, message: "Recorded.", id };
   } catch (e) {
@@ -706,7 +725,18 @@ export async function applyCreditAction(creditBillId: string, billId: string, am
 export async function settleAdvanceAction(advanceBillId: string, receiptsMinor: number, note?: string): Promise<ActionResult> {
   return inRequest(async () => {
   try {
-    const r = await withBusiness((db, b, who) => settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined));
+    const r = await withBusiness(async (db, b, who) => {
+      const out = settleAdvance(db, b, who, advanceBillId, receiptsMinor, typeof note === "string" ? note : undefined);
+      // The difference bill picks up outside requests already waiting that name it, as any new bill does.
+      if (out.differenceBillId) {
+        try {
+          await linkWaitingToBill(db, out.differenceBillId, who.id);
+        } catch (e) {
+          console.error("[checkrail] linking waiting requests to a new bill failed", e);
+        }
+      }
+      return out;
+    });
     done(["/vendors"]);
     return { ok: true, message: r.owedTo === "vendor" ? "Settled. The overspend is recorded as owed to the vendor." : r.owedTo === "business" ? "Settled. The unspent part is a credit to set against their next bill." : "Settled exactly." };
   } catch (e) {
@@ -758,16 +788,17 @@ export async function importDeparturesAction(csv: string): Promise<ActionResult 
   });
 }
 
-export async function exportXeroBillsAction(): Promise<ActionResult & { csv?: string }> {
+export async function exportXeroBillsAction(): Promise<ActionResult & { exportId?: string }> {
   return inRequest(async () => {
   try {
     const who = await act("export", "export bills");
     const db = getDb();
     const biz = await db.query.businesses.findFirst();
     if (!biz) return { ok: false, message: "No business configured." };
-    const { csv, count } = exportNewXeroBills(db, biz.id, who.id);
+    const { count, exportId } = exportNewXeroBills(db, biz.id, who.id);
     done(["/accounting"]);
-    return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import.` : "No new bills since the last export.", csv: count ? csv : undefined };
+    // The file is downloaded from the export's record, so the first download and any later one are the same bytes.
+    return { ok: true, message: count ? `${count} bill${count === 1 ? "" : "s"} in the file. In Xero: Business, Bills to pay, Import. Import it once.` : "No new bills since the last export.", exportId: exportId ?? undefined };
   } catch (e) {
     return { ok: false, message: (e as Error).message };
   }

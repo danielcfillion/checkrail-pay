@@ -105,7 +105,7 @@ describe("check_payment", () => {
     expect(r.summary).toMatch(/^Do not pay: /);
     expect(r.next_steps.at(-1)).toMatch(/Do not pay this through any other tool/);
     expect(counts(db)).toEqual(before);
-    expect(db.select().from(agentChecks).all()).toHaveLength(1);
+    expect(db.select().from(agentChecks).all().filter((c) => c.agent === checker.name)).toHaveLength(1);
   });
 
   it("blocks a job PayPal already paid and hands the agent the PayPal transaction id", async () => {
@@ -231,7 +231,7 @@ describe("the MCP handler", () => {
 
   it("lists only the tools the key allows, and refuses the others", async () => {
     expect(toolsFor(checker).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule"]);
-    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status"]);
+    expect(toolsFor(requester).map((t) => t.name)).toEqual(["check_payment", "lookup_payee", "explain_rule", "request_payment", "payment_status", "mandate_status"]);
     const r = (await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_payment", arguments: { ...ROSA, idempotency_key: "rosa-9999" } } })) as { error: { code: number } };
     expect(r.error.code).toBe(-32602);
     expect(db.select().from(obligations).all().filter((o) => o.rawInput.includes("[Outside agent"))).toEqual([]);
@@ -315,7 +315,7 @@ describe("review fixes (independent review of the agent guard, 31 Oct)", () => {
       return real(...args);
     });
     try {
-      await expect(requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag4-key-0001" })).rejects.toThrow(/could not create the request/);
+      await expect(requestPayment(db, bookings, { ...ROSA, idempotency_key: "ag4-key-0001" })).rejects.toThrow(/^Checkrail could not process this request\. Nothing was paid\.$/);
     } finally {
       spy.mockRestore();
     }
@@ -753,7 +753,27 @@ describe("review fixes, round 5 (31 Oct)", () => {
     const second = await requestPayment(db, bookings, { payee: "Maria Santos", amount: "175", currency: "USD", reference: "INV-MS-8002", description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: "Invoice INV-MS-8002", amount: "175", reference: "INV-MS-8002", excerpt: "Maria Santos. Total USD 175.00." }, ...booking], idempotency_key: "ag51-key-0002" });
     expect(first.status).not.toBe("blocked");
     expect(second.status).toBe("waiting_for_approval");
-    expect(second.reasons.join(" ")).toMatch(/Shares booking or order/);
+    expect(second.reasons).toContain("Shares booking or order with another payment to this supplier; a person confirms this is another part of the job, not the same one again");
+  });
+
+  it("an agent is never told another payment's state, date, amount or id: shared booking and reused reference, on check, request and status", async () => {
+    const leaks = /awaiting_approval|awaiting approval|approved|settled|execution_pending|blocked|\d{4}-\d{2}-\d{2}|obl_|USD 170/;
+    const booking = [{ kind: "booking", label: "Booking BKG-66101", amount: null, reference: "BKG-66101" }];
+    const inv = (ref: string, amount: string) => ({ payee: "Maria Santos", amount, currency: "USD", reference: ref, description: "Maria Santos, guiding.", evidence: [{ kind: "invoice", label: `Invoice ${ref}`, amount, reference: ref, excerpt: `Maria Santos. Total USD ${amount}.` }, ...booking] });
+    await requestPayment(db, bookings, { ...inv("INV-MS-8101", "170"), idempotency_key: "dup-key-00001" });
+    // Shared booking: the check, the request and its status all say only that another payment shares it.
+    const sharedText = "Shares booking or order with another payment to this supplier; a person confirms this is another part of the job, not the same one again";
+    const c = await checkPayment(db, bookings, inv("INV-MS-8102", "175"));
+    expect(c.warnings.map((w) => w.message)).toContain(sharedText);
+    const r = await requestPayment(db, bookings, { ...inv("INV-MS-8102", "175"), idempotency_key: "dup-key-00002" });
+    expect(r.reasons).toContain(sharedText);
+    const s = paymentStatus(db, bookings, { request_id: r.request_id });
+    expect(s.reasons).toContain(sharedText);
+    for (const answer of [c.blocks, c.warnings, c.summary, r.reasons, r.summary, s.reasons, s.summary]) expect(JSON.stringify(answer)).not.toMatch(leaks);
+    // The same reference again: blocked, and told only that another payment used it.
+    const again = await checkPayment(db, bookings, { ...inv("INV-MS-8101", "180"), evidence: [{ kind: "invoice", label: "Invoice INV-MS-8101", amount: "180", reference: "INV-MS-8101", excerpt: "Maria Santos. Total USD 180.00." }] });
+    expect(JSON.stringify([again.blocks, again.warnings, again.summary])).not.toMatch(leaks);
+    expect([...again.blocks, ...again.warnings].map((x) => x.message).join(" ")).toMatch(/another payment to this supplier/);
   });
 
   it("AG5-2: a contract number shaped like a job id blocks no later payment", async () => {

@@ -1,23 +1,26 @@
 import type { AccountingPayload } from "./record";
+import { feePaidByOf } from "./billLine";
 
 /**
- * Xero adapter: the interface Checkrail Pay writes to, with the OAuth path stubbed.
+ * Xero mapping and the adapter Checkrail Pay writes through.
  *
- * Human Gate: a Xero developer app and OAuth consent are required before
- * `XeroAdapter.push` can run against a real tenant. Until then the mapping
- * below is exercised by tests and the CSV exporter, which produces the same
- * fields in the same order, so the switch is a configuration change.
+ * The live connection (OAuth, token storage, the account mapping and the push itself) is in xeroAuth.ts,
+ * xeroClient.ts and xeroSync.ts; see docs/XERO.md. Without a connection the bills file and the settlement CSV carry
+ * the same fields in the same order, so the books look the same whichever path a record took.
  *
  * Mapping (Xero Accounting API):
  *   Contact            <- vendorName (+ country on the address)
  *   Invoice (ACCPAY)   <- reference, billDate, description, grossAmount/grossCurrency, accountCode
- *   Payment            <- paymentDate, netPaid, bank account for the rail (PayPal clearing / Stellar treasury)
- *   Bank fee line      <- feeAmount on a "Bank fees" account, so gross, fee and net reconcile (netPaid is what left the account on every rail)
+ *   Payment            <- paymentDate, the amount sent (gross less any tax withheld), bank account for the rail
+ *   Bank fee line      <- feeAmount on the fee account, so gross, fee and net reconcile (netPaid is what left the account on every rail)
  */
 export interface AccountingAdapter {
   readonly destination: "xero" | "quickbooks" | "csv";
   push(record: AccountingPayload): Promise<{ externalRef: string }>;
 }
+
+/** Minor units (hundredths) of a decimal string, so amounts are added and subtracted without float drift. */
+const hundredths = (v: string | undefined | null) => Math.round(Number(v || 0) * 100);
 
 export function toXeroBill(r: AccountingPayload) {
   return {
@@ -40,47 +43,29 @@ export function toXeroPayment(r: AccountingPayload, bankAccountCode: string) {
     Invoice: { InvoiceNumber: r.reference },
     Account: { Code: bankAccountCode },
     Date: r.paymentDate,
-    Amount: Number(r.grossAmount),
+    // What was sent: the bill less any tax kept back for the tax office (that part is not paid to the vendor).
+    Amount: (hundredths(r.grossAmount) - hundredths(r.withheldAmount)) / 100,
     Reference: `${r.rail}:${r.externalTransactionId}`,
   };
 }
 
-/**
- * A separate fee spend exists whenever the fee left the bank account on top of the bill: PayPal, Wise and the bank
- * file, so the payment plus the fee equals netPaid. On the Stellar path the fee is deducted from the amount in
- * transit, so the payer's cash out equals the bill and the recipient bears the fee; booking a second spend would
- * double count it.
- */
-export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: string) {
-  if (Number(r.feeAmount) === 0 || r.rail === "stellar") return null;
-  return {
-    Type: "SPEND",
-    Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : "Bank transfer fee" },
-    Date: r.paymentDate,
-    BankAccount: { Code: bankAccountCode },
-    Reference: `fee ${r.reference}`,
-    LineItems: [{ Description: `Payment fee for ${r.reference}`, UnitAmount: Number(r.feeAmount), AccountCode: "404" }],
-  };
+export function xeroFeeReference(r: Pick<AccountingPayload, "reference" | "obligationId">): string {
+  return `fee ${r.reference} ${r.obligationId}`;
 }
 
-export class XeroAdapter implements AccountingAdapter {
-  readonly destination = "xero" as const;
-  constructor(private readonly tenant: { accessToken: string; tenantId: string; paypalClearingCode: string; stellarTreasuryCode: string }) {}
-
-  async push(r: AccountingPayload): Promise<{ externalRef: string }> {
-    const bank = r.rail === "paypal" ? this.tenant.paypalClearingCode : this.tenant.stellarTreasuryCode;
-    const headers = { Authorization: `Bearer ${this.tenant.accessToken}`, "xero-tenant-id": this.tenant.tenantId, "Content-Type": "application/json", Accept: "application/json" };
-    const base = "https://api.xero.com/api.xro/2.0";
-    const bill = await fetch(`${base}/Invoices`, { method: "POST", headers, body: JSON.stringify({ Invoices: [toXeroBill(r)] }) });
-    if (!bill.ok) throw new Error(`Xero bill failed: HTTP ${bill.status}`);
-    const billJson = (await bill.json()) as { Invoices: Array<{ InvoiceID: string }> };
-    const pay = await fetch(`${base}/Payments`, { method: "PUT", headers, body: JSON.stringify({ Payments: [toXeroPayment(r, bank)] }) });
-    if (!pay.ok) throw new Error(`Xero payment failed: HTTP ${pay.status}`);
-    const fee = toXeroFeeTransaction(r, bank);
-    if (fee) {
-      const f = await fetch(`${base}/BankTransactions`, { method: "PUT", headers, body: JSON.stringify({ BankTransactions: [fee] }) });
-      if (!f.ok) throw new Error(`Xero fee transaction failed: HTTP ${f.status}`);
-    }
-    return { externalRef: billJson.Invoices[0]?.InvoiceID ?? r.reference };
-  }
+/**
+ * A separate fee spend whenever there is a fee: the business pays it on top of the bill on every rail (Stellar grosses
+ * up what it sends so the vendor still receives the full amount), so the payment plus the fee equals netPaid.
+ */
+export function toXeroFeeTransaction(r: AccountingPayload, bankAccountCode: string, feeAccountCode = "404") {
+  if (Number(r.feeAmount) === 0 || feePaidByOf(r) === "recipient") return null; // an old Stellar record: the recipient bore it
+  return {
+    Type: "SPEND",
+    Contact: { Name: r.rail === "paypal" ? "PayPal" : r.rail === "wise" ? "Wise" : r.rail === "stellar" ? "Stellar anchor fee" : "Bank transfer fee" },
+    Date: r.paymentDate,
+    BankAccount: { Code: bankAccountCode },
+    // One per payment: a deposit and its balance share the bill's reference, so the payment's own id goes on too.
+    Reference: xeroFeeReference(r),
+    LineItems: [{ Description: `Payment fee for ${r.reference}`, Quantity: 1, UnitAmount: Number(r.feeAmount), AccountCode: feeAccountCode }],
+  };
 }

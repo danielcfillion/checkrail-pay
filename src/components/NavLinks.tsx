@@ -34,8 +34,7 @@ export function NavLinks({ items, mobile = false, demoGuide = false, trimmed = f
           href={it.href}
           aria-current={active ? "page" : undefined}
           title={it.label}
-          className={`flex h-8 items-center gap-2.5 rounded px-2 max-lg:justify-center lg:px-2 ${active ? "bg-sheet font-medium text-ink" : "text-ink-soft hover:text-ink"}`}
-          style={active ? { boxShadow: "inset 2px 0 0 var(--ink)" } : undefined}
+          className={`flex h-9 items-center gap-2.5 rounded-[10px] px-2.5 transition-colors duration-150 max-lg:justify-center ${active ? "bg-action-soft font-semibold text-ink" : "text-ink-soft hover:bg-neutral-soft hover:text-ink"}`}
         >
           <Icon name={it.icon} />
           <span className="hidden lg:inline">{it.label}</span>
@@ -52,7 +51,7 @@ export function NavLinks({ items, mobile = false, demoGuide = false, trimmed = f
           {t.primary.map(row)}
         </ul>
         <details className="nav-more" open={moreOpen} onToggle={(e) => setMoreOpen((e.currentTarget as HTMLDetailsElement).open)}>
-          <summary className="flex h-8 w-full items-center gap-2.5 rounded px-2 text-sm font-normal text-ink-soft hover:text-ink max-lg:justify-center" title="More sections">
+          <summary className="flex h-9 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-sm font-normal text-ink-soft hover:text-ink max-lg:justify-center" title="More sections">
             <Icon name="more" />
             <span className="hidden lg:inline">More</span>
           </summary>
@@ -274,6 +273,13 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M2 8h3l2-4 2 8 2-4h3" />
+        </svg>
+      );
+    case "setup":
+      return (
+        <svg {...common}>
+          <path d="M3 4.5h6M3 8h5M3 11.5h4" />
+          <path d="M10 10.5l1.6 1.6 2.9-3.6" />
         </svg>
       );
     case "inbox":

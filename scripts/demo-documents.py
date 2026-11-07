@@ -140,9 +140,58 @@ def fake_trip_sheet() -> None:
     finish(c, paths)
 
 
+def try_clean_trip_sheet() -> None:
+    """Try it yourself, sample 1: Ridgeline's own trip sheet for Rosa's 2-day Cebu departure at her day rate."""
+    c, paths = page("tripsheet-ceb2d-1029.pdf", title="Trip completion sheet CEB-2D-1029")
+    y = header(
+        c,
+        "RIDGELINE EXPEDITIONS, Trip completion sheet",
+        [
+            "Departure CEB-2D-1029, Cebu day trips",
+            "Guide: Rosa Villanueva",
+            "Dates: 29 to 30 October 2026   Guests: 5",
+            "Signed off by ops: 30 October 2026",
+        ],
+    )
+    table(c, y, [("Guide fee, Rosa Villanueva, ref JOB-CEB2D-1029", "2 days", "USD 95.00", "USD 190.00")], "USD 190.00")
+    finish(c, paths)
+
+
+def try_overcharge_trip_sheet() -> None:
+    """Try it yourself, sample 2: the trip sheet behind Phuong's invoice, 4 vehicle-days at the contract rate."""
+    c, paths = page("tripsheet-hg4d-1026.pdf", title="Trip completion sheet HG-4D-1026")
+    y = header(
+        c,
+        "RIDGELINE EXPEDITIONS, Trip completion sheet",
+        [
+            "Departure HG-4D-1026, Ha Giang 4-day loop",
+            "Driver: Phuong Transport",
+            "Dates: 26 to 29 October 2026   Guests: 8   Tolls: none logged",
+            "Signed off by ops: 29 October 2026",
+        ],
+    )
+    table(c, y, [("Van and driver, Phuong Transport, ref INV-2026-0171", "4 days", "USD 200.00", "USD 800.00")], "USD 800.00")
+    finish(c, paths)
+
+
+def try_repeat_invoice() -> None:
+    """Try it yourself, sample 3: Phuong's invoice INV-2026-0138, sent again. It was paid 12 days before."""
+    c, paths = page("invoice-phuong-0138.pdf", title="Invoice INV-2026-0138")
+    y = header(
+        c,
+        "PHUONG TRANSPORT",
+        ["Ha Giang  |  phuong.transport@example.com", "INVOICE INV-2026-0138", "Date: 18 October 2026", "Bill to: Ridgeline Expeditions LLC"],
+    )
+    table(c, y, [("Van hire with driver, Phuong Transport", "3 days", "USD 200.00", "USD 600.00")], "USD 600.00")
+    finish(c, paths)
+
+
 if __name__ == "__main__":
     for d in OUT:
         d.mkdir(parents=True, exist_ok=True)
     hidden_text_invoice()
     new_email_invoice()
     fake_trip_sheet()
+    try_clean_trip_sheet()
+    try_overcharge_trip_sheet()
+    try_repeat_invoice()

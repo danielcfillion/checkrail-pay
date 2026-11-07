@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb } from "../db";
-import { businesses, obligations, settlements, vendors } from "../db/schema";
+import { businesses, obligations, routeQuotes, settlements, vendors } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { DEFAULT_POLICY } from "../domain/types";
-import { confirmSettlement, executeObligation, ingestObligation } from "./orchestrator";
+import { confirmSettlement, executeObligation, ingestObligation, toProfile } from "./orchestrator";
+import { quotePayPal } from "../rails/quoteModel";
 import { form1099Report, taxFormWarning, withholdingFor } from "./taxes";
 import { resetRails } from "../rails";
 
@@ -38,6 +39,12 @@ describe("tax", () => {
     const o = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
     expect(o.withheldMinor).toBe(4_800);
     expect(o.state).toBe("approved");
+    // Every rail is quoted on what is actually sent (USD 152), so a fee, and a Stellar gross-up, is on that, not the USD 200 bill.
+    const quoted = db.select().from(routeQuotes).where(eq(routeQuotes.obligationId, id)).all();
+    expect(quoted.length).toBeGreaterThan(0);
+    for (const q of quoted) expect(q.sendAmountMinor).toBe(15_200);
+    const pp = quoted.find((q) => q.rail === "paypal")!;
+    expect(pp.feeMinor).toBe(quotePayPal(toProfile(db.select().from(vendors).where(eq(vendors.id, "ven_jake")).get()!), 15_200, "USD", "US").feeMinor);
     await executeObligation(db, id, { actor: "user:lan" });
     await confirmSettlement(db, id);
     expect(db.select().from(settlements).where(eq(settlements.obligationId, id)).get()!.grossMinor).toBe(15_200);

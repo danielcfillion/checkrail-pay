@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cancelWindowText } from "@/components/cancel-window";
 import { TOUCH_INLINE } from "@/components/RequestPanels";
 import { getViewer } from "@/lib/viewer";
 import { getDb } from "@/lib/db";
@@ -75,7 +76,7 @@ export default async function DailyClosePage() {
         actions={!viewer || viewer.can("sign_off") ? <span className="max-lg:hidden"><SignOffButton throughSeq={c.throughSeq} attention={c.attention.length} /></span> : <span className="dense text-ink-soft max-lg:hidden">An approver or the owner signs off</span>}
       />
 
-      <dl className="grid grid-cols-2 gap-y-4 border-y hairline py-4 lg:grid-cols-5 lg:divide-x lg:divide-[color:var(--rule)]">
+      <dl className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
         <Figure label="Needs a look" value={String(c.attention.length)} note={c.attention.length ? "listed below, most serious first" : "nothing flagged by the rules"} tone={c.attention.length ? "attention" : undefined} />
         <Figure label="Waiting on you" value={String(mineRows.length)} note={mineRows.length ? "the ones you can act on" : "nothing waiting on you"} tone={mineRows.length ? "attention" : undefined} />
         <Figure label="Sent by autopilot" value={formatMoneySymbol(c.totals.agentMinor, cur)} note={pluralise(c.totals.agentCount, "payment")} tone={c.totals.agentCount ? "settled" : undefined} />
@@ -298,17 +299,17 @@ function changeText(detail: Record<string, unknown>, cur: string): string {
   if (from.autonomy !== to.autonomy) parts.push(`${String(from.autonomy ?? "assist")} to ${String(to.autonomy)}`);
   if (from.perPaymentCap !== to.perPaymentCap) parts.push(`per-payment cap ${formatMoneySymbol(Number(to.perPaymentCap), cur)}`);
   if (from.dailyCap !== to.dailyCap) parts.push(`daily cap ${formatMoneySymbol(Number(to.dailyCap), cur)}`);
-  if (from.windowSeconds !== to.windowSeconds) parts.push(`cancel window ${Math.round(Number(to.windowSeconds) / 60)} min`);
+  if (from.windowSeconds !== to.windowSeconds) parts.push(`cancel window ${cancelWindowText(Number(to.windowSeconds))}`);
   return parts.length ? `: ${parts.join(", ")}` : "";
 }
 
 function Figure({ label, value, note, tone }: { label: string; value: string; note?: React.ReactNode; tone?: "attention" | "settled" | "blocked" }) {
   const colour = tone === "attention" ? "text-attention" : tone === "settled" ? "text-settled" : tone === "blocked" ? "text-blocked" : "";
   return (
-    <div className="px-1 lg:px-5 lg:first:pl-1">
-      <dt className="dense text-ink-soft">{label}</dt>
-      <dd className={`wide num mt-1 text-2xl ${colour}`}>{value}</dd>
-      {note ? <dd className="mt-0.5 text-xs text-ink-soft">{note}</dd> : null}
+    <div className="panel min-w-0 px-5 py-4">
+      <dt className="text-[13px] text-ink-soft">{label}</dt>
+      <dd className={`wide num mt-1.5 text-[26px] leading-8 ${colour}`}>{value}</dd>
+      {note ? <dd className="mt-1 text-[13px] leading-[18px] text-ink-soft">{note}</dd> : null}
     </div>
   );
 }

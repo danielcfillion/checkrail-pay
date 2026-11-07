@@ -71,6 +71,12 @@ describe("toLedgerRow", () => {
   });
 });
 
+describe("decidedByFor an integration", () => {
+  it("labels a request from an API key as the integration, a machine, not 'not recorded' (review R1-8)", () => {
+    expect(decidedByFor("api:erp")).toEqual({ kind: "agent", label: "Integration erp" });
+  });
+});
+
 describe("reconStateFor and decidedByFor", () => {
   it("only calls a payment reconciled when a statement line matched it", () => {
     expect(reconStateFor("2026-10-20T00:00:00Z", "pending")).toBe("reconciled");

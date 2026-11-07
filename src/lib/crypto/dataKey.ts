@@ -67,8 +67,16 @@ export function decryptField(stored: string): string {
  * bank account number can be searched exhaustively in seconds; this cannot be without the key.
  */
 export function keyedDigest(label: string, value: string): string {
-  const sub = Buffer.from(hkdfSync("sha256", key(), Buffer.alloc(0), `checkrail-pay:${label}`, 32));
-  return createHmac("sha256", sub).update(value).digest("hex");
+  return createHmac("sha256", subKey(label)).update(value).digest("hex");
+}
+
+/**
+ * 32 bytes derived (HKDF-SHA256) from the data key for one purpose, named by `label`. Different labels give unrelated
+ * keys, so the seed that signs agent mandates reveals nothing about the key that encrypts bank details. Follows the
+ * data key's own rules: refuses where a real key is required and none is set.
+ */
+export function subKey(label: string): Buffer {
+  return Buffer.from(hkdfSync("sha256", key(), Buffer.alloc(0), `checkrail-pay:${label}`, 32));
 }
 
 /** "****6789" for screens and logs. */

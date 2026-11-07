@@ -21,12 +21,17 @@
     "@stellar/stellar-sdk": "^17.2.1",
     "ag-grid-community": "36.2.0",
     "ag-grid-react": "36.2.0",
+    "ag-studio": "3.0.0",
+    "ag-studio-react": "3.0.0",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.3",
+    "exceljs": "4.4.0",
+    "geist": "1.7.2",
     "next": "^15.5.28",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -39,7 +44,6 @@
     "eslint": "^9",
     "eslint-config-next": "^15.5.28",
     "tailwindcss": "^4",
-    "tsx": "^4.23.15",
     "typescript": "^5",
     "vitest": "^5.0.3"
   },

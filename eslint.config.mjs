@@ -18,6 +18,7 @@ const eslintConfig = [
   },
   {
     ignores: [
+      ".claude/**",
       "node_modules/**",
       ".next/**",
       "out/**",

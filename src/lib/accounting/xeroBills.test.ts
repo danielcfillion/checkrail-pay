@@ -21,7 +21,7 @@ describe("Xero bills at approval", () => {
     const first = xeroBillRows(db, DEMO_BUSINESS_ID, { onlyNew: true }).rows;
     // story.paypal and story.blockedDuplicate are approved in a fresh seed; the waiting Stellar one is not a bill yet.
     expect(first.map((r) => r["*InvoiceNumber"])).toEqual(expect.arrayContaining(["JOB-HG4D-0921", "INV-DML-1010"]));
-    expect(first.find((r) => r["*InvoiceNumber"] === "INV-DML-1010")).toMatchObject({ "*UnitAmount": "850.00", "*AccountCode": "320", TrackingOption1: "CB-3D-1012" });
+    expect(first.find((r) => r["*InvoiceNumber"] === "INV-DML-1010")).toMatchObject({ "*UnitAmount": "850.00", "*AccountCode": "325", TrackingOption1: "CB-3D-1012" });
     expect(first.some((r) => r["*InvoiceNumber"] === "JOB-PAL3D-0927")).toBe(false);
     const out = exportNewXeroBills(db, DEMO_BUSINESS_ID, "user:thu");
     expect(out.csv.split("\r\n")[0]).toBe(XERO_BILL_COLUMNS.join(","));

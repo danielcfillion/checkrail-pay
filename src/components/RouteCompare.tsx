@@ -18,7 +18,7 @@ export type Quote = {
   explanation: string | null;
 };
 
-/** The rails side by side. The delivered amount is the largest figure; "Sender pays" puts them on the same footing (most fees are on top, Stellar's comes out of the amount). */
+/** The rails side by side. The delivered amount is the largest figure; "Sender pays" puts them on the same footing (every fee is paid on top, so the recipient gets the full amount). */
 export function RouteCompare({ quotes, selectedRail, routeReason, ready = false }: { quotes: Quote[]; selectedRail: string | null; routeReason: string | null; ready?: boolean }) {
   const line = routeLine(routeReason, selectedRail, ready, railLabel);
   const order = ["paypal", "stellar", "wise", "bank_file"];

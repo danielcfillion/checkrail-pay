@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { runAutopilot } from "@/lib/engine/autopilot";
 import { safeEqual } from "@/lib/basicAuth";
+import { runXeroSyncInBackground } from "@/lib/accounting/xeroSync";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   try {
-    return NextResponse.json(await runAutopilot(getDb()));
+    const result = await runAutopilot(getDb());
+    // The Xero push rides on the same tick, after the autopilot and without holding up its answer.
+    runXeroSyncInBackground(getDb());
+    return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

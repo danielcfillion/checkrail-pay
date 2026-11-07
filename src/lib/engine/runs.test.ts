@@ -5,7 +5,7 @@ import { auditEntries, evidence, obligations, paymentAttempts, paymentRunItems, 
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { resolveActor, type Actor } from "./users";
 import type { Role } from "../auth/roles";
-import { createRun, releaseRun, runCandidates, viewRun } from "./runs";
+import { createRun, feeLeavesAccount, releaseRun, runCandidates, viewRun } from "./runs";
 import { ingestObligation, previewPolicy } from "./orchestrator";
 import { resetRails } from "../rails";
 
@@ -70,6 +70,28 @@ describe("payment runs", () => {
     await expect(releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId)).rejects.toThrow(/Not enough money/);
     expect(state(story.paypal)).toBe("approved");
     expect(db.select().from(paymentRuns).where(eq(paymentRuns.id, runId)).get()!.status).toBe("draft");
+  });
+
+  it("the refusal names the fee as well as the amount, and a balance that covers the amount but not the fee is short", async () => {
+    process.env.MOCK_PAYPAL_BALANCE_USD = "181"; // USD 180 to Maria plus a USD 3.60 PayPal fee is USD 183.60
+    resetRails();
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { obligationIds: [story.paypal] });
+    const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
+    expect(view.totals[0]).toMatchObject({ rail: "paypal", totalMinor: 18_000, feeMinor: 360, short: true });
+    await expect(releaseRun(db, DEMO_BUSINESS_ID, as("minh"), runId)).rejects.toThrow("Not enough money: paypal needs USD 183.60 (USD 180.00 plus USD 3.60 in fees), has USD 181.00.");
+  });
+
+  it("counts the Stellar fee only where the anchor leg runs: on the simulated rail, not live or testnet sending to a wallet", async () => {
+    const counts = (stellar: string) => feeLeavesAccount({ paypal: "live", stellar });
+    expect(counts("mock")("stellar")).toBe(true);
+    expect(counts("testnet")("stellar")).toBe(false);
+    expect(counts("live")("stellar")).toBe(false);
+    for (const rail of ["paypal", "wise", "bank_file"]) expect(counts("testnet")(rail)).toBe(true);
+    // Simulated rails: Ana's USD 750 on Stellar carries its USD 13.41 anchor fee in the funding total.
+    const runId = createRun(db, DEMO_BUSINESS_ID, as("lan"), { obligationIds: [story.stellar] });
+    const view = await viewRun(db, DEMO_BUSINESS_ID, runId, as("minh"));
+    expect(view.totals.find((t) => t.rail === "stellar")).toMatchObject({ totalMinor: 75_000, feeMinor: 1_341 });
+    expect(view.payNow.byCurrency).toEqual([]); // left for its own page (reader concern), so nothing is paid now
   });
 
   it("leaves an item that carries a warning for its own page instead of approving it in bulk (SEC2-8)", async () => {

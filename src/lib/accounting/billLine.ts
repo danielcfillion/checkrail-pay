@@ -19,18 +19,50 @@ export function advancesAccount(): string {
   return process.env.XERO_ADVANCES_ACCOUNT || "620";
 }
 
+/**
+ * Default account by role, used when the vendor has no code of its own, on Xero's standard chart. Guides and contract
+ * labour go to 310 Cost of Goods Sold; transport and vehicle or motorbike rental (the driver role: vans, boats, bikes)
+ * and accommodation (homestays, hotels) go to 325 Direct Expenses. Never 320, which is Direct Wages in that chart:
+ * payroll, not suppliers.
+ */
+const ROLE_ACCOUNT: Record<string, string> = { guide: "310", contractor: "310", driver: "325", homestay: "325", hotel: "325", creator: "400" };
+
 /** The account code a bill is posted to: the vendor's own when set, a prepayment for an advance, else one by role. Code only. */
 export function accountCodeFor(role: string, override: string | null, kind?: string): string {
   if (kind === "advance") return advancesAccount();
   if (override) return override.trim().split(/\s+/)[0] || override;
-  return role === "homestay" || role === "hotel" ? "320" : role === "creator" ? "400" : role === "guide" || role === "driver" ? "310" : "429";
+  return ROLE_ACCOUNT[role] ?? "429";
 }
 
-const ACCOUNT_NAMES: Record<string, string> = { "310": "Cost of Goods Sold: Contract labour", "320": "Cost of Goods Sold: Accommodation", "400": "Advertising and marketing", "429": "General expenses", "620": "Prepayments" };
+/** Names of the default codes in Xero's standard chart, used only when Xero is not connected (else its own chart names them). */
+const ACCOUNT_NAMES: Record<string, string> = { "310": "Cost of Goods Sold", "325": "Direct Expenses", "400": "Advertising", "429": "General Expenses", "620": "Prepayments" };
 
-/** "310 Cost of Goods Sold: Contract labour": the code the Xero file carries, with its usual name when we know it. */
+/** The standard-chart name of a code we set by default ("Cost of Goods Sold"), or "" for any other code. */
+export function accountName(code: string): string {
+  return ACCOUNT_NAMES[code] ?? "";
+}
+
+/** "310 Cost of Goods Sold": the code the Xero file carries, with its standard-chart name when we know it. */
 export function accountLabel(code: string): string {
   return ACCOUNT_NAMES[code] ? `${code} ${ACCOUNT_NAMES[code]}` : code;
+}
+
+/**
+ * Who bore a settled payment's fee. The business, on every rail, since 3 Nov 2026. A Stellar record from before then
+ * has no feePaidBy and a net equal to what was sent, the gross less any tax withheld (750 - 75 = 675): the fee came
+ * out of the amount, so the recipient bore it and no fee spend belongs in the books for it. A newer record's net is
+ * that plus the fee.
+ */
+export function feePaidByOf(p: { feePaidBy?: "business" | "recipient"; rail: string; feeAmount: string; netPaid: string; grossAmount: string; withheldAmount?: string }): "business" | "recipient" {
+  if (p.feePaidBy) return p.feePaidBy;
+  if (p.rail !== "stellar" || !(Number(p.feeAmount) > 0)) return "business";
+  const sent = Number(p.grossAmount) - (Number(p.withheldAmount) || 0);
+  return Math.abs(Number(p.netPaid) - sent) < 0.005 ? "recipient" : "business";
+}
+
+/** The same rule for a settlement row and its accounting record, for the remittance advice. */
+export function feeWasDeducted(p: Parameters<typeof feePaidByOf>[0] | null | undefined): boolean {
+  return !!p && feePaidByOf(p) === "recipient";
 }
 
 /** A stored amount (hundredths) as the file shows it: whole units for a currency without decimals, else two places. */

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openTestDb, type Db } from "../db";
-import { approvals, evidence, obligations, users } from "../db/schema";
+import { accountingSyncs, approvals, evidence, obligations, settlements, users } from "../db/schema";
 import { DEMO_BUSINESS_ID, seedDemo } from "../demo/seed";
 import { amendObligation, approveObligation, ingestObligation } from "./orchestrator";
 import { importDepartures } from "./rates";
@@ -156,15 +156,29 @@ describe("PR7-3: the remittance says when a fee came out of the amount", () => {
     expect(remittanceMessageFor([{ ...base, feeDeducted: null }], ["a"])).not.toMatch(/deducted/);
   });
 
-  it("a Stellar payment's advice carries the fee; a PayPal payment's, where the sender pays the fee on top, does not", async () => {
+  it("no advice says a fee was deducted: the business pays the fee on top on Stellar as on PayPal", async () => {
     for (const id of [story.stellar, story.paypal]) {
       if (ob(id).state === "awaiting_approval") approveObligation(db, id, "user:daniel");
       await executeObligation(db, id, { actor: "user:minh" });
       await confirmSettlement(db, id);
     }
     const advice = (id: string) => viewRemittance(db, createRemittanceLink(db, DEMO_BUSINESS_ID, as("lan"), id))!;
-    expect(advice(story.stellar)).toMatchObject({ rail: "Stellar", amount: "USD 750.00", feeDeducted: "USD 13.25" });
+    expect(advice(story.stellar)).toMatchObject({ rail: "Stellar", amount: "USD 750.00", feeDeducted: null });
     expect(advice(story.paypal)).toMatchObject({ rail: "PayPal", feeDeducted: null });
+  });
+
+  it("an old Stellar payment whose fee really came out of the amount still says so on its advice", async () => {
+    approveObligation(db, story.stellar, "user:daniel");
+    await executeObligation(db, story.stellar, { actor: "user:minh" });
+    await confirmSettlement(db, story.stellar);
+    // As recorded before 3 Nov 2026: no feePaidBy, net equal to what was sent.
+    const sync = db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, story.stellar)).get()!;
+    const p = JSON.parse(sync.payloadJson!);
+    delete p.feePaidBy;
+    db.update(accountingSyncs).set({ payloadJson: JSON.stringify({ ...p, feeAmount: "13.25", netPaid: "750.00" }) }).where(eq(accountingSyncs.id, sync.id)).run();
+    db.update(settlements).set({ feeMinor: 1_325 }).where(eq(settlements.obligationId, story.stellar)).run();
+    const advice = viewRemittance(db, createRemittanceLink(db, DEMO_BUSINESS_ID, as("lan"), story.stellar))!;
+    expect(advice).toMatchObject({ rail: "Stellar", feeDeducted: "USD 13.25" });
   });
 });
 

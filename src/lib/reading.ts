@@ -11,13 +11,13 @@ type Detail = NonNullable<ReturnType<typeof getObligationDetail>>;
 /**
  * The reading a request page leads with, and the same reading as the view the check statement takes. One function for
  * the request page, the autopilot countdown and Daily close, so none of them can show less than the page does.
- * `recorded` is a replayed live Claude run (display only; policy never sees it).
+ * `recorded` is a replayed live Claude run; policy checked its confidence unless it reflects the live account (src/lib/ai/agent.ts, withRecordedConfidence).
  */
 export function readingFor(d: Pick<Detail, "obligation" | "audit" | "agentRun" | "aiFlags" | "aiMissing">, db: Db = getDb()): { recorded: RecordedReading | null; reader: ReaderView | null } {
   const o = d.obligation;
   const asRead = amountAsRead(d.audit, { amountMinor: o.amountMinor, currency: o.currency });
   const newer = o.vendorId && o.sourceRef ? db.select({ id: obligations.id }).from(obligations).where(and(eq(obligations.vendorId, o.vendorId), eq(obligations.sourceRef, o.sourceRef), gt(obligations.createdAt, o.createdAt))).get() : undefined;
-  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer });
+  const recorded = selectRecordedReading({ engine: d.agentRun?.engine, vendorId: o.vendorId, sourceRef: o.sourceRef, readAmountMinor: asRead.amountMinor, readCurrency: asRead.currency, newestForReference: !newer, storedConfidence: o.aiConfidence });
   const reader: ReaderView | null = recorded
     ? { confidence: recorded.confidence, concerns: recorded.flags, missing: recorded.missing, recorded: true }
     : o.aiConfidence !== null

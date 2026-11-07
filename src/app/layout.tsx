@@ -1,28 +1,23 @@
 import { runAs } from "@/lib/engine/requestContext";
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { Shell } from "@/components/Shell";
 import { ToastProvider } from "@/components/Toast";
 import { getBusiness, getSystemModes, waitingFor } from "@/lib/queries";
 import { getViewer, isPublicPage } from "@/lib/viewer";
 import { ROLE_LABEL } from "@/lib/auth/roles";
+import { configuredUsers } from "@/lib/basicAuth";
 import { getDb } from "@/lib/db";
 import { pendingChanges, verifyBarrier } from "@/lib/engine/vendors";
 import { listRuns } from "@/lib/engine/runs";
+import { TourMount } from "@/components/tour/TourMount";
+import { SandboxBusyPage } from "@/components/SandboxBusy";
+import { sandboxBusy } from "@/lib/sandbox/server";
 
-/*
- * Archivo variable (weight 100 to 900, width 62 to 125), the same file Google
- * Fonts serves. Vendored so the build does not depend on network access; the
- * next/font/google equivalent is:
- *   Archivo({ subsets: ["latin"], axes: ["wdth"], variable: "--font-archivo" })
- */
-const archivo = localFont({
-  src: [{ path: "./fonts/archivo-variable.woff2", weight: "100 900", style: "normal" }],
-  variable: "--font-archivo",
-  display: "swap",
-  declarations: [{ prop: "font-stretch", value: "62% 125%" }],
-});
+/* Geist and Geist Mono (SIL OFL), vendored by the geist package so the build needs no network. Covers Vietnamese. */
+const fontVars = `${GeistSans.variable} ${GeistMono.variable}`;
 
 const DESCRIPTION = "Checks every supplier payment before money moves.";
 
@@ -52,13 +47,15 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   if (await isPublicPage()) {
     // The skip link and <main> come from PublicFrame, which each of these pages renders in its own language.
     return (
-      <html lang="en" className={archivo.variable} suppressHydrationWarning>
+      <html lang="en" className={fontVars} suppressHydrationWarning>
         <body>
           <ToastProvider bare>{children}</ToastProvider>
         </body>
       </html>
     );
   }
+  // Sandbox mode: no copy of the demo could be made for this visitor right now.
+  if (sandboxBusy()) return <SandboxBusyPage className={fontVars} />;
   let businessName: string | null = null;
   let system = null;
   let viewer: Awaited<ReturnType<typeof getViewer>> = null;
@@ -80,7 +77,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     // Database unavailable: render the shell without a business.
   }
   return (
-    <html lang="en" className={archivo.variable}>
+    <html lang="en" className={fontVars}>
       <body>
         <a href="#main" className="skip-link">
           Skip to content
@@ -89,10 +86,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           <Shell
             businessName={businessName}
             system={system}
-            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks, runsToRelease } : null}
+            who={viewer ? { name: viewer.actor.displayName, role: ROLE_LABEL[viewer.actor.role], username: viewer.actor.username, viaLogin: viewer.actor.viaLogin, personas: viewer.personas, waiting, vendorChecks, runsToRelease, signOut: (configuredUsers()?.length ?? 0) > 0 } : null}
           >
             {children}
           </Shell>
+          <TourMount />
         </ToastProvider>
       </body>
     </html>

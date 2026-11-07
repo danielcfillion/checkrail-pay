@@ -1,13 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db";
-import { billAllocations, bills, businesses, obligations, settlements, vendorLinks, vendors } from "../db/schema";
+import { accountingSyncs, billAllocations, bills, businesses, obligations, settlements, vendorLinks, vendors } from "../db/schema";
+import { feeWasDeducted } from "../accounting/billLine";
 import { billBalance } from "./bills";
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { fmt } from "../domain/policy";
-import { senderOutlayMinor } from "../domain/routing";
-import type { Rail } from "../domain/types";
 import { formatDate, railLabel } from "../format";
 import { requirePermission, type Actor } from "./users";
 import { uploadDocument } from "./attachments";
@@ -63,7 +62,7 @@ export interface Remittance {
   language: "en" | "vi";
   /** Tax kept back and paid to the tax office instead, when any. */
   withheld: string | null;
-  /** The rail's fee, when it comes out of the amount the vendor is sent (Stellar) instead of being paid on top: "USD 13.25". */
+  /** The rail's fee, if it ever came out of the amount the vendor is sent instead of being paid on top: "USD 13.25". No rail does today: the business pays every fee. */
   feeDeducted?: string | null;
   /** Paid to the agreed rate, less than invoiced: what was invoiced, so the vendor sees the difference is deliberate. */
   shortPaid: { invoiced: string; basis: string } | null;
@@ -91,7 +90,8 @@ export function viewRemittance(db: Db, token: string): Remittance | null {
     status: ob.state === "settled" ? "paid" : "on its way",
     language: v.country === "VN" ? "vi" : "en",
     withheld: ob.withheldMinor ? fmt(ob.withheldMinor, ob.currency ?? "USD") : null,
-    feeDeducted: st && st.feeMinor > 0 && senderOutlayMinor({ rail: st.rail as Rail, sendAmountMinor: st.grossMinor, feeMinor: st.feeMinor }) === st.grossMinor ? fmt(st.feeMinor, st.grossCurrency) : null,
+    // Only an old Stellar payment really had its fee taken out of the amount (see feePaidByOf): its accounting record says so.
+    feeDeducted: st && st.feeMinor > 0 && feeWasDeducted(recordOf(db, ob.id)) ? fmt(st.feeMinor, st.grossCurrency) : null,
     shortPaid: shortPaidOf(db, ob),
     history: ob.billId ? billHistory(db, ob.billId, ob.id) : null,
   };
@@ -215,4 +215,14 @@ export async function submitEvidence(db: Db, token: string, file: { name: string
   const up = await uploadDocument(db, { businessId: l.businessId, name: file.name, mimeType: file.mimeType, bytes: file.bytes, actor });
   const p = up.proposed[0];
   await addEvidence(db, l.obligationId, actor, { kind: p?.kind && ["invoice", "job_sheet", "receipt", "booking", "contract", "purchase_order"].includes(p.kind) ? p.kind : "receipt", label: `${p?.label ?? file.name} (from the vendor)`, amountMinor: p?.amountMinor ?? null, currency: p?.currency ?? null, reference: p?.reference ?? null, excerpt: p?.excerpt ?? null, provenance: "vendor" }, up.attachmentId);
+}
+
+/** The stored accounting record of a settled obligation, or null. */
+function recordOf(db: Db, obligationId: string): Parameters<typeof feeWasDeducted>[0] | null {
+  const row = db.select({ p: accountingSyncs.payloadJson }).from(accountingSyncs).where(eq(accountingSyncs.obligationId, obligationId)).get();
+  try {
+    return row?.p ? JSON.parse(row.p) : null;
+  } catch {
+    return null;
+  }
 }

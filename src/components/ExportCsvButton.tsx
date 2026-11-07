@@ -13,7 +13,7 @@ export function ExportCsvButton({ pendingCount }: { pendingCount: number }) {
   if (pendingCount === 0) {
     return (
       <a href="/api/accounting/export" className="btn" download>
-        Download all records
+        Settlement records CSV
       </a>
     );
   }
@@ -38,7 +38,7 @@ export function ExportCsvButton({ pendingCount }: { pendingCount: number }) {
         })
       }
     >
-      {busy ? "Exporting" : `Export CSV (${pendingCount})`}
+      {busy ? "Exporting" : `Export settlement records CSV (${pendingCount})`}
     </button>
   );
 }

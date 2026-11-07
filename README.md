@@ -9,7 +9,7 @@
 - Lands every payment in the books, with a two-minute Daily close.
 - Answers any AI agent that asks before it pays a supplier: pay, hold or block, over MCP.
 
-**Try it.** Hosted demo and video: linked from the Devpost page. Login in the Devpost testing instructions.
+**Try it.** Hosted demo: https://checkrail-pay.onrender.com (start at `/demo`). The login is in the Devpost testing instructions. The video is linked from the Devpost page.
 <!-- Founder: when they exist, replace the line above with:
 **Try it:** <hosted URL>/demo (login in the Devpost testing instructions). **Video:** <YouTube URL>
 [![Watch the demo video](docs/screenshots/hero.png)](<YouTube URL>)
@@ -17,7 +17,7 @@
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
-Built for the PayPal AI Hackathon (project started 3 Oct 2026). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it.
+Built for the PayPal AI Hackathon (project started 3 Oct 2026; built on a local repository first, so the public history begins with the 28 Oct snapshot). The name: a check rail is the short rail laid beside the main track that keeps wheels from leaving it.
 
 ## Try it
 
@@ -26,7 +26,7 @@ Run it locally in two commands (Node 22 or later; SQLite is bundled, no external
     npm run setup
     npm run dev
 
-Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 6 and 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
+Then open http://localhost:3000/demo, the presenter page that walks the story in ten steps, including Autopilot scheduling and sending a payment on its own (step 7). In development no login is needed. The local copy runs on simulated rails with the rule-based reader and needs no keys.
 
 Hosted demo and video: linked from the Devpost page, with the hosted login in the Devpost testing instructions.
 
@@ -54,17 +54,17 @@ As of 29 Oct 2026:
 
 - **PayPal Payouts sandbox: proven.** Batch RGS5PUZPH4CNY, USD 180 to Maria Santos, settled 12 Oct 2026. Batch W55KNGQK57JC4, USD 750 to Ana Reyes, came back UNCLAIMED and was held, not paid twice.
 - **Claude (`claude-sonnet-5-5`): has read the full demo live.**
-- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). We call PayPal's REST endpoints directly rather than through the Agent Toolkit so the agent can reach only these three GET calls.
+- **Claude's PayPal tools:** three read-only REST calls to Transaction Search and Invoicing (`paypal_list_transactions`, `paypal_list_invoices`, `paypal_get_invoice`). The model gets these three read-only GET calls and nothing else, by construction: PayPal's Agent Toolkit would have handed it write access it must never have.
 - **PayPal's own records decide a block.** Before every decision that can move money, the app itself (deterministic code, not the model) reads PayPal Transaction Search and blocks with the PayPal transaction id when PayPal already paid this job to this payee (policy rule `paypal_history`, `src/lib/domain/paypalHistory.ts`). On simulated rails it reads what the simulated PayPal rail actually paid. Live it needs Transaction search enabled on the PayPal app. Transaction Search can lag by up to three hours, so Checkrail's own payment history stays the first duplicate check.
 - **Recorded Claude readings for the hosted demo.** Claude's readings of the six opening requests, recorded from a live run on 28 Oct 2026 (`claude-sonnet-5-5`, PayPal sandbox), are kept in `src/lib/demo/recordedReadings.ts` for the request page to show, labelled as recorded. Display only: on the hosted demo the decision still comes from the rule-based reader and the policy rules.
 - **Read from PayPal (Books):** reconciles from Transaction Search and ties a returned payout to its payout by reference id. Tested against fakes; needs live PayPal keys.
 - **Stellar PYUSD: simulated.** The adapter is written to the Stellar SDK and has never run on testnet.
 - **Soroban spend-policy contract:** written in Rust on soroban-sdk 29.0.1, 20 unit tests pass. Not deployed to testnet, not called by the app yet.
 - **Wise:** beta adapter, never run.
-- **Xero:** an import file, not a live push.
+- **Xero:** a bills file to import, plus a live OAuth push written and tested against a fake Xero, not yet run against a real organisation.
 - **Hosted demo:** simulated rails and the rule-based reader, with the recorded Claude readings beside it once the request page shows them.
 - **Agent guard (MCP):** `check_payment`, `request_payment`, `payment_status`, `lookup_payee`, `explain_rule`, over HTTP and stdio; tested against the demo data, never yet driven by a third-party agent on camera.
-- **Tests:** 741 in 71 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
+- **Tests:** 1,359 in 114 files (one skipped). **Policy:** named rules in `src/lib/domain/policy.ts`, each listed on the payment page.
 
 The sidebar footer always shows which mode each rail and the reader are in.
 
@@ -80,6 +80,16 @@ Ridgeline Expeditions LLC, a US tour operator paying guides, drivers and homesta
 | Ana Reyes, JOB-PAL3D-0927, USD 750 | Approved by a person, then sent | Above the threshold. On simulated rails it settles on Stellar, her preference. In the live sandbox run it went by PayPal and came back UNCLAIMED, and was held. |
 
 Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 overpayment plus the USD 180 duplicate). `npm run demo:replay` runs the same story in the terminal. Demo documents to upload (a clean trip sheet, a re-issued duplicate, an unusual rate) are in `docs/demo-documents/`.
+
+**Try it yourself** (`/try`, beside Take the tour on the overview, and offered at the end of the tour). A judge takes one supplier payment through the six steps a clerk takes: write the request, attach the evidence, submit and see the checks, approve, correct or reject, pay, and see it in the books. Three samples, each with a payee, rate card, departure and document in the seed:
+
+| Sample | Outcome |
+|---|---|
+| Rosa Villanueva, JOB-CEB2D-1029, USD 190 | Matches her USD 95 day rate for 2 days on departure CEB-2D-1029: every check passes, policy approves it under the USD 250 line, and it is paid on the simulated PayPal rail and lands in the books. |
+| Phuong Transport, INV-2026-0171, USD 1,100 | The trip sheet and rate card say 4 vehicle-days at USD 200: blocked, with Correct to USD 800.00. After the correction it waits for an approver, who cannot be the person who prepared it. |
+| Phuong Transport, INV-2026-0138, USD 600 | Paid 12 days earlier: blocked as a duplicate, with PayPal's own record of that payout. Cancel moves no money. |
+
+The fields come prefilled; type your own payee, amount, reference or request text and your figures go through the same checks. Guided mode dims the page except the one field or button that matters; Play runs the steps by itself, about four seconds each, with Pause and Resume. Every button calls the server action the real pages call, so permissions, separation of duties and every rule apply. It runs only in a visitor's own sandbox copy on simulated rails with the rule-based reader, is refused with live rails or real money, and allows 30 requests and 30 documents per copy.
 
 ## Autonomy
 
@@ -118,7 +128,7 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - Starting an execution is one SQLite transaction, and state moves are compare-and-swap through a whitelist (`TRANSITIONS` in `src/lib/domain/types.ts`).
 - The payout destination is pinned at approval. Edited details send the payment back to blocked.
 - Webhooks never set state. A signature-verified event only triggers a re-check.
-- Live mode never falls back to a mock. Missing credentials throw.
+- Live mode never falls back to a mock for rails: missing credentials throw. The reader is different: if the model call fails, the rules reader reads the request and the page says so.
 
 ### People and access
 - Named logins with roles (owner, approver, clerk, accountant) and approval limits.
@@ -136,14 +146,19 @@ Result on simulated rails: 2 settled, 2 errors prevented (USD 340: the USD 160 o
 - The autopilot heartbeat assumes one server process. SQLite, logins in an environment variable.
 - The agent shares a PayPal app that has Payouts scope. Use a separate read-only app before real money.
 
-## The two files for the bookkeeper
+## The files for the bookkeeper
 
-- **Xero bills file** (Accounting, "Export new bills"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill.
-- **Settlement CSV** (Accounting, "Export CSV"): one row per settled payment, for matching to the bank feed.
+- **Xero bills CSV, to import** (Accounting, "Export new bills for Xero"): one bill per invoice, written at approval, in Xero's "Import bills" template. A deposit and its balance are one bill. Every export is recorded with its file, so the page lists past exports with Download again (the identical file; import each once).
+- **Bookkeeper pack (.xlsx), to read** (Accounting, "Bookkeeper pack"; this month and last month, or everything on record, up to 5,000 rows a sheet): cover sheet with totals and how to use it with Xero, the bills, the payments (real dates, amounts with currency formats, account code and name, who paid the fee, recipient amount and rate, explorer link) and fees by rail and month. Frozen headers, filters, totals rows, landscape fit-to-width printing. Built with exceljs (MIT).
+- **Settlement records CSV, to read** (Accounting, "Settlement records CSV"): one row per settled payment, for matching to the bank feed.
 
-They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (310 guides and drivers, 320 homestays and hotels, 400 creators, 429 other), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` starts with the same code the bills file carries and adds the usual name.
+Changed 3 Nov 2026: the settlement CSV's `accountCode` is now the bare code and `accountName` its name, and `feePaidBy` says who bore the fee. The business pays the fee on every rail, Stellar included, so the supplier receives the full bill. Seeded demo history uses dated demo FX rates, marked as such.
 
-`netPaid` is what left the bank account, on every rail: the amount sent plus the fee for PayPal, Wise and the bank file, which charge their fee on top. Only Stellar takes its fee out of the amount, so its net is the amount, and the `feeAmount` on a Stellar row is borne by the vendor, not paid by the business. The vendor's remittance message and advice say so ("a USD 13.25 fee was deducted from the amount; you receive PHP 45,664.99"). A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
+Changed 1 Nov 2026: the bills file is now at the invoice's gross amount, with no "Tax withheld" line. Tax kept back from a vendor is recorded when the payment is matched, as a second payment on the bill from the withholding liability account (825, or `XERO_WITHHOLDING_ACCOUNT`) for the row's `withheldAmount`. A new last column, `xeroPayment`, is `xero:<payment id>` when the live Xero connection has sent all of that payment and `xero:sending` while it will; only rows where it is blank need entering by hand (docs/XERO.md).
+
+They describe the same purchase the same way. The settlement row uses the bill's reference as `reference`, the bill's description ("Accommodation services HS-1027, departure HG-4D-1004", "Cash advance ADV-HG4D-1101"; never the request text) and the bill's account: the vendor's own code, else one by role (on Xero's standard chart: 310 Cost of Goods Sold for guides and contract labour, 325 Direct Expenses for transport, vehicle or motorbike rental and accommodation, 400 creators, 429 other; never 320 Direct Wages), and the prepayment account for a cash advance (620, or `XERO_ADVANCES_ACCOUNT`). The CSV `accountCode` is the same code the bills file carries, and `accountName` is its usual name.
+
+`netPaid` is what left the bank account, on every rail: the amount sent plus the fee, which the business pays on top. On Stellar the amount sent is grossed up so the swap and anchor fees do not come out of the bill (Ana's USD 750 costs USD 763.41 and she receives PHP 46,486.24); before 3 Nov 2026 the Stellar fee came out of the amount, and those older rows say `feePaidBy` recipient. A VND amount is whole dong in both files and on the Accounting page ("10800000", not "10800000.00").
 
 Changed in practitioner round six (PR6-4): `netPaid` was the amount alone for Wise and the bank file, so it did not equal the money that left the account; an advance was classed as 310 in the CSV and 620 in the bills file; `description` was the reader's one-line summary of the request, cut at 120 characters; VND carried `.00`. If you already import the settlement CSV, `netPaid` for Wise and bank-file payments is now larger by the fee, and `description` and `accountCode` for advances differ from earlier rows.
 
@@ -161,6 +176,14 @@ Before trusting Checkrail with new payments, run your last few months of supplie
 - Account numbers, phone numbers and email addresses are removed when the files are read. Everything stays in `private/`, which git ignores.
 - What comes out are flags, not findings. Mark each duplicate and overcharge `yes` or `no` in the results file; `--totals` counts only confirmed lines.
 
+### In the app: Getting started
+
+The same re-check runs from the app, as the first step of onboarding (sidebar, Admin, Getting started):
+
+1. **Bring in your data.** Upload a bank export (any bank's CSV, including Vietnamese exports with day-first dates and dot thousands). Checkrail guesses which column is which, shows the first rows as it reads them (account numbers, phones and emails removed) and saves the layout, so the next export from the same bank maps itself. Payout details are never imported. "Re-check 90 days" runs the rules over the last 90 days in a separate process with no keys and simulated rails, so nothing is paid and the server's clock is never touched.
+2. **Check our calls.** Every hold and block from the re-check, in an AG Grid table, with "Right catch" and "Was fine" on each. Marks never change a rule; they produce suggestions (add a rate card, verify a supplier, connect a booking feed) that a person applies or dismisses, and every decision goes in the audit log.
+3. **Your first weeks.** An AG Studio dashboard: readiness for the next autonomy level as a gauge (holds that turned out fine under 10% for two weeks running, every paid supplier verified, no missed duplicate, rate cards covering 80% of spend, and four weeks in Assist before Autopilot), holds that turned out fine by week against the 10% target, money stopped by reason and how often you agreed with each rule. Both of the first two are custom Studio widgets in the Checkrail theme. The owner can rearrange and add widgets without code, and with live AI on, "Ask about your setup" is a Checkrail agent (Claude Haiku 5.5 through `/api/studio-ai`) that hands work to Studio's own agents. It explains the numbers and adds widgets; it cannot change a rule or pay anyone. Set the licence key as `AG_STUDIO`; without one Studio shows its trial watermark.
+
 ## Switching to live mode
 
 Everything runs with zero credentials on simulated rails. To move a rail or the agent to live, copy `.env.example` to `.env`, set the variables below and restart. In live mode a rail with missing or invalid credentials refuses to start instead of falling back to a mock, and the app refuses to open without logins.
@@ -168,6 +191,9 @@ Everything runs with zero credentials on simulated rails. To move a rail or the 
 **Logins (required in live mode)**
 
     CHECKRAIL_USERS=owner:<pw>:admin,minh:<pw>:approver,lan:<pw>:clerk,thu:<pw>:accountant
+    CHECKRAIL_SESSION_SECRET=<16+ random characters>
+
+People sign in on `/signin`, a plain form that works with JavaScript off and in embedded browsers. It sets a signed, httpOnly session cookie for 12 hours. Scripts and tests can keep sending the same login as HTTP Basic. A page request without either is sent to `/signin`; a fetch or API call gets a 401 in JSON.
 
 **PayPal sandbox.** Create an app at developer.paypal.com, enable Payouts, and tick Transaction search and Invoicing so Claude's checks and Read from PayPal work. For webhooks, set `PAYPAL_WEBHOOK_ID` and point the webhook at `/api/webhooks/paypal`.
 
@@ -204,7 +230,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
 
 ## Hosting
 
-`render.yaml` is a Render Blueprint for the hosted judging demo: simulated rails, the rule-based reader, logins from `CHECKRAIL_USERS`, and a reset to the four opening requests after 30 minutes without use. It is one shared database, so two judges in the same half hour see each other's changes. Reset demo on `/demo` restores it at any time.
+`render.yaml` is a Render Blueprint for the hosted judging demo: simulated rails, the rule-based reader, logins from `CHECKRAIL_USERS`, and a private copy of the demo for each browser (`CHECKRAIL_SANDBOX=1`), so judges never see each other's changes. Idle copies are deleted after two hours. The dashboard assistant uses Claude (`STUDIO_ASSISTANT=1` with a key) while invoice reading stays rule-based. Without the sandbox setting it is one shared database; Reset demo on `/demo` restores it at any time.
 
 ## Tests
 
@@ -213,7 +239,7 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     npm run lint
     npm run build
 
-741 tests in 71 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
+1,359 tests in 114 files (one skipped). `src/lib/engine/story.test.ts` runs the whole demo through the orchestrator and asserts each outcome.
 
 ## Project layout
 
@@ -224,6 +250,8 @@ Then run `npm run demo:replay` to send the clean requests through the sandbox. `
     src/lib/accounting/   accounting records, CSV export, Xero mapping and bills file
     src/lib/agent/        agent guard: MCP handler, agent keys and trust, check and request tools, rule glossary
     src/lib/check/        judge a payment on a copy of the books; the historical re-check
+    src/lib/onboarding/   bank-export import, column detection, calibration marks, suggestions, readiness, dashboard data
+    src/lib/studio/       AG Studio theme, data sources, report, custom widget models, Claude adapter for Studio's assistant
     src/app/              Next.js pages and API routes (export, PayPal webhook, autopilot tick, MCP)
     scripts/              seed, replay, re-check, MCP over stdio, Stellar setup, screenshots
     docs/                 agents guide, Devpost text, video script, business notes, benchmark, audits

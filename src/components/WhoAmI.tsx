@@ -10,7 +10,7 @@ import { personaLabel } from "./persona-label";
 export type Persona = { username: string; name: string; role: string };
 
 /** Who is acting, and (on demo databases) a switch to act as another member of the demo team. */
-export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vendorChecks = 0, runsToRelease = 0 }: { name: string; role: string; username: string; viaLogin?: string; personas: readonly Persona[] | null; waiting: number; vendorChecks?: number; runsToRelease?: number }) {
+export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vendorChecks = 0, runsToRelease = 0, signOut = false }: { name: string; role: string; username: string; viaLogin?: string; personas: readonly Persona[] | null; waiting: number; vendorChecks?: number; runsToRelease?: number; signOut?: boolean }) {
   return (
     <div className="border-t hairline px-3 py-3 lg:px-5">
       <p className="text-sm" title={viaLogin ? `Signed in as ${name}, demo login ${viaLogin}` : `Signed in as ${name}`}>
@@ -18,6 +18,14 @@ export function WhoAmI({ name, role, username, viaLogin, personas, waiting, vend
         <span className="font-medium">{name}</span>
         {viaLogin ? <span className="hidden text-ink-soft lg:inline">, demo login {viaLogin}</span> : null}
       </p>
+      {signOut ? (
+        // A plain form post, so it works without JavaScript and no link on another site can sign someone out.
+        <form method="post" action="/api/signout" className="inline">
+          <button type="submit" className="link text-sm">
+            Sign out
+          </button>
+        </form>
+      ) : null}
       <p className="dense text-ink-soft">
         {role}
         {waiting > 0 ? (

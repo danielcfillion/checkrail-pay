@@ -1,0 +1,138 @@
+# Checkrail Pay API
+
+A small REST API for other software: a booking system sends its departures, and an ERP or accounting tool sends payment requests and reads back what happened to them. Every request still goes through Checkrail's checks before money moves. Nothing in this API can approve, release or send a payment, or read or change a supplier's payout details.
+
+The full description is `docs/openapi.yaml` (OpenAPI 3.1), served as JSON at `GET /api/v1/openapi.json`. Paste that URL into Postman, Insomnia or any OpenAPI tool.
+
+## Keys
+
+Keys live in the server's environment, never in the app:
+
+    CHECKRAIL_API_KEYS=bokun:<secret>:departures:write,erp:<secret>:requests:write+requests:read+vendors:read
+
+One entry per system, comma separated, `name:secret:scopes`, scopes joined with `+`. Names are lowercase letters, digits and dashes. Secrets are at least 24 characters (32 where real money can move), with no spaces, colons or commas. Generate one with:
+
+    node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+
+If the setting is malformed, every API call is refused with 401 until it is fixed; the caller is not told why. Settings, System, API keys says the setting is malformed (so does the server log), and otherwise lists each key's name, scopes and when it was last used; it never shows a secret.
+
+| Scope | What it allows |
+| --- | --- |
+| `departures:write` | Send departures (the booking feed) and read them back. |
+| `requests:write` | Put payment requests in the inbox. |
+| `requests:attest` | What this key attaches counts as the business's own records. Needs `requests:write`. |
+| `requests:read` | Read back the requests this key made. A key never sees another key's requests. |
+| `vendors:read` | Look up suppliers: id, name, verified or not. |
+
+### Trust: what `requests:attest` changes
+
+Without it, the evidence rows a key sends are its own say-so, like a record a clerk types in, and a document it attaches is read and checked like a clerk's upload. A person approves the payment unless the business's own records (a departure with a rate card, a job sheet or booking from its own systems) already support it. Neither its rows nor its documents can record a bill total that later payments under the same reference are held to: only the business's own records can, which from the API means a key with `requests:attest`. A record a clerk adds later to an integration's deposit request does not set a bill total either, nor does a supplier's own upload on any request; paying a returned integration request again keeps its records at the weight they came in with.
+
+With it, the key is treated as a system of record, like an agent key with `attest`: what it attaches counts as the business's own records, so a request that matches them can be approved by policy and, on Autopilot, scheduled inside the owner's caps. Give it only to the system that is the record (the booking platform itself, the ERP that holds the purchase orders), never to a tool that relays what someone told it. Even then, the autonomy setting, the per-payment and daily caps, the cancel window and the re-check at release all still apply, and the key still cannot approve or send.
+
+`departures:write` deserves the same care: a departure, with the supplier's rate card, sets what a job should cost and counts as support. Give it only to the booking system.
+
+## Calls
+
+Every call sends the key as a bearer token. Bodies are JSON. Examples use placeholder keys.
+
+### Send departures (the booking feed)
+
+    curl -sS https://<your-checkrail>/api/v1/departures \
+      -H "Authorization: Bearer <bookings-key>" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: feed-2026-11-01-0900" \
+      -d '{"departures": [{
+            "external_id": "bokun-88231",
+            "code": "HG-4D-1104",
+            "start_date": "2026-11-04",
+            "end_date": "2026-11-07",
+            "guests": 12,
+            "services": [
+              {"vendor": "Phuong Transport", "unit": "vehicle_day", "quantity": 4},
+              {"vendor_id": "ven_linh", "unit": "guest_night", "quantity": 24}
+            ]}]}'
+
+Departures are matched by `external_id`: sending one again replaces its dates, guests and services. A departure an approver imported from a manifest or typed in is never taken over or changed by the feed: sending its code answers 409 `departure_conflict`, and an approver changes it in Checkrail. That is because, with the rate card, a departure sets what a job may cost. A departure belongs to the API key that first sent it; another key sending the same `external_id` gets 409 `departure_conflict`. Up to 200 departures a call; one invalid departure and nothing is saved. Units: `day`, `vehicle_day`, `guest_night`, `room_night`, `guest`, `trip`. Afterwards Checkrail checks again the requests waiting on the suppliers the call touched, as it does after a manifest import.
+
+Read back the departures this key sent, optionally from a start date:
+
+    curl -sS "https://<your-checkrail>/api/v1/departures?since=2026-11-01" -H "Authorization: Bearer <bookings-key>"
+
+### Send a payment request
+
+    curl -sS https://<your-checkrail>/api/v1/requests \
+      -H "Authorization: Bearer <erp-key>" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: erp-bill-104233" \
+      -d '{"payee": "Phuong Transport",
+           "amount": "800.00",
+           "currency": "USD",
+           "reference": "HG-4D-1104",
+           "description": "Van and driver, 4 vehicle-days",
+           "evidence": [{"kind": "purchase_order", "label": "PO 104233", "amount": "800", "reference": "HG-4D-1104",
+                         "excerpt": "Phuong Transport, HG-4D-1104, 4 vehicle-days at USD 200"}]}'
+
+`Idempotency-Key` is required here: a retry with the same key and body gets the first answer back (with `Idempotency-Replayed: true`) and never makes a second request; the same key with a different body is refused. Use `vendor_id` instead of `payee` if you have it. Attach files as `documents` (at most 3, each at most 2 MB, base64):
+
+    "documents": [{"name": "invoice.pdf", "content_type": "application/pdf", "kind": "invoice", "data": "<base64>"}]
+
+A document is read and checked against the request the way a clerk's upload is, and a supplier's own invoice still goes to a person. Unlike a clerk's upload, a document from a key never sets a bill total (see Trust above). Fields the endpoint does not know (`approve`, `paypal_email`, anything else) are refused, not ignored.
+
+The answer (201) is the request after the checks. `status` is one of `blocked`, `waiting_for_evidence`, `waiting_for_approval`, `scheduled` (Autopilot sends it at `releases_at` unless a person cancels), `approved`, `sending`, `paid`, `returned`, `cancelled`, `failed`, `disputed`. `verdict` is what the rules say (`pay`, `hold` or `block`), `rules_failed` gives the rule ids and `reasons` gives one fixed sentence for each, never text from the books, so nothing about other suppliers or other payments. Payout details are never included. A key without `requests:read` gets back only `id`, `status` and its own `idempotency_key`.
+
+**Suppliers with bills.** A request to a supplier that has any bill recorded in the last 180 days (any kind, any state) is never paid without a person, whatever its reference says. This does not depend on how the reference is spelt, so no spelling gets a payment past a person. A person can approve it as work that has no bill. Requests to a supplier with no bill in that time follow the usual rules and may be scheduled by Autopilot inside the owner's caps.
+
+**Requests about a bill.** A request whose reference matches a bill of that supplier, however old, is never paid without a person either. Matching only tells the person which bill it is and checks whether it fits. That covers one bill or several, of any kind (invoice, advance, credit note) and in any state, and a bill recorded later that the request turns out to match. References are compared the way the duplicate check compares them, so INV_ROSA_6001, INVROSA6001, INV-ROSA-06001, INV-ROSA-6001-R and INV-ROSA-6001/2 all name INV-ROSA-6001. A "/N" ending counts as a part number only when no bill has that exact reference, and never after a year, so RET-ROSA-2026/10 and RET-ROSA-2026/11 are two references; INV-ROSA-6001-R/2 and INV-ROSA-6001/003 name INV-ROSA-6001. A reference with no digits or under three characters (ROSA-NOV, A1) matches when spelt the same, separators and case aside. Matching is by the reference as spelt, set out above, never fuzzy: INV-ROSA-60030 is not INV-ROSA-6003, and a typo is a different reference. Autopilot never schedules or releases such a request; a person approves it.
+
+Whether it names a bill, and whether it fits, is for that person to see. You get the same answer in every case: status `waiting_for_approval`, verdict `hold`, the rule `bill_review` and the one sentence "A person reviews payments to this supplier." That holds whether the reference matches a bill or none, whether the amount fits or is more than is open, whatever the currency, whether the bill is open, closed, void or a credit note, and when the reference matches several bills. Nothing you can read depends on whether a bill matched, nor on a bill's balance, its state or its other parts, so repeated requests cannot be used to find a bill or what is open. A request that does not fit cannot be approved; a person can still record such a payment by hand.
+
+A reference that names a bill of a different supplier of the business is blocked for a person to check who it pays, and reads the same neutral answer.
+
+Once a person has approved such a request, it reads verdict `approved` until it is paid, refused or cancelled. One the rules had approved before a bill held it reads verdict `pending` and status `approved`, with no release time, until a person looks. Either way `rail` stays empty until the request is final.
+
+**Known limit.** For a supplier with no bill in the last 180 days, the answer can still differ between a reference that matches an older bill (held for a person) and one that matches nothing (the usual rules). A caller could use that to learn that an old bill exists under a reference it guessed. It never learns the bill's amount, state or other parts, and nothing is paid without a person either way. To keep guessing slow, a key or agent that has sent 10 different references for one supplier in 10 minutes has its further requests to that supplier held for a person (rule `reference_spread`); an MCP agent's `check_payment` answers hold past the same limit.
+
+Some rule codes tell you that another payment exists, without saying which: `no_duplicate` (this job matches a payment on file), `reference_other_vendor` (the reference is also on a payment to another supplier) and `paypal_history`. Nothing more about that payment is returned.
+
+Requests are taken one at a time per business within one Checkrail server process, so two requests for the same job sent at once are checked in turn and the second sees the first. That queue does not reach across processes; with more than one server running, the check that runs again before any payment is released is what stops a second payment.
+
+### Read requests back
+
+    curl -sS https://<your-checkrail>/api/v1/requests/<id> -H "Authorization: Bearer <erp-key>"
+    curl -sS "https://<your-checkrail>/api/v1/requests?reference=HG-4D-1104" -H "Authorization: Bearer <erp-key>"
+
+The list returns at most 25 requests, with status and verdict only; read one request for its reasons.
+
+`settlement` shows whether it was sent, over which `rail`, the provider's id (such as a PayPal payout batch), when it settled, what was sent and the fee.
+
+### Look up suppliers
+
+    curl -sS "https://<your-checkrail>/api/v1/vendors?q=phuong" -H "Authorization: Bearer <erp-key>"
+
+Returns `id`, `name`, `role`, `country`, `status` and `verified` (whether a person verified the payout details).
+
+## Errors
+
+Always `{"error": {"code": "...", "message": "..."}}`; a validation error adds `details`, one entry per field:
+
+    {"error": {"code": "validation_failed", "message": "departures[0].start_date: must be a date, YYYY-MM-DD",
+               "details": [{"field": "departures[0].start_date", "message": "must be a date, YYYY-MM-DD"}]}}
+
+| Status | Codes |
+| --- | --- |
+| 400 | `invalid_json`, `idempotency_key_required`, `invalid_idempotency_key` |
+| 401 | `unauthorized` |
+| 403 | `insufficient_scope`, `cross_origin` |
+| 404 | `not_found` |
+| 409 | `idempotency_in_progress`, `departure_conflict` |
+| 413 | `payload_too_large` |
+| 415 | `unsupported_media_type` |
+| 422 | `validation_failed`, `idempotency_conflict`, `document_refused`, `request_refused` |
+| 429 | `rate_limited` (per key, 120 a minute unless `CHECKRAIL_API_RATE_LIMIT` says otherwise), `too_many_bad_keys` (wrong keys only, per address; a valid key is never locked out) |
+| 500 | `internal_error`: Checkrail could not finish the call and nothing was paid. Retry with the same `Idempotency-Key`; if the request was already created, the retry returns it instead of making a second one. |
+| 503 | `not_set_up` (no business is set up yet) |
+
+## Audit
+
+Everything a key changes is in the audit log under `api:<key name>`: departures as `departures.upserted`, requests as created by that integration, and any re-check a departure triggered. The request page shows the integration as who asked.

@@ -60,7 +60,7 @@ describe("basic auth helpers (C3)", () => {
 });
 
 describe("middleware", () => {
-  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP", "CHECKRAIL_THROTTLE_SPARES_VALID"] as const;
+  const keys = ["CHECKRAIL_BASIC_AUTH", "DUELINE_BASIC_AUTH", "CHECKRAIL_USERS", "CHECKRAIL_SESSION_SECRET", "CHECKRAIL_SANDBOX_SECRET", "CHECKRAIL_DATA_KEY", "CHECKRAIL_SANDBOX", "CHECKRAIL_INSECURE_DEMO", "CHECKRAIL_DEMO_PERSONAS", "RAIL_MODE", "PAYPAL_ENV", "CHECKRAIL_LOG_CLIENT_IP", "CHECKRAIL_THROTTLE_SPARES_VALID"] as const;
   const saved: Record<string, string | undefined> = {};
   const env = process.env as Record<string, string | undefined>;
   beforeEach(() => {
@@ -93,25 +93,32 @@ describe("middleware", () => {
     warn.mockRestore();
   });
 
-  it("answers a missing login with a static HTML page and the same 401 and challenge (DES-13)", async () => {
+  it("answers Render's health check at /healthz without a login, a sandbox copy or any data", async () => {
     env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    const res = middleware(req({}, "/healthz"));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    // Every other page still needs the login.
+    expect(middleware(req({}, "/")).status).toBe(401);
+  });
+
+  it("answers a missing login with a static HTML page and the challenge only where no session can be signed (DES-13)", async () => {
+    env.CHECKRAIL_USERS = "judge:a-long-enough-pass:admin";
+    // Production with no secret to sign a session: the browser's own prompt, as before.
+    env.NODE_ENV = "production";
     const res = middleware(req());
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("<h1>Checkrail Pay</h1>");
-    expect(body).toContain("Checks every supplier payment before money moves.");
     expect(body).toContain("Devpost testing instructions");
     // Nothing from the request is written into it: a hostile path, query and headers give the same bytes.
     const hostile = middleware(req({ host: "evil.example", referer: "<script>alert(1)</script>", "user-agent": "<img src=x>" }, "/%3Cscript%3Ealert(1)%3C/script%3E?x=<b>"));
     expect(hostile.status).toBe(401);
     expect(await hostile.text()).toBe(body);
     expect(body).not.toMatch(/evil\.example|alert\(1\)|<img/);
-    // A wrong password is still a 401 with the challenge, and still counts against the throttle.
-    const wrong = middleware(req({ authorization: basic("judge", "wrong") }));
-    expect(wrong.status).toBe(401);
-    expect(wrong.headers.get("www-authenticate")).toBe('Basic realm="Checkrail Pay", charset="UTF-8"');
   });
 
   it("lets a correct password in over the limit only where the login is published (SEC5-3)", () => {
@@ -164,12 +171,15 @@ describe("middleware", () => {
     expect(middleware(req()).status).toBe(503);
   });
 
-  it("returns 401 with a challenge when auth is on and credentials are missing or wrong", () => {
+  it("returns 401 JSON when auth is on and credentials are missing or wrong, with the challenge only for a client that sent Basic", async () => {
     env.CHECKRAIL_BASIC_AUTH = "rianne:pw";
     const none = middleware(req());
     expect(none.status).toBe(401);
-    expect(none.headers.get("WWW-Authenticate")).toMatch(/^Basic/);
-    expect(middleware(req({ authorization: basic("rianne", "nope") })).status).toBe(401);
+    expect(none.headers.get("WWW-Authenticate")).toBeNull();
+    expect(await none.json()).toEqual({ error: "Sign in required.", signIn: "/signin" });
+    const wrong = middleware(req({ authorization: basic("rianne", "nope") }));
+    expect(wrong.status).toBe(401);
+    expect(wrong.headers.get("WWW-Authenticate")).toMatch(/^Basic/);
   });
 
   it("the single credential is an admin and a forged actor or role header is overwritten", () => {

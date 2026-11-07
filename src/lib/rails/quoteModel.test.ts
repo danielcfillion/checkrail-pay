@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { quotePayPal, quoteStellar } from "./quoteModel";
+import { quotePayPal, quoteStellar, stellarGrossUpMinor } from "./quoteModel";
+import { senderOutlayMinor } from "../domain/routing";
 import { applyRateMicro, bpsCeil, effectiveRateMicro, isValidAmountMinor, isValidSourceRef, microToDecimal, minorToDecimal, pctToBps } from "../domain/money";
 import type { VendorPayoutProfile } from "../domain/types";
 
@@ -42,8 +43,8 @@ describe("quotes (M4)", () => {
     expect(pp.feeMinor).toBe(360);
     expect(pp.receiveAmountMinor).toBe(1_093_131);
     const st = quoteStellar(vendor(), 75_000, "USD", "US");
-    expect(st.feeMinor).toBe(1_325);
-    expect(st.receiveAmountMinor).toBe(4_566_499);
+    expect(st.feeMinor).toBe(1_341); // grossed up: 763.41 sent, 13.41 of fees taken on the way, 750.00 delivered
+    expect(st.receiveAmountMinor).toBe(4_648_624); // the full USD 750 converted
     expect(st.fxRate).toBe("61.981659");
   });
 
@@ -78,5 +79,39 @@ describe("quotes (M4)", () => {
   it("honours the anchor limit and the sender country", () => {
     expect(quoteStellar(vendor(), 100_001, "USD", "US").available).toBe(false);
     expect(quotePayPal(vendor(), 18_000, "USD", "GB").available).toBe(false); // no GB->PH corridor configured
+  });
+});
+
+describe("Stellar: the business pays the fee, the supplier gets the full bill", () => {
+  const taken = (sent: number) => Math.ceil(sent * 0.001) + 500 + Math.ceil(sent * 0.01); // swap 0.1% and anchor USD 5 + 1%, rounded up
+  it("grosses up what is sent so the swap and anchor fees leave exactly the bill amount", () => {
+    for (const amount of [18_000, 19_000, 42_500, 75_000, 98_000]) {
+      const st = quoteStellar(vendor(), amount, "USD", "US");
+      expect(st.available).toBe(true);
+      const gross = st.sendAmountMinor + st.feeMinor;
+      expect(gross - taken(gross)).toBe(amount);
+      expect(stellarGrossUpMinor(amount, { networkFeeUsd: 0.000001, swapToUsdcPct: 0.1, anchorFeeFixedUsd: 5, anchorFeePct: 1 })).toBe(gross);
+      // One cent less would leave the supplier short.
+      expect(gross - 1 - taken(gross - 1)).toBeLessThan(amount);
+    }
+  });
+  it("delivers the full amount converted, and the sender's outlay is amount plus fee, as on PayPal", () => {
+    const st = quoteStellar(vendor(), 75_000, "USD", "US");
+    expect(st.sendAmountMinor).toBe(75_000);
+    expect(st.receiveAmountMinor).toBe(applyRateMicro(75_000, effectiveRateMicro(62.607736, 100)));
+    expect(senderOutlayMinor(st)).toBe(76_341);
+    expect(senderOutlayMinor(quotePayPal(vendor(), 75_000, "USD", "US"))).toBe(76_500);
+    expect(st.explanation).toMatch(/Sender fee \$13\.41, paid on top/);
+  });
+  it("a wallet payout with no anchor has no fee to gross up", () => {
+    const us = quoteStellar(vendor({ country: "US", bankCountry: "US", bankCurrency: "USD" }), 75_000, "USD", "US");
+    expect(us.feeMinor).toBe(0);
+    expect(us.receiveAmountMinor).toBe(75_000);
+  });
+  it("counts the anchor limit on the grossed-up amount", () => {
+    expect(quoteStellar(vendor(), 98_000, "USD", "US").available).toBe(true);
+    const near = quoteStellar(vendor(), 99_500, "USD", "US");
+    expect(near.available).toBe(false);
+    expect(near.unavailableReason).toMatch(/once its fee/);
   });
 });

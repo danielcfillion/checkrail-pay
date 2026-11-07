@@ -6,13 +6,19 @@ Record in live mode: PayPal sandbox (the funded US business account), Claude rea
 
 Pace: plain speech, one idea per sentence. No music under the voiceover.
 
+## The opening statistic (verified 1 Nov 2026 at the source)
+
+"About three in four organizations (74%) were affected by business email compromise (BEC) in 2025," and 76% of US organizations experienced attempted or actual payments fraud. Association for Financial Professionals, 2026 AFP Payments Fraud and Control Survey Report, released 14 Apr 2026, 465 treasury practitioners surveyed in January 2026 (AFP press release: https://www.financialprofessionals.org/about/learn-more/press-releases/Details/over-75-percent-of-us-firms-experienced-payments-fraud-in-2025-while-ai-adoption-for-fraud-mitigation-lags). On screen, cite it as "AFP Payments Fraud and Control Survey, 2026".
+
+Suggested hook over the opening motion graphic: "Three in four companies were targeted by fake payment emails last year. Now AI agents read those emails, and some of them can pay." It sets up the agent beat and the provenance firewall (a payment instruction that came from an outside email is held). Do not round it up or restate it as "of small businesses"; the survey is of US treasury practitioners.
+
 ## The story in one line
 
 Claude reads, policy decides, the agent pays inside your limits, and you sign off at the end of the day in two minutes.
 
 ## Captions
 
-Burn the captions in. Judges often watch muted. The cold open is 24 words over 0:03 to 0:13, about 2.4 words a second; do not add words to it. One line at a time, bottom centre, Archivo 600 at about 44px on a 1080p frame, ink #10233A on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
+Burn the captions in. Judges often watch muted. The cold open is 24 words over 0:03 to 0:13, about 2.4 words a second; do not add words to it. One line at a time, bottom centre, Geist 600 at about 44px on a 1080p frame, ink #0A1628 on a white band at 90% opacity. Captions follow the voiceover word for word, except that numbers are written as figures ("$960", "$160 wrong").
 
 ## Shot list (hackathon cut)
 
@@ -47,6 +53,39 @@ The line the video is built around: "PayPal moves money for people. Next it move
 Prep: on the Mac, add Checkrail to Claude Desktop (`docs/AGENTS.md`, local stdio, checks only), reseed, then rehearse the prompt once. If Claude answers before calling the tool, add to the prompt: "Check it with Checkrail first."
 
 Ana's unclaimed payout moves to the Devpost text and the README; the Daily close shot keeps its place after this beat.
+
+## The onboarding and AG Studio beat (added 31 Oct, 12 seconds, after the agent beat)
+
+Shortens the Daily close shot to 2:30 to 2:44 and moves the end card to 2:44 to 2:52; trim the Daily close voiceover to its first and last sentence. Keep the total under 2:55.
+
+| Time | On screen | Crop and zoom | Action | Voiceover |
+|---|---|---|---|---|
+| 2:18 to 2:24 | Getting started, Check our calls: the calls grid | 1.5x on two rows | Click "Was fine" on a held Dao Mountain Lodge row, then Apply on "Add a rate card for Dao Mountain Lodge" | A new business starts from its own history. I tell Checkrail which of its calls were right, and it suggests what to change. |
+| 2:24 to 2:30 | Your first weeks (AG Studio) | 1.5x on the readiness gauge, then pull back to the full dashboard | Reload so the gauge fills to 4 of 4; click Edit dashboard and drag one card | When its holds are nearly always right, it is ready to do more. Built on AG Studio. |
+
+Prep: reseed, open Bring in your data once so the page is warm, and set the browser to 1440 wide. With live AI on, a third optional insert (cut if the video runs long): type "Add a chart of money stopped by supplier" in Ask about your setup and hold on the new widget.
+
+## Optional: Try it yourself on auto (added 2 Nov, 12 seconds, cut first if the video runs long)
+
+Records on simulated rails in a sandbox copy (it is refused on live rails), so caption it "Simulated rails" for its length. Open `/try?sample=overcharge`, press **Play**, and let it run; it advances about every four seconds and never needs a click.
+
+| Time | On screen | Crop and zoom | Action | Voiceover |
+|---|---|---|---|---|
+| +0:00 to +0:04 | Try it yourself, step 3 lit: the checks for Phuong's USD 1,100 | 1.5x on the lit panel | Auto mode submits | Try it yourself. Phuong asks eleven hundred. |
+| +0:04 to +0:08 | Step 4 lit: Correct to USD 800.00 | 2x on the button as it is pressed | Auto mode corrects | The trip sheet says eight hundred, so that is what it becomes. |
+| +0:08 to +0:12 | Step 4 result: it now waits for an approver | 1.5x | Press Pause | And someone other than the clerk signs. |
+
+Prep: Start over first, so the sample runs from a fresh copy. Press Play on step 1 and start recording at step 3, or trim. Pause before the end so the last frame is still.
+
+## Motion to capture (added 31 Oct)
+
+Each of these moves only on a state change, so record the moment it happens, at 2x:
+- The payment track drawing to the red X on the Phuong page, and the red banner sliding in with USD 960 struck through beside USD 800 (0:22 to 0:46). Open the page fresh for the take.
+- Errors prevented counting up on the overview after the correction (the count only runs when the figure has grown since this browser last saw it).
+- The autopilot countdown ring draining (1:39 to 1:58).
+- A new agent question sliding into the Agents page (2:14 to 2:18): keep the Agents page open in a second window while Claude Desktop asks; it refreshes every 4 seconds.
+- The readiness gauge filling (2:24 to 2:30).
+Turn off "reduce motion" in macOS before recording, or none of these run.
 
 ## Off-camera prep (do this before the take)
 

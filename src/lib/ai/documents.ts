@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { config, isLiveAi } from "../config";
 import { extractAmount, extractReference } from "./extractor";
+import { readPdfText } from "./pdfReader";
 
 /**
  * Document reading: turn an uploaded invoice, job sheet, contract or chat screenshot into
@@ -34,6 +35,8 @@ export type ReadDocumentResult = {
 };
 
 const MAX_BYTES = 8 * 1024 * 1024;
+export const PDF_BUSY_NOTE = "Another PDF is being read on the server right now. Try again in a minute, or type the figures from it by hand (they will be marked as operator-supplied).";
+export const PDF_LIMIT_NOTE = "Could not read this file: reading it would take more memory than a document is allowed. Type the figures from it by hand (they will be marked as operator-supplied).";
 const TEXT_TYPES = new Set(["text/plain", "text/csv", "text/markdown", "application/json"]);
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
@@ -56,7 +59,11 @@ export async function readDocument(input: { name: string; mimeType: string; byte
     text = bytes.toString("utf8");
     reader = "plain";
   } else if (mimeType === "application/pdf") {
-    text = await pdfText(bytes);
+    const read = await readPdfText(bytes);
+    // A file refused for its size, or a server already busy reading one, gets a plain answer. Neither goes on to the
+    // model: a refused file is not a scan, and the person can try again or type the figures.
+    if (read.refused) return { reader: "none", text: null, proposed: [], note: read.refused === "busy" ? PDF_BUSY_NOTE : PDF_LIMIT_NOTE, sha256: hash };
+    text = read.text;
     reader = text && text.trim().length > 20 ? "pdf-text" : "none";
   }
 
@@ -119,54 +126,6 @@ function pickExcerpt(text: string, amountMajor: string | null): string {
     }
   }
   return text.slice(0, 220).trim();
-}
-
-/** Longest a PDF may take to read, and the heap the reader may use, before it is abandoned. */
-const PDF_TIMEOUT_MS = 10_000;
-const PDF_HEAP_MB = 192;
-
-/**
- * Read the text layer in a child process (scripts/pdf-text.mjs) with a time and a memory limit. pdf.js on the
- * server's own thread let one crafted PDF freeze every request for most of a minute.
- */
-async function pdfText(bytes: Buffer): Promise<string | null> {
-  const { spawn } = await import("node:child_process");
-  const path = await import("node:path");
-  const script = path.join(process.cwd(), "scripts", "pdf-text.mjs");
-  return new Promise((resolve) => {
-    // The child parses a file anyone can upload. It gets a bare environment, not the server's: a pdf.js escape would
-    // otherwise find the Anthropic key, the PayPal secret, the Stellar seed and the data key in process.env.
-    const child = spawn(process.execPath, [`--max-old-space-size=${PDF_HEAP_MB}`, script], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH ?? "", NODE_ENV: "production" } });
-    let out = "";
-    let done = false;
-    const finish = (v: string | null) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      if (!child.killed) child.kill("SIGKILL");
-      resolve(v);
-    };
-    const timer = setTimeout(() => {
-      console.warn("[documents] pdf text extraction timed out");
-      finish(null);
-    }, PDF_TIMEOUT_MS);
-    child.stdout.on("data", (c: Buffer) => {
-      out += c.toString("utf8");
-      if (out.length > 1_000_000) finish(null);
-    });
-    child.on("error", () => finish(null));
-    child.on("close", () => {
-      try {
-        const j = JSON.parse(out) as { text?: string; error?: string };
-        if (j.error) console.warn(`[documents] pdf text extraction failed: ${j.error}`);
-        finish(j.text ?? null);
-      } catch {
-        finish(null);
-      }
-    });
-    child.stdin.on("error", () => finish(null));
-    child.stdin.end(bytes);
-  });
 }
 
 /** Claude reads the document itself. Returns null on any failure so the caller falls back honestly. */

@@ -26,16 +26,20 @@ export function amountAsRead(audit: AuditLike[], current: { amountMinor: number 
  * request was read by the rule-based reader (so no model call was made), the recording is for the same vendor and
  * reference, and it read the same amount the reader saw (a new request that reuses a reference is not the one Claude
  * read), and it is the newest request with that vendor and reference (an older one that request duplicates was not
- * what Claude read). Display only: the caller never passes it to policy.
+ * what Claude read). Its confidence is also what policy checked: the rule-based reader takes it over at the source
+ * (withRecordedConfidence in src/lib/ai/agent.ts), so the page and the policy rule agree (except a reading marked reflectsLiveAccount).
  */
 export function selectRecordedReading(
-  i: { engine: "claude" | "rules" | null | undefined; vendorId: string | null | undefined; sourceRef: string | null | undefined; readAmountMinor: number | null; readCurrency: string | null; newestForReference: boolean },
+  i: { engine: "claude" | "rules" | null | undefined; vendorId: string | null | undefined; sourceRef: string | null | undefined; readAmountMinor: number | null; readCurrency: string | null; newestForReference: boolean; storedConfidence?: number | null },
   find: (vendorId: string | null | undefined, sourceRef: string | null | undefined) => RecordedReading | null = recordedReadingFor,
 ): RecordedReading | null {
   if (i.engine !== "rules" || !i.newestForReference) return null;
   const r = find(i.vendorId, i.sourceRef);
   if (!r) return null;
   if (i.readAmountMinor !== null && (r.amountMinor !== i.readAmountMinor || (i.readCurrency && r.currency !== i.readCurrency))) return null;
+  // Policy checked the stored confidence. A replayed reading whose figure is not that one (a resubmission the rules
+  // scored lower) is not shown, so the page never quotes a confidence policy did not check.
+  if (!r.reflectsLiveAccount && i.storedConfidence != null && i.storedConfidence !== r.confidence) return null;
   return r;
 }
 
@@ -45,6 +49,12 @@ export function summaryWithoutCount(summary: string): string {
 }
 
 /** "Read as USD 960.00. Corrected to USD 800.00 by Daniel, 05:58." after a person corrected the amount. */
+/** The amount the request was first read as, when a person has since corrected it; null when never corrected. */
+export function amountReadAs(audit: AuditLike[]): number | null {
+  const all = amendments(audit);
+  return all.length ? (all[0].d.previous?.amountMinor ?? null) : null;
+}
+
 export function correctionLine(audit: AuditLike[], currency: string | null): string | null {
   const all = amendments(audit);
   if (!all.length) return null;

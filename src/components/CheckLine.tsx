@@ -88,16 +88,16 @@ export function CheckLine({ state, variant = "compact", hasAccounting, blockedAt
   // only the current station is labelled, the other stations are bare ticks (named in the accessible label), and
   // the caption gets a line of its own under the track, so nothing collides at 360px.
   return (
-    <div className={`relative ${className}`} role="img" aria-label={fullLabel}>
+    <div className={`dl-animate relative ${className}`} role="img" aria-label={fullLabel}>
       <div className="relative h-8">
         {/* base track */}
-        <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2" style={{ background: pos.inactive ? "var(--rule)" : "var(--rule-strong)" }} />
+        <div className="absolute left-0 right-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full" style={{ background: pos.inactive ? "var(--rule)" : "var(--rule-strong)" }} />
         {/* travelled portion */}
         {!pos.inactive && brokenAt === null && (
-          <div className="dl-fill absolute left-0 top-1/2 h-0.5 -translate-y-1/2" style={{ background: fill, width: `${stationOffset(shown)}%` }} />
+          <div className="dl-fill absolute left-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full" style={{ background: fill, width: `${stationOffset(shown)}%` }} />
         )}
         {!pos.inactive && brokenAt !== null && (
-          <div className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2" style={{ background: "var(--ink)", width: `calc(${stationOffset(brokenAt)}% - 14px)` }} />
+          <div className="dl-fill absolute left-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full" style={{ background: "var(--ink)", width: `calc(${stationOffset(brokenAt)}% - 14px)` }} />
         )}
         {/* break: the rest of the line is cut */}
         {brokenAt !== null && (
@@ -107,8 +107,8 @@ export function CheckLine({ state, variant = "compact", hasAccounting, blockedAt
           <div key={s} className="absolute top-1/2 h-3 w-px" style={{ left: `${stationOffset(i)}%`, background: "var(--rule-strong)", transform: "translate(-50%, -50%)" }} />
         ))}
         {brokenAt !== null ? (
-          <div className="absolute top-1/2 flex h-7 w-7 items-center justify-center rounded-full" style={{ left: `${stationOffset(brokenAt)}%`, transform: "translate(-50%, -50%)", background: "var(--sheet)", border: "1.5px solid var(--blocked)" }} aria-hidden>
-            <svg width="14" height="14" viewBox="0 0 14 14" stroke="var(--blocked)" strokeWidth="1.75" strokeLinecap="round">
+          <div className="dl-break absolute top-1/2 flex h-7 w-7 items-center justify-center rounded-full" style={{ left: `${stationOffset(brokenAt)}%`, background: "var(--blocked)", boxShadow: "0 0 0 5px var(--blocked-soft)" }} aria-hidden>
+            <svg width="14" height="14" viewBox="0 0 14 14" stroke="var(--sheet)" strokeWidth="2.2" strokeLinecap="round">
               <path d="M3 3l8 8M11 3l-8 8" />
             </svg>
           </div>

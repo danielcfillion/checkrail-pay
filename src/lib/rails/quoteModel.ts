@@ -80,19 +80,23 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
   if (s.anchorMaxUsd && amountMinor > s.anchorMaxUsd * 100) {
     return { ...base, available: false, unavailableReason: `Above anchor limit of $${s.anchorMaxUsd} per transfer (${s.anchor})`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
   }
-  // Fees in integer cents, rounded up. The network fee is a fraction of a cent and rounds to zero.
-  const swapCost = bpsCeil(amountMinor, pctToBps(s.swapToUsdcPct));
-  const anchorFee = Math.round(s.anchorFeeFixedUsd * 100) + bpsCeil(amountMinor, pctToBps(s.anchorFeePct));
-  const feeMinor = Math.round(s.networkFeeUsd * 100) + swapCost + anchorFee;
-  const netMinor = amountMinor - feeMinor;
+  // The business pays the fee, as on every rail: the recipient gets the full amount and the sender's cash out is the
+  // amount plus the fee. The swap and the anchor take their fees from what passes through them and cannot be told to
+  // deliver a net figure, so the PYUSD to send is grossed up until what is left after their fees is the full amount.
   const rateMicro = effectiveRateMicro(c.midRate, pctToBps(s.fxSpreadPct));
-  const receiveMinor = netMinor > 0 ? applyRateMicro(netMinor, rateMicro) : 0;
-  if (receiveMinor <= 0) {
-    return { ...base, available: false, unavailableReason: `Amount is too small: fees of ${usd(feeMinor)} leave nothing for the recipient`, feeMinor, fxRate: microToDecimal(rateMicro), receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: s.etaSeconds, provider: s.provider, explanation: "" };
+  const grossMinor = stellarGrossUpMinor(amountMinor, s);
+  const feeMinor = grossMinor - amountMinor;
+  if (s.anchorMaxUsd && grossMinor > s.anchorMaxUsd * 100) {
+    return { ...base, available: false, unavailableReason: `Above anchor limit of $${s.anchorMaxUsd} per transfer once its fee of ${usd(feeMinor)} is added (${s.anchor})`, feeMinor: 0, fxRate: "0", receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: 0, provider: s.provider, explanation: "" };
   }
+  // Fees larger than the payment itself: the route works, but no one should choose it.
+  if (feeMinor > amountMinor) {
+    return { ...base, available: false, unavailableReason: `Amount is too small: fees of ${usd(feeMinor)} would be more than the amount`, feeMinor, fxRate: microToDecimal(rateMicro), receiveAmountMinor: 0, receiveCurrency: c.recipientCurrency, etaSeconds: s.etaSeconds, provider: s.provider, explanation: "" };
+  }
+  const receiveMinor = applyRateMicro(amountMinor, rateMicro);
   const explanation = needsAnchor
-    ? `PYUSD on Stellar, swapped to USDC (${s.swapToUsdcPct}%), off-ramped by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid). Network fee under one cent. Recipient sees a ${c.recipientCurrency} bank deposit. The swap, off-ramp and ${c.recipientCurrency} figures are modelled estimates: Checkrail Pay sends PYUSD on Stellar and does not execute the anchor leg yet.`
-    : `PYUSD on Stellar delivered to the recipient's wallet. Network fee under one cent; no FX.`;
+    ? `Sender fee ${usd(feeMinor)}, paid on top: PYUSD on Stellar is sent grossed up so that after the swap to USDC (${s.swapToUsdcPct}%) and the off-ramp by ${s.anchor} ($${s.anchorFeeFixedUsd} + ${s.anchorFeePct}%, ${s.fxSpreadPct}% below mid) the recipient receives the full amount as a ${c.recipientCurrency} bank deposit. Network fee under one cent. The swap, off-ramp and ${c.recipientCurrency} figures are modelled estimates: Checkrail Pay sends PYUSD on Stellar and does not execute the anchor leg yet.`
+    : `PYUSD on Stellar delivered to the recipient's wallet in full. Network fee under one cent; no FX.`;
   return {
     ...base,
     available: true,
@@ -105,6 +109,23 @@ export function quoteStellar(vendor: VendorPayoutProfile, amountMinor: number, c
     explanation,
     modelled: needsAnchor,
   };
+}
+
+/**
+ * The PYUSD to send so that the recipient is left with `amountMinor` after the swap and anchor fees, which are taken
+ * from what is sent (percentages rounded up, plus the anchor's fixed fee). The smallest such amount, found by
+ * iterating gross = amount + fee(gross) from below; the fee only grows with the gross, so this settles in a few steps.
+ */
+export function stellarGrossUpMinor(amountMinor: number, s: { networkFeeUsd: number; swapToUsdcPct: number; anchorFeeFixedUsd: number; anchorFeePct: number }): number {
+  const fee = (g: number) => Math.round(s.networkFeeUsd * 100) + bpsCeil(g, pctToBps(s.swapToUsdcPct)) + Math.round(s.anchorFeeFixedUsd * 100) + bpsCeil(g, pctToBps(s.anchorFeePct));
+  let gross = amountMinor + fee(amountMinor);
+  for (let i = 0; i < 64; i++) {
+    const next = amountMinor + fee(gross);
+    if (next <= gross) break;
+    gross = next;
+  }
+  while (gross - fee(gross) < amountMinor) gross += 1; // never short, whatever the rounding
+  return gross;
 }
 
 function usd(minor: number): string {

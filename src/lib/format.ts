@@ -100,6 +100,15 @@ export function formatDateTime(iso: string | null | undefined): string {
   return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE }) + " " + zoneLabel(d);
 }
 
+/** "2 Nov, 17:40" in the business time zone: a short stamp for a list of recent events. */
+export function formatShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: TIMEZONE });
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: TIMEZONE });
+  return `${date}, ${time}`;
+}
+
 /** "3 Oct 2026". Accepts a date-only string too. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -258,6 +267,9 @@ const ACTION_LABELS: Record<string, string> = {
   "departures.imported": "Imported departures",
   "team.changed": "Changed the team",
   "user.role_synced": "Updated a role from the login settings",
+  "onboarding.import_checked": "Re-checked past bank payments",
+  "onboarding.suggestion_applied": "Applied a calibration suggestion",
+  "onboarding.suggestion_dismissed": "Dismissed a calibration suggestion",
 };
 
 /** "settlement.checked:seed" -> "Checked settlement (seed)". */
@@ -290,6 +302,9 @@ export function humaniseActor(actor: string | null | undefined): string {
     case "mcp":
       // An outside agent, through the agent guard: never Autopilot, and never able to approve or send.
       return `Outside agent ${rest ?? ""}`.trim();
+    case "api":
+      // Other software through /api/v1 (a booking system, an ERP): it can request, never approve or send.
+      return `Integration ${rest ?? ""}`.trim();
     case "policy":
       return "Policy";
     case "router":

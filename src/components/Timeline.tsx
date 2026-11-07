@@ -41,7 +41,7 @@ export function Timeline({ entries }: { entries: AuditRow[] }) {
             {e.detailJson && e.detailJson !== "{}" ? (
               <details className="mt-1">
                 <summary className={SUMMARY}>Detail</summary>
-                <pre className="num mt-1 max-h-64 overflow-auto rounded bg-paper p-2 text-2xs leading-4 text-ink-soft" style={{ fontFamily: "inherit", fontStretch: "92%" }}>
+                <pre className="mono num mt-1 max-h-64 overflow-auto rounded-lg bg-paper p-2 text-2xs leading-4 text-ink-soft">
                   {pretty(e.detailJson)}
                 </pre>
               </details>

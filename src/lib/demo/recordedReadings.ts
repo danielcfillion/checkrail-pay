@@ -1,11 +1,13 @@
 /**
  * Claude's readings of the six opening demo requests, recorded from a live run (claude-sonnet-5-5, PayPal sandbox,
  * 28 Oct 2026) and replayed on the hosted demo so judges can see what the model reads and which tools it calls,
- * without a model call. Display only: on simulated rails the decision still comes from the rule-based reader and the
- * deterministic policy. Internal request ids were removed from the text. Tool results are the stored 200-character previews.
+ * without a model call. On simulated rails the decision still comes from the rule-based reader and the deterministic
+ * policy, but a replayed reading's confidence is the one policy checks (src/lib/ai/agent.ts, withRecordedConfidence),
+ * so the page and the policy rule quote the same figure, except for the two marked reflectsLiveAccount. Internal request ids were removed from the text. Tool results are the stored 200-character previews.
  *
  * Two readings (JOB-HG4D-0921 and JOB-PAL3D-0927) found real PayPal sandbox payouts made on 12 Oct 2026 for the same
- * jobs: that is what the live account held when they were recorded, and the page says so.
+ * jobs: that is what the live account held when they were recorded, and the page says so. They are marked
+ * reflectsLiveAccount: shown, but their confidence is not the one policy checks.
  */
 
 export interface RecordedReading {
@@ -21,10 +23,21 @@ export interface RecordedReading {
   toolCalls: Array<{ name: string; input: string; resultPreview: string }>;
   amountMinor: number;
   currency: string;
+  /** The request text Claude read, exactly as the demo seeds it. A request with other words is not the one it read. */
+  requestText: string;
+  /** Claude read the repeat of a request already paid: it applies only when the reference is in the vendor's settled history. */
+  onlyAsRepeat?: boolean;
+  /**
+   * The reading turned on the live PayPal sandbox account's own state (payouts made there on 12 Oct 2026 that this
+   * demo's books do not hold). It is still shown, with its concerns, but its confidence is not handed to policy: the
+   * page says "The rules did not see this run." for these. Using it would hold the demo's ready-to-pay requests.
+   */
+  reflectsLiveAccount?: boolean;
 }
 
 export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
   {
+    "requestText": "Hey can you pay Phuong Transport INV-2026-0152 today? Van for the Ha Giang 4-day loop (Sept 27 to 30), total $960. He needs it urgently for fuel on the next trip.",
     "sourceRef": "INV-2026-0152",
     "vendorId": "ven_phuong",
     "summary": "The operator asks to pay Phuong Transport USD 960 for INV-2026-0152, but the contract rate (USD 200 per vehicle-day) and the trip sheet (4 days) support only USD 800. The request is USD 160 over the evidence and also adds urgency pressure (\"today\", \"urgently for fuel\").",
@@ -69,6 +82,8 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "onlyAsRepeat": true,
+    "requestText": "Invoice from Maria Santos. Guide fee for JOB-HG4D-0914, 4 days, USD 180. Payment to PayPal please.",
     "sourceRef": "JOB-HG4D-0914",
     "vendorId": "ven_maria",
     "summary": "Maria Santos invoices USD 180 for 4 days on JOB-HG4D-0914, which matches the trip sheet (4 x USD 45). However, vendor history shows this same job was already paid USD 180 on 2026-10-11, so this looks like a duplicate request.",
@@ -110,6 +125,8 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "reflectsLiveAccount": true,
+    "requestText": "Trip HG-4D-0921 closed. Lead guide Maria Santos, 4 days, USD 180 (JOB-HG4D-0921). Guest feedback 4.9. Release payment.",
     "sourceRef": "JOB-HG4D-0921",
     "vendorId": "ven_maria",
     "summary": "Maria Santos is a known vendor, and the USD 180.00 request matches the signed-off trip sheet (4 days × USD 45) and her usual 4-day rate. However, PayPal already shows a settled USD 180.00 payment from Checkrail Pay on 2026-10-12 with the note JOB-HG4D-0921, so this job may already have been paid.",
@@ -152,6 +169,8 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "reflectsLiveAccount": true,
+    "requestText": "Trip PAL-3D-0927 closed. Guide Ana Reyes, 3-day Palawan private, USD 750 (JOB-PAL3D-0927). Client extended one day; rate confirmed with ops. Release payment.",
     "sourceRef": "JOB-PAL3D-0927",
     "vendorId": "ven_ana",
     "summary": "Ana Reyes is owed USD 750.00 for the 3-day Palawan private trip. The amount matches the trip sheet (3 × USD 250) and her usual rate. However, PayPal already shows a USD 750 payment to ana.reyes@example.com referencing JOB-PAL3D-0927 (initiated 12 Oct, status pending), so this may be a duplicate.",
@@ -194,6 +213,7 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "USD"
   },
   {
+    "requestText": "Hoa don HS-1027 tu Linh Family Homestay (Du Gia): 12 khach x 2 dem x 450.000 VND, tong cong 10.800.000 VND. Departure HG-4D-1004. Chuyen khoan BIDV giup em.",
     "sourceRef": "HS-1027",
     "vendorId": "ven_linh",
     "summary": "Linh Family Homestay invoice HS-1027 asks for VND 10,800,000 (12 guests x 2 nights x VND 450,000) for departure HG-4D-1004. The amount matches the attached invoice, the vendor is known with BIDV ****2206 on file, and I found no earlier payment for this reference.",
@@ -234,6 +254,7 @@ export const RECORDED_CLAUDE_READINGS: RecordedReading[] = [
     "currency": "VND"
   },
   {
+    "requestText": "Dao Mountain Lodge invoice INV-DML-1010 for the Cao Bang departure CB-3D-1012: 10 rooms, 2 nights, total USD 850. 50% deposit USD 425 now to hold the rooms, balance on arrival.",
     "sourceRef": "INV-DML-1010",
     "vendorId": "ven_dao",
     "summary": "Dao Mountain Lodge asks for a USD 425 deposit (50% of the USD 850 invoice INV-DML-1010) to hold 10 rooms for 2 nights. The invoice evidence matches the amount and the rate of USD 42.50 per room-night, which is the same as in past payments. I found no earlier payment of this invoice.",

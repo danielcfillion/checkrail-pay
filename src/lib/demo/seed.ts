@@ -1,13 +1,18 @@
 import { isRealMoney } from "../config";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Db } from "../db";
-import { accountingSyncs, approvals, auditEntries, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices, reconciliations, vendorLinks, agentChecks } from "../db/schema";
+import { accountingSyncs, approvals, auditEntries, billExports, businesses, evidence, events, obligations, paymentAttempts, routeQuotes, settlements, vendors, attachments, vendorChanges, vendorInvites, users, paymentRuns, paymentRunItems, bankBatches, bankBatchLines, bills, billAllocations, rateCards, departures, departureServices, reconciliations, vendorLinks, agentChecks, onboardingImports, onboardingMappings, onboardingResults, onboardingMarks, onboardingSuggestions } from "../db/schema";
 import { DEFAULT_POLICY } from "../domain/types";
 import { seedDemoTeam } from "../engine/users";
 import { newId } from "../domain/ids";
 import { approveObligation, confirmSettlement, executeObligation, ingestObligation, payoutHashOf } from "../engine/orchestrator";
 import { encryptField } from "../crypto/dataKey";
 import { withMockRails } from "../rails";
+import { seedOnboarding } from "../onboarding/seed";
+import { seedAgentFutures } from "../agent/futuresSeed";
+import { getCorridor } from "../rails/corridors";
+import { majorText } from "../accounting/billLine";
+import { DEMO_RATE_NOTE, demoMidRate } from "./fxRates";
 
 /**
  * Demo data: Ridgeline Expeditions, a US tour operator running small-group
@@ -51,7 +56,7 @@ export function assertSafeToReset(db: Db): void {
 
 export function resetDemo(db: Db): void {
   assertSafeToReset(db);
-  for (const t of [agentChecks, vendorLinks, reconciliations, departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
+  for (const t of [billExports, onboardingSuggestions, onboardingMarks, onboardingResults, onboardingMappings, onboardingImports, agentChecks, vendorLinks, reconciliations, departureServices, departures, rateCards, billAllocations, bills, bankBatchLines, bankBatches, paymentRunItems, paymentRuns, auditEntries, events, accountingSyncs, settlements, paymentAttempts, routeQuotes, approvals, evidence, attachments, obligations, vendorChanges, vendorInvites, vendors, users, businesses]) {
     db.delete(t).run();
   }
 }
@@ -86,6 +91,8 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
   seedRatesAndDepartures(db);
   if (history) {
     await seedHistory(db);
+    // Onboarding and calibration: past bank payments re-checked, the owner's marks, and what they suggest.
+    seedOnboarding(db, DEMO_BUSINESS_ID);
     // The most common supplier fraud, waiting in the vendor checks: an email "from" Tam asking to be paid somewhere new.
     db.insert(vendorChanges)
       .values({
@@ -153,6 +160,8 @@ export async function seedDemo(db: Db, opts: { history?: boolean; extras?: boole
     await seedDeposit(db);
   }
 
+  seedAgentFutures(db, DEMO_BUSINESS_ID);
+  await (await import("../accounting/xeroSync")).resetXeroSyncState(db, DEMO_BUSINESS_ID); // Xero: forget what the old demo sent, keep the connection
   return { story: { blockedMismatch, blockedDuplicate, paypal, stellar } };
 }
 
@@ -200,6 +209,10 @@ function seedRatesAndDepartures(db: Db): void {
   dep("HG-4D-0927", "2026-09-27", "2026-09-30", 9, [["ven_phuong", "vehicle_day", 4]]);
   dep("HG-4D-1004", "2026-10-04", "2026-10-07", 12, [["ven_linh", "guest_night", 24]]);
   dep("CEB-2D-1024", "2026-10-24", "2026-10-25", 6, [["ven_rosa", "day", 2]]);
+  // Try it yourself (src/components/try): two departures of their own, so its samples never touch the tour's story.
+  // Rosa guides 2 days (USD 190 at her day rate, under the USD 250 line); Phuong drives 4 (USD 800 at his rate).
+  dep("CEB-2D-1029", "2026-10-29", "2026-10-30", 5, [["ven_rosa", "day", 2]]);
+  dep("HG-4D-1026", "2026-10-26", "2026-10-29", 8, [["ven_phuong", "vehicle_day", 4]]);
 }
 
 /** A deposit: the lodge wants half now and half on arrival. The agent asks for USD 425, not 850, and files the invoice as a bill. */
@@ -268,13 +281,50 @@ async function seedHistoryRows(db: Db): Promise<void> {
     const ob = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
     if (ob.state === "awaiting_approval") approveObligation(db, id, "user:rianne", "Reviewed against trip sheet");
     const after = db.select().from(obligations).where(eq(obligations.id, id)).get()!;
+    // Everything audited up to here happened when the request was raised; what follows, when it was paid.
+    const paidFromSeq = (db.select({ seq: auditEntries.seq }).from(auditEntries).orderBy(desc(auditEntries.seq)).limit(1).get()?.seq ?? 0) + 1;
     if (after.state === "approved") {
       await executeObligation(db, id, { actor: "user:rianne" });
       await confirmSettlement(db, id, "seed");
     }
-    backdate(db, id, it.days);
+    backdate(db, id, { settledDays: it.days, raisedDays: it.days + settleLagDays(it.ref), paidFromSeq });
+    applyDemoRate(db, id);
   }
 
+}
+
+/** How long a past payment took from request to paid: 2 to 10 days, fixed per reference so every seed is the same. */
+export function settleLagDays(ref: string): number {
+  let h = 0;
+  for (const ch of ref) h = (h * 31 + ch.charCodeAt(0)) % 1_000_003;
+  return 2 + (h % 9);
+}
+
+/**
+ * A past payment converted at its week's demo rate (see fxRates.ts) instead of the corridor's one fixed rate. The rail's
+ * own margin is kept: the dated mid rate is scaled by the same ratio the quote applied to the corridor mid. Marked as
+ * a demo rate in the settlement note and the accounting record.
+ */
+function applyDemoRate(db: Db, obligationId: string): void {
+  const st = db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).get();
+  if (!st || !st.fxRate || !st.receivedMinor || !st.receivedCurrency || st.receivedCurrency === st.grossCurrency) return;
+  const vendor = db.select({ country: vendors.country }).from(vendors).innerJoin(obligations, eq(obligations.vendorId, vendors.id)).where(eq(obligations.id, obligationId)).get();
+  const corridorMid = vendor ? getCorridor("US", vendor.country)?.midRate : undefined;
+  const dated = demoMidRate(st.receivedCurrency, st.settledAt.slice(0, 10));
+  const old = Number(st.fxRate);
+  if (!corridorMid || !dated || !(old > 0)) return;
+  const rate = (old / corridorMid) * dated;
+  const fxRate = rate.toFixed(6);
+  const receivedMinor = Math.round((st.receivedMinor * Number(fxRate)) / old);
+  const note = [st.note, DEMO_RATE_NOTE].filter(Boolean).join(" ");
+  db.update(settlements).set({ fxRate, receivedMinor, note }).where(eq(settlements.id, st.id)).run();
+  for (const a of db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, obligationId)).all()) {
+    const payload = JSON.parse(a.payloadJson ?? "{}") as Record<string, unknown>;
+    payload.fxRate = fxRate;
+    payload.recipientReceived = majorText(receivedMinor, st.receivedCurrency);
+    payload.fxRateSource = "demo";
+    db.update(accountingSyncs).set({ payloadJson: JSON.stringify(payload) }).where(eq(accountingSyncs.id, a.id)).run();
+  }
 }
 
 /**
@@ -299,30 +349,51 @@ async function seedExtras(db: Db): Promise<void> {
   });
 }
 
-/** Shift an obligation and its children back in time so history looks like history. */
-function backdate(db: Db, obligationId: string, days: number): void {
-  const shift = (iso: string) => new Date(new Date(iso).getTime() - days * 86_400_000).toISOString();
+/**
+ * Shift an obligation and its children back in time so history looks like history. The request was raised
+ * `raisedDays` ago and paid `settledDays` ago: what belongs to raising it (the request, its evidence, quotes, approval,
+ * invoice and due dates, the audit up to `paidFromSeq`) moves back by the first, what belongs to paying it (the
+ * attempt, the settlement, the accounting record, the rest of the audit) by the second. Dates computed from today at
+ * ingest (a due date from the vendor's terms) move back with the request.
+ */
+function backdate(db: Db, obligationId: string, o: { raisedDays: number; settledDays: number; paidFromSeq: number }): void {
+  const by = (days: number) => (iso: string) => new Date(new Date(iso).getTime() - days * 86_400_000).toISOString();
+  const raised = by(o.raisedDays);
+  const paid = by(o.settledDays);
+  const day = (shift: (iso: string) => string, d: string | null) => (d ? shift(`${d}T12:00:00.000Z`).slice(0, 10) : d);
   const ob = db.select().from(obligations).where(eq(obligations.id, obligationId)).get()!;
-  db.update(obligations).set({ createdAt: shift(ob.createdAt), updatedAt: shift(ob.updatedAt) }).where(eq(obligations.id, obligationId)).run();
+  const settledHere = ob.state === "settled";
+  db.update(obligations)
+    .set({ createdAt: raised(ob.createdAt), updatedAt: (settledHere ? paid : raised)(ob.updatedAt), invoiceDate: day(raised, ob.invoiceDate), dueDate: day(raised, ob.dueDate) })
+    .where(eq(obligations.id, obligationId))
+    .run();
+  if (ob.billId) {
+    const b = db.select().from(bills).where(eq(bills.id, ob.billId)).get();
+    if (b) db.update(bills).set({ createdAt: raised(b.createdAt), billDate: day(raised, b.billDate), dueDate: day(raised, b.dueDate) }).where(eq(bills.id, b.id)).run();
+  }
+  for (const e of db.select().from(evidence).where(eq(evidence.obligationId, obligationId)).all()) db.update(evidence).set({ createdAt: raised(e.createdAt) }).where(eq(evidence.id, e.id)).run();
+  for (const q of db.select().from(routeQuotes).where(eq(routeQuotes.obligationId, obligationId)).all()) db.update(routeQuotes).set({ createdAt: raised(q.createdAt) }).where(eq(routeQuotes.id, q.id)).run();
+  for (const a of db.select().from(approvals).where(eq(approvals.obligationId, obligationId)).all()) db.update(approvals).set({ createdAt: raised(a.createdAt) }).where(eq(approvals.id, a.id)).run();
   for (const s of db.select().from(settlements).where(eq(settlements.obligationId, obligationId)).all()) {
-    db.update(settlements).set({ settledAt: shift(s.settledAt) }).where(eq(settlements.id, s.id)).run();
+    db.update(settlements).set({ settledAt: paid(s.settledAt) }).where(eq(settlements.id, s.id)).run();
   }
   for (const a of db.select().from(auditEntries).where(eq(auditEntries.obligationId, obligationId)).all()) {
-    db.update(auditEntries).set({ createdAt: shift(a.createdAt) }).where(eq(auditEntries.id, a.id)).run();
+    db.update(auditEntries).set({ createdAt: (a.seq >= o.paidFromSeq ? paid : raised)(a.createdAt) }).where(eq(auditEntries.id, a.id)).run();
   }
   for (const p of db.select().from(paymentAttempts).where(eq(paymentAttempts.obligationId, obligationId)).all()) {
-    db.update(paymentAttempts).set({ createdAt: shift(p.createdAt), updatedAt: shift(p.updatedAt) }).where(eq(paymentAttempts.id, p.id)).run();
+    db.update(paymentAttempts).set({ createdAt: paid(p.createdAt), updatedAt: paid(p.updatedAt) }).where(eq(paymentAttempts.id, p.id)).run();
   }
   for (const a of db.select().from(accountingSyncs).where(eq(accountingSyncs.obligationId, obligationId)).all()) {
-    // The record was built before the shift: move its bill and payment dates with everything else, so the export
-    // agrees with the ledger, and mark it exported the day after it was queued.
+    // The record was built before the shift: its bill and due dates move with the request, its payment date with the
+    // payment, so the export agrees with the ledger. Marked exported the day after it was queued.
     const payload = a.payloadJson ? (JSON.parse(a.payloadJson) as Record<string, unknown>) : null;
     if (payload) {
-      for (const k of ["billDate", "paymentDate"]) if (typeof payload[k] === "string") payload[k] = shift(`${payload[k]}T12:00:00.000Z`).slice(0, 10);
+      for (const k of ["billDate", "dueDate"]) if (typeof payload[k] === "string") payload[k] = day(raised, payload[k] as string);
+      if (typeof payload.paymentDate === "string") payload.paymentDate = day(paid, payload.paymentDate);
     }
-    const exportedOn = new Date(new Date(shift(a.createdAt)).getTime() + 86_400_000).toISOString().slice(0, 10);
+    const exportedOn = new Date(new Date(paid(a.createdAt)).getTime() + 86_400_000).toISOString().slice(0, 10);
     db.update(accountingSyncs)
-      .set({ createdAt: shift(a.createdAt), updatedAt: shift(a.updatedAt), status: "exported", externalRef: `csv:${exportedOn}`, payloadJson: payload ? JSON.stringify(payload) : a.payloadJson })
+      .set({ createdAt: paid(a.createdAt), updatedAt: paid(a.updatedAt), status: "exported", externalRef: `csv:${exportedOn}`, payloadJson: payload ? JSON.stringify(payload) : a.payloadJson })
       .where(eq(accountingSyncs.id, a.id))
       .run();
   }

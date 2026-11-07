@@ -5,7 +5,7 @@ import { obligations, paymentRunItems, paymentRuns, routeQuotes, vendors } from 
 import { audit } from "../domain/stateMachine";
 import { newId, now } from "../domain/ids";
 import { warningFingerprint, type Rail } from "../domain/types";
-import { getRails } from "../rails";
+import { getRails, railModes } from "../rails";
 import { localDateString } from "../format";
 import { actorCan, otherPeopleWith, requirePermission, whoIs, type Actor } from "./users";
 import { currentLogin, humanOf } from "./requestContext";
@@ -101,7 +101,7 @@ export interface RunView {
   }>;
   /** What releasing would actually do, for the confirmation: items paid (and how many of those are approved first), items left, and the money for the paid ones. */
   payNow: { count: number; approving: number; left: number; leftByReason: Record<"changed" | "limit" | "warning" | "second" | "state", number>; byCurrency: Array<{ currency: string; minor: number }> };
-  /** totalMinor is what the payees are sent; feeMinor is charged on top (Stellar's fee comes out of the amount). */
+  /** totalMinor is what the payees are sent; feeMinor is charged on top, on every rail. */
   totals: Array<{ currency: string; rail: string; totalMinor: number; feeMinor: number; count: number; balance: { availableMinor: number; source: string } | null; short: boolean }>;
   /** Why this viewer cannot release the run, when they cannot. */
   releaseRefusal: string | null;
@@ -148,6 +148,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
   const groups = new Map<string, { currency: string; rail: string; totalMinor: number; feeMinor: number; count: number }>();
   const quotes = rows.length ? db.select({ obligationId: routeQuotes.obligationId, rail: routeQuotes.rail, feeMinor: routeQuotes.feeMinor, sendCurrency: routeQuotes.sendCurrency }).from(routeQuotes).where(inArray(routeQuotes.obligationId, rows.map((r) => r.obligationId))).all() : [];
   const leftByReason = { changed: 0, limit: 0, warning: 0, second: 0, state: 0 };
+  const feeOut = feeLeavesAccount(railModes());
   const payMoney = new Map<string, number>();
   let payCount = 0;
   let approving = 0;
@@ -158,7 +159,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     if (it.state === "awaiting_approval") approving += 1;
     // What leaves the account, as the funding panel counts it: the amount less tax kept back, and the fee where it is charged on top.
     const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
-    const fee = q && it.rail !== "stellar" && q.sendCurrency === it.currency ? q.feeMinor ?? 0 : 0;
+    const fee = q && q.sendCurrency === it.currency && feeOut(it.rail) ? q.feeMinor ?? 0 : 0;
     payMoney.set(it.currency, (payMoney.get(it.currency) ?? 0) + it.amountMinor - (byId.get(it.obligationId)?.withheldMinor ?? 0) + fee);
   }
   const payNow = { count: payCount, approving, left: Object.values(leftByReason).reduce((a, b) => a + b, 0), leftByReason, byCurrency: [...payMoney.entries()].map(([currency, minor]) => ({ currency, minor })) };
@@ -167,7 +168,7 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     const key = `${it.rail ?? "unrouted"}|${it.currency}`;
     const g = groups.get(key) ?? { currency: it.currency, rail: it.rail ?? "unrouted", totalMinor: 0, feeMinor: 0, count: 0 };
     const q = quotes.find((x) => x.obligationId === it.obligationId && x.rail === it.rail);
-    if (q && it.rail !== "stellar" && q.sendCurrency === it.currency) g.feeMinor += q.feeMinor ?? 0;
+    if (q && q.sendCurrency === it.currency && feeOut(it.rail)) g.feeMinor += q.feeMinor ?? 0;
     // What leaves the account: the amount less any tax kept back for the tax office.
     g.totalMinor += it.amountMinor - (byId.get(it.obligationId)?.withheldMinor ?? 0);
     g.count += 1;
@@ -182,6 +183,16 @@ export async function viewRun(db: Db, businessId: string, runId: string, viewer:
     }),
   );
   return { run, items, totals, payNow, releaseRefusal: viewer ? releaseBarrier(db, businessId, viewer, run) : null };
+}
+
+/**
+ * Whether a rail's quoted fee leaves the paying account on top of the amount. It does on PayPal, Wise and the bank
+ * file. On Stellar the quoted fee is the anchor leg's (swap and off-ramp, paid by grossing up what is sent), which
+ * runs only on the simulated rail today: live and testnet Stellar send the bill amount straight to the vendor's wallet,
+ * so only the amount leaves the treasury, and counting the fee would refuse a run that can be paid.
+ */
+export function feeLeavesAccount(modes: Partial<Record<Rail, string>>): (rail: string | null) => boolean {
+  return (rail) => rail !== "stellar" || modes.stellar === "mock";
 }
 
 function releaseBarrier(db: Db, businessId: string, by: Actor, run: typeof paymentRuns.$inferSelect): string | null {
@@ -209,7 +220,7 @@ export async function releaseRun(db: Db, businessId: string, by: Actor, runId: s
   const view = await viewRun(db, businessId, runId, by);
   if (!resuming) {
     const short = view.totals.filter((t) => t.short);
-    if (short.length) throw new Error(`Not enough money: ${short.map((t) => `${t.rail} needs ${fmt(t.totalMinor, t.currency)}, has ${fmt(t.balance!.availableMinor, t.currency)}`).join("; ")}. Top up or remove payments, then release.`);
+    if (short.length) throw new Error(`Not enough money: ${short.map((t) => `${t.rail} needs ${fmt(t.totalMinor + t.feeMinor, t.currency)}${t.feeMinor ? ` (${fmt(t.totalMinor, t.currency)} plus ${fmt(t.feeMinor, t.currency)} in fees)` : ""}, has ${fmt(t.balance!.availableMinor, t.currency)}`).join("; ")}. Top up or remove payments, then release.`);
     // Claim the run, so two people pressing Release cannot both pay it.
     const claimed = db.update(paymentRuns).set({ status: "releasing", releasedBy: by.id }).where(and(eq(paymentRuns.id, runId), eq(paymentRuns.status, "draft"))).run();
     if (claimed.changes !== 1) throw new Error("Someone else is releasing this run");
