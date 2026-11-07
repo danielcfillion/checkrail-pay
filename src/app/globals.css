@@ -392,6 +392,13 @@ summary:focus-visible {
   opacity: 0.5;
   cursor: default;
 }
+.btn-primary:disabled,
+.btn-action:disabled {
+  opacity: 1;
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px dashed var(--ink-soft);
+}
 .btn-primary {
   background: var(--primary);
   color: var(--primary-ink);

@@ -175,7 +175,7 @@ export default async function ObligationPage({ params }: { params: Promise<{ id:
                 {formatMoneySymbol(headline, o.currency)}
               </span>
             </p>
-            {supported !== null ? <p className="text-xs text-ink-soft">What the evidence supports. Nothing was sent.</p> : null}
+            {supported !== null ? <p className="text-xs text-ink-soft">Asked {formatMoneySymbol(o.amountMinor, o.currency)}. The evidence supports this amount. Nothing was sent.</p> : null}
             {baseEquivalent ? <p className="num text-xs text-ink-soft">about {baseEquivalent} at reference rates</p> : null}
             <div className="mt-0.5 flex items-center justify-end gap-2">
               <StatePill state={o.state} />
