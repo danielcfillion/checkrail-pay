@@ -81,7 +81,22 @@ All recorded from a local production build, seeded demo ("Ridgeline Expeditions 
 - `frames-desktop.json` and `frames-mobile.json`: per-frame timestamps and scene marks for exact cutting.
 - `scripts/`: `video-record.cjs` (Playwright CDP screencast recorder, deterministic), `take.sh` (reseeds, restarts the local server, records one take), `mkvid.py` (frames to mp4). Reseeding gives new random request ids, the recorder looks them up by source reference. To re-shoot after any UI change: build the app (`npm run build`), then `./take.sh desktop` and `./take.sh mobile`.
 
-Not yet captured (needs more work or Daniel): Settings autonomy and Autopilot countdown; the agent beat (a real `check_payment` call to `/api/mcp` and the Agents page row arriving); the PayPal sandbox dashboard with the batch id (needs Daniel's login); AG Studio dashboard "Your first weeks" (Best Use of AG Grid prize, deserves 6 to 10 seconds if time allows).
+### Takes added 8 Nov 2026 (`footage/takes/`, timestamps in `frames-desktop.json` under `takes`)
+
+Each is 1920x1080 at 30 fps from the same local production build, simulated rails, seeded demo. `marks_s` are seconds from the start of each file.
+
+1. `01-settings-autonomy-autopilot-on.mp4` (22.8 s): Settings, Autopilot chosen, caps USD 500 per payment and USD 2,000 a day, cancel window set to 1 minute, "Turn on autopilot", then the inline "Yes, turn on autopilot" confirm. Trim to about 10 s.
+2. `02-overview-autopilot-countdown.mp4` (17.2 s): Overview with the Autopilot strip, two payments scheduled, circular countdowns running, Cancel buttons visible.
+3. `03-agent-mcp-call-check-payment.mp4` (8.6 s): a real JSON-RPC `check_payment` call to `/api/mcp` for USD 960 with the answer "Do not pay: Rate card and departure HG-4D-0927 say USD 800.00 ...". The bearer key is masked on screen, and the real key is never shown. `03-answer.json` is the full response. The card is a terminal-style render of the real request and response, not a screen of a terminal.
+4. `04-agents-page-row-arrives.mp4` (29.1 s): Agents page, the new "just now" blocked row for Phuong Transport USD 960, spending mandates (two active, signed with Ed25519), the inbox-assistant row held "A person looks" with the instruction from an outside email marked "Outside email", counter-offers to suppliers' agents (USD 960 asked, USD 800 offered).
+5. `05-studio-first-weeks-gauge-to-4of4.mp4` (38.4 s): AG Studio "Your first weeks". About 4 s of blank loading at the start, trim it. Gauge 3 of 4, then the app's own fix (Dao Mountain Lodge gets a rate card of USD 42.50 per room-night on the vendor page), gauge 4 of 4, Edit dashboard, one card dragged. The app's own badge "Dashboard built with AG Studio" is in the top right of every frame. The local build shows no trial watermark. On-screen text "built on AG Studio" is for the edit.
+6. `06-daily-close-sign-off.mp4` (19.8 s): Daily close, Sign off, inline "Yes, sign off", result "Signed off. The next close starts from here." No full page load for the sign off itself.
+
+Setup that is not on camera (all through the app's own forms on the demo copy): the Rosa Villanueva USD 190 request (trip sheet upload) and one mandate for claude-desktop (USD 800 per payment, USD 3,000 total). The local recording server uses a throwaway data key so mandates can be signed.
+
+Known page error: five `removeChild` errors in the browser console on the Overview page during recording, no visible effect. Not yet investigated.
+
+Still not captured: the PayPal sandbox dashboard with the batch id (needs Daniel's login).
 
 ## 8. Open items before and after the video
 

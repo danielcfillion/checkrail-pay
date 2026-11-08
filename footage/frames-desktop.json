@@ -16456,5 +16456,74 @@
   }
  ],
  "t0": 1794020792017,
- "errors": []
+ "errors": [],
+ "takes": [
+  {
+   "file": "footage/takes/01-settings-autonomy-autopilot-on.mp4",
+   "duration_s": 22.83,
+   "marks_s": {
+    "settings": 1.89,
+    "autopilot-chosen": 5.61,
+    "cancel-window-1-minute": 8.72,
+    "turn-on-clicked": 11.85,
+    "confirmed": 16.91
+   },
+   "page_navigations_during_take": 3
+  },
+  {
+   "file": "footage/takes/02-overview-autopilot-countdown.mp4",
+   "duration_s": 17.17,
+   "marks_s": {
+    "overview": 2.7,
+    "countdown": 8.21
+   },
+   "page_navigations_during_take": 3
+  },
+  {
+   "file": "footage/takes/03-agent-mcp-call-check-payment.mp4",
+   "duration_s": 8.6,
+   "marks_s": {
+    "card": 0.12,
+    "request-typed": 3.1,
+    "answer-shown": 8.4
+   },
+   "page_navigations_during_take": 1
+  },
+  {
+   "file": "footage/takes/04-agents-page-row-arrives.mp4",
+   "duration_s": 29.07,
+   "marks_s": {
+    "agents-top": 2.59,
+    "recent-questions": 8.24,
+    "mandates-and-offers": 14.76,
+    "lower": 21.29
+   },
+   "page_navigations_during_take": 9
+  },
+  {
+   "file": "footage/takes/05-studio-first-weeks-gauge-to-4of4.mp4",
+   "duration_s": 38.43,
+   "marks_s": {
+    "gauge-3-of-4": 5.69,
+    "vendor-page": 11.42,
+    "rate-saved": 16.45,
+    "gauge-4-of-4": 23.69,
+    "edit-mode": 29.54,
+    "card-dragged": 34.61
+   },
+   "page_navigations_during_take": 7
+  },
+  {
+   "file": "footage/takes/06-daily-close-sign-off.mp4",
+   "duration_s": 19.8,
+   "marks_s": {
+    "daily-close": 2.44,
+    "sign-off-clicked": 8.41,
+    "yes-sign-off-clicked": 11.88,
+    "after": 16.08
+   },
+   "page_navigations_during_take": 3
+  }
+ ],
+ "takes_note": "1920x1080, 30 fps, local production build, simulated rails, seeded demo. marks_s are seconds from the start of each take file. Take 05 starts with about 4 s of blank loading before the gauge: trim. Take 03 shows a masked bearer key; the real key is never on screen."
 }

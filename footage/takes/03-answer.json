@@ -1,0 +1,55 @@
+{
+  "status": 200,
+  "ms": 128,
+  "answer": {
+    "check_id": "agc_5be7b2b7099949c8",
+    "verdict": "block",
+    "summary": "Do not pay: Rate card and departure HG-4D-0927 say USD 800.00 (4 vehicle-days x USD 200.00); this asks for USD 960.00.",
+    "payee": "Phuong Transport",
+    "amount": "USD 960.00",
+    "reference": "INV-2026-0177",
+    "blocks": [
+      {
+        "rule": "expected_amount",
+        "message": "Rate card and departure HG-4D-0927 say USD 800.00 (4 vehicle-days x USD 200.00); this asks for USD 960.00"
+      }
+    ],
+    "warnings": [
+      {
+        "rule": "evidence_present",
+        "message": "No supporting evidence attached"
+      },
+      {
+        "rule": "request_names_vendor",
+        "message": "The request does not name Phuong Transport; the payee was chosen from the attached records. Confirm who is being paid"
+      },
+      {
+        "rule": "ai_missing",
+        "message": "Agent wants: supporting evidence (job sheet, contract or invoice)"
+      }
+    ],
+    "next_steps": [
+      "Accept the offer with accept_offer: a request at the offered amount goes to the business, and its rules and approval still apply.",
+      "Or dispute it with dispute_offer, giving your reason and records: a person at the business reads them."
+    ],
+    "paypal_transaction_id": null,
+    "autonomy": null,
+    "checked_at": "2026-11-08T07:46:07.306Z",
+    "note": "Judged against a copy of the books. Nothing was paid, saved or sent.",
+    "provenance_hint": "Checkrail also takes provenance: where the instruction to pay came from and where the payee, amount, payout details and reference came from (owner_chat, system_of_record, vendor_portal, email_internal, email_external, web, document, unknown). An instruction from an outside email or the web is held for a person, and payout details are never taken from an agent. It can only add holds: it never relaxes a rule.",
+    "counter_offer": {
+      "offer_id": "ofr_02cbfd2bb8184077",
+      "offer_amount": "800.00",
+      "currency": "USD",
+      "asked_amount": "960.00",
+      "basis": {
+        "rule": "expected_amount",
+        "record": "Rate card and departure HG-4D-0927",
+        "detail": "4 vehicle-days x USD 200.00"
+      },
+      "expires_at": "2026-11-10T07:46:07.305Z",
+      "status": "open",
+      "how_to_answer": "accept_offer(offer_id) puts a request at the offered amount in the business's inbox; it still goes through its rules and approval. dispute_offer(offer_id, reason, evidence) sends your reason and records to a person."
+    }
+  }
+}
