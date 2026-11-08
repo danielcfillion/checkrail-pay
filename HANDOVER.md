@@ -96,7 +96,9 @@ Setup that is not on camera (all through the app's own forms on the demo copy): 
 
 Known page error: five `removeChild` errors in the browser console on the Overview page during recording, no visible effect. Not yet investigated.
 
-Still not captured: the PayPal sandbox dashboard with the batch id (needs Daniel's login).
+PayPal sandbox: `footage/paypal-sandbox-batch-RGS5PUZPH4CNY.jpg`, the real payout detail page (unique transaction ID MPA-RGS5PUZPH4CNY, $183.60 USD, submitted 12 Oct 2026 12:11:43 PM EDT, processed 12:12:07 PM EDT, 1 payment). Portrait 800x1101 from a narrow pane: show it on a card or side panel, labelled "Recorded sandbox run, 12 Oct 2026". Nothing secret is visible.
+
+All requested footage is now captured.
 
 ## 8. Open items before and after the video
 
