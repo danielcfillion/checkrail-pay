@@ -16523,6 +16523,18 @@
     "after": 16.08
    },
    "page_navigations_during_take": 3
+  },
+  {
+   "file": "footage/takes/05b-studio-drag.mp4",
+   "duration_s": 10.0,
+   "marks_s": {
+    "dashboard": 0.0,
+    "edit-mode": 0.84,
+    "grabbed": 3.52,
+    "dropped": 7.53
+   },
+   "page_navigations_during_take": 0,
+   "note": "AG Studio Edit dashboard, \"Holds that turned out fine\" card grabbed by its edge and dropped lower right. Badge \"Dashboard built with AG Studio\" visible. Marks approximate, from take start."
   }
  ],
  "takes_note": "1920x1080, 30 fps, local production build, simulated rails, seeded demo. marks_s are seconds from the start of each take file. Take 05 starts with about 4 s of blank loading before the gauge: trim. Take 03 shows a masked bearer key; the real key is never on screen."
