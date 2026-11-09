@@ -26,7 +26,7 @@ Checkrail Pay
 
 ## Tagline (under 60 characters)
 
-Claude reads the request. Rules decide. PayPal pays.
+AI reads the request. Rules decide. PayPal pays.
 
 (52 characters)
 

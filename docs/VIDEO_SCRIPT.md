@@ -14,7 +14,7 @@ Suggested hook over the opening motion graphic: "Three in four companies were ta
 
 ## The story in one line
 
-Claude reads, policy decides, the agent pays inside your limits, and you sign off at the end of the day in two minutes.
+AI reads, policy decides, the agent pays inside your limits, and you sign off at the end of the day in two minutes.
 
 ## Captions
 
@@ -36,7 +36,7 @@ Crop values are relative to the full 1440px frame. "2x" means the crop is half t
 | 1:39 to 1:58 | Overview, the autopilot strip with the scheduled payment and its countdown | 2x on the scheduled row and the countdown, held while it ticks | Hold on the countdown, then hold as it flips to sent. | This one matched its trip sheet, so Autopilot scheduled it. Until the window ends, I can cancel. Autonomy removes the approval step and nothing else: a wrong amount, a duplicate or changed bank details still stop it, and policy runs again the moment money moves. (Money shot two.) |
 | 1:58 to 2:12 | Ana request page | 2x on the UNCLAIMED status and the "Payout needs attention" panel | Point at the status, then the message | One more thing real payments do. Ana's PayPal email does not exist, so the payout came back unclaimed. Checkrail Pay holds it for a person and will not pay twice. |
 | 2:12 to 2:34 | Daily close | Full frame for "Needs a look", then 2x on "Sent by autopilot" and the cap meter, then 2x on the Sign off confirm | Scroll from "Needs a look" through "Sent by autopilot" and "Sent by people" to the cap meter, then click Sign off and confirm | At the end of the day I read one page. What needs a look comes first. Then what the agent sent, what people sent, and spend against the cap. Sign off, and that goes in the audit log too. |
-| 2:34 to 2:44 | End card: the mark, "Checkrail Pay", the tagline, then "Try it: [hosted URL]/demo" | Full frame, still | Hold | Checkrail Pay. Claude reads. Policy decides. You sign off. |
+| 2:34 to 2:44 | End card: the mark, "Checkrail Pay", the tagline, then "Try it: [hosted URL]/demo" | Full frame, still | Hold | Checkrail Pay. AI reads. Policy decides. You sign off. |
 
 The countdown runs ten minutes by default. Either set a short cancel window in Settings before the take (the caption band then says "Cancel window shortened for the video; default 10 minutes"), or keep the default and cut from the countdown to the sent state with a visible jump cut and a caption "10 minutes later". Never fake the transition.
 
@@ -124,7 +124,7 @@ The PayPal sandbox payout batch id on PayPal's own dashboard, matching the id on
 
     [mark]
     Checkrail Pay
-    Claude reads. Policy decides. You sign off.
+    AI reads. Policy decides. You sign off.
     Try it: [hosted URL]/demo
 
 Founder: replace `[hosted URL]` with the Render URL from H14 before you export. If the hosted demo is not live on the day you export, drop the "Try it" line rather than show a placeholder. Add the repository link only once the public repo exists, and checkrailpay.com only once it serves the landing page.
@@ -141,7 +141,7 @@ Same footage plus a Stellar shot once a testnet payment exists: a release throug
 | 0:04 to 0:08 | 2x on "Trip sheet HG-4D-0927 says USD 800.00" | "The trip sheet says $800." |
 | 0:08 to 0:12 | 2x on the autopilot countdown | "The right ones pay themselves." |
 | 0:12 to 0:16 | Daily close, Sign off | "You sign off in two minutes." |
-| 0:16 to 0:20 | Mark and tagline | "Claude reads. Policy decides. You sign off." |
+| 0:16 to 0:20 | Mark and tagline | "AI reads. Policy decides. You sign off." |
 
 ## Recording checklist
 
