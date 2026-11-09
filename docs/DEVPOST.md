@@ -17,7 +17,7 @@ Rules checklist before submitting:
 - Select a sponsor prize only for a build that meets that sponsor's own brief (AG Grid asks for AG Studio; Bryntum for Gantt, Scheduler or Calendar in a real workflow; Render for Workflows). Otherwise select none rather than claim it.
 - Public repo with the MIT licence visible in the repo's About section.
 - Video under 3 minutes, public on YouTube, no copyrighted music.
-- Judges can test free until 15 Dec 2026: the hosted demo link plus the run instructions in the README. Put the hosted login in the testing instructions field, with this line: "The hosted demo runs on simulated rails with the rule-based reader, and shows Claude's readings recorded from a live run; the video shows Claude live." Keep the Render plan awake through 15 Dec. Each browser gets its own private copy of the demo, so judges do not affect each other; copies are deleted after two hours idle. The dashboard assistant ("Ask about your setup") answers with Claude live.
+- Judges can test free until 15 Dec 2026: the hosted demo link plus the run instructions in the README. Put the hosted login in the testing instructions field, with this line: "The hosted demo runs on simulated rails with the rule-based reader, and shows Claude's readings recorded from a live run; the video shows a recorded Claude reading and a real PayPal sandbox payout screen." Keep the Render plan awake through 15 Dec. Each browser gets its own private copy of the demo, so judges do not affect each other; copies are deleted after two hours idle. The dashboard assistant ("Ask about your setup") answers with Claude live.
 - Say the project was started on 3 Oct 2026, after the submission period opened on 1 Oct.
 
 ## Project name
@@ -70,7 +70,7 @@ Every request travels one line through five stations: read, verified, routed, pa
 
 ## The demo
 
-The hosted demo shows the whole story on simulated rails, with no keys. Its PayPal history is what the simulated PayPal rail actually paid, and each opening request shows Claude's reading recorded from a live run on 28 Oct 2026, labelled as recorded. The video shows the same story against the real PayPal sandbox with Claude live.
+The hosted demo shows the whole story on simulated rails, with no keys. Its PayPal history is what the simulated PayPal rail actually paid, and each opening request shows Claude's reading recorded from a live run on 28 Oct 2026, labelled as recorded. The video shows the same story on simulated rails, with Claude's reading recorded from a live run on 28 Oct 2026 and a real PayPal sandbox payout (batch RGS5PUZPH4CNY, 12 Oct 2026) as proof that the rail works.
 
 Ridgeline Expeditions LLC, a US tour operator paying guides, drivers and homestays in Vietnam and the Philippines:
 
