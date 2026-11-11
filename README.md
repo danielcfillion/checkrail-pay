@@ -9,11 +9,9 @@
 - Lands every payment in the books, with a two-minute Daily close.
 - Answers any AI agent that asks before it pays a supplier: pay, hold or block, over MCP.
 
-**Try it.** Hosted demo: https://checkrail-pay.onrender.com (start at `/demo`). The login is in the Devpost testing instructions. The video is linked from the Devpost page.
-<!-- Founder: when they exist, replace the line above with:
-**Try it:** <hosted URL>/demo (login in the Devpost testing instructions). **Video:** <YouTube URL>
-[![Watch the demo video](docs/screenshots/hero.png)](<YouTube URL>)
--->
+**Try it.** Hosted demo: https://checkrail-pay.onrender.com (start at `/demo`). The login is in the Devpost testing instructions. **Video:** https://youtu.be/W_HIxCEOQg4
+
+[![Watch the demo video](docs/screenshots/hero.png)](https://youtu.be/W_HIxCEOQg4)
 
 For small service businesses that pay dozens of freelance suppliers from chat messages, Checkrail Pay checks every request against the job it is for, pays the clean ones over PayPal inside limits you set, and stops the rest with a one-line reason. US bill-pay tools assume a purchase order. Checkrail works from job sheets, bookings and rate cards, and it never holds your money.
 
